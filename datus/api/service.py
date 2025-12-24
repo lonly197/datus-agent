@@ -124,6 +124,7 @@ class DatusAPIService:
         return SqlTask(
             id=task_id,
             task=request.task,
+            database_type=agent.global_config.db_type,  # Add database type from agent global config
             catalog_name=request.catalog_name or "",
             database_name=request.database_name or "default",
             schema_name=request.schema_name or "",
