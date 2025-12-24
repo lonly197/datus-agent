@@ -380,6 +380,10 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 execution_stats=execution_stats,
             )
 
+            # Make result visible to Node.run_stream completeness checks
+            # so the chat node is marked as completed instead of failed.
+            self.result = result
+
             # # Update assistant action with success
             # action_history_manager.update_action_by_id(
             #     assistant_action.action_id,

@@ -430,6 +430,16 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                 detail_data = {"action_type": action.action_type, "status": action.status, "message": action.messages}
                 yield f"event: node_detail\ndata: {to_str(detail_data)}\n\n"
 
+            # Expose chat_agentic final response to SSE clients (align with chatbot behavior)
+            elif action.action_type == "chat_response" and action.status == ActionStatus.SUCCESS:
+                output = action.output or {}
+                chat_data = {
+                    "response": output.get("response", ""),
+                    "sql": output.get("sql", ""),
+                    "tokens_used": output.get("tokens_used", 0),
+                }
+                yield f"event: chat_response\ndata: {to_str(chat_data)}\n\n"
+
     except Exception as e:
         logger.error(f"SSE stream error for task {task_id}: {e}")
         yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
