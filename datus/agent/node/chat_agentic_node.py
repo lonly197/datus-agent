@@ -423,6 +423,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     tokens_used=0,
                 )
 
+                # Make result visible to Node.run_stream completeness checks
+                self.result = result
+
                 # Update action with cancellation
                 action_history_manager.update_current_action(
                     status=ActionStatus.SUCCESS,
@@ -449,6 +452,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     response="Sorry, I encountered an error while processing your request.",
                     tokens_used=0,
                 )
+
+                # Make result visible to Node.run_stream completeness checks
+                self.result = result
 
                 # Update action with error
                 action_history_manager.update_current_action(
