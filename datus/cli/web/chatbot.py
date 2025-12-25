@@ -60,7 +60,6 @@ CUSTOM_THEME_CSS = """
   font-size: 64px !important;
   font-weight: 800 !important;
   margin-left: 18px !important;
-  margin-top: 0px !important;
   padding-top: 6px !important;
   line-height: 1.02 !important;
 }
@@ -100,8 +99,8 @@ section[data-testid="stSidebar"] .stButton>button, section[data-testid="stSideba
   font-size: 13px !important;
 }
 
-/* Reduce spacing above title container to move it closer to top */
-.block-container .main-title { margin-top: 8px !important; }
+/* Remove left padding on emotion cache container (override Streamlit runtime class) */
+.st-emotion-cache-k7rogd { padding-left: 0 !important; }
 
 /* Chat input container at bottom adjustments */
 div[data-testid="stChatInput"] {
