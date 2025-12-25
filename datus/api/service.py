@@ -24,7 +24,11 @@ from datus.utils.loggings import get_logger
 
 from ..utils.json_utils import to_str
 from .auth import auth_service, get_current_client
+from .event_converter import DeepResearchEventConverter
 from .models import (
+    ChatResearchRequest,
+    DeepResearchEventType,
+    ErrorEvent,
     FeedbackRequest,
     FeedbackResponse,
     HealthResponse,
@@ -301,6 +305,69 @@ class DatusAPIService:
                 recorded_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             )
 
+    async def run_chat_research_stream(
+        self, request: ChatResearchRequest, client_id: str = None
+    ) -> AsyncGenerator[str, None]:
+        """Execute chat research workflow with DeepResearchEvent streaming."""
+
+        task_id = f"research_{client_id}_{int(time.time())}"
+
+        try:
+            # Get agent for the namespace
+            agent = self.get_agent(request.namespace)
+
+            # Create SQL task with plan mode enabled
+            sql_task = self._create_sql_task(
+                RunWorkflowRequest(
+                    workflow="chat_agentic",
+                    namespace=request.namespace,
+                    catalog_name=request.catalog_name,
+                    database_name=request.database_name,
+                    schema_name=request.schema_name,
+                    task=request.task,
+                    current_date=request.current_date,
+                    domain=request.domain,
+                    layer1=request.layer1,
+                    layer2=request.layer2,
+                    ext_knowledge=request.ext_knowledge,
+                    mode="async"
+                ),
+                task_id, agent
+            )
+
+            # Enable plan mode in workflow metadata
+            workflow_metadata = {"plan_mode": request.plan_mode or True}
+
+            # Initialize task tracking
+            if self.task_store:
+                self.task_store.create_task(task_id, request.task)
+
+            # Create event converter
+            converter = DeepResearchEventConverter()
+
+            # Execute workflow with streaming and convert events
+            async for event_data in converter.convert_stream_to_events(
+                agent.run_stream_with_metadata(sql_task, metadata=workflow_metadata)
+            ):
+                yield event_data
+
+            # Update task status
+            if self.task_store:
+                self.task_store.update_task(task_id, status="completed")
+
+        except Exception as e:
+            logger.error(f"Chat research error for task {task_id}: {e}")
+            error_event = ErrorEvent(
+                id=f"error_{int(time.time() * 1000)}",
+                timestamp=int(time.time() * 1000),
+                event=DeepResearchEventType.ERROR,
+                error=str(e)
+            )
+            yield f"data: {error_event.model_dump_json()}\n\n"
+
+            if self.task_store:
+                self.task_store.update_task(task_id, status="failed")
+
     async def health_check(self) -> HealthResponse:
         """Perform health check on the service."""
         try:
@@ -341,7 +408,7 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
     import time as time_module
 
     task_id = req.task_id or service._generate_task_id(current_client)
-    start_time = time.time()
+    start_time = time_module.time()
     progress_seq = 0  # Progress sequence counter for ordering
 
     # Throttling for partial streaming events (max 10 per second)
@@ -402,7 +469,7 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                     # Update task status to completed
                     if service.task_store:
                         service.task_store.update_task(task_id, status="completed")
-                    execution_time_ms = int((time.time() - start_time) * 1000)
+                    execution_time_ms = int((time_module.time() - start_time) * 1000)
                     yield f"event: done\ndata: {json.dumps({'exec_time_ms': execution_time_ms, 'progress_seq': progress_seq})}\n\n"
                 elif action.status == "failed":
                     # Update task status to failed
@@ -656,6 +723,37 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
 
         except Exception as e:
             logger.error(f"Workflow execution error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/workflows/chat_research", tags=["workflows"])
+    async def run_chat_research(
+        req: ChatResearchRequest, request: Request, current_client: str = _depends_get_current_client
+    ):
+        """Execute chat research workflow with DeepResearchEvent streaming."""
+        try:
+            logger.info(f"Chat research request from client: {current_client}")
+
+            # Check if client accepts server-sent events
+            accept_header = request.headers.get("accept", "")
+            if "text/event-stream" not in accept_header:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Accept header must include 'text/event-stream'"
+                )
+
+            # Return streaming response
+            return StreamingResponse(
+                service.run_chat_research_stream(req, current_client),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",  # Disable nginx buffering
+                },
+            )
+
+        except Exception as e:
+            logger.error(f"Chat research execution error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/workflows/feedback", response_model=FeedbackResponse, tags=["workflows"])

@@ -28,6 +28,7 @@ class WorkflowRunner:
         *,
         pre_run_callable: Optional[Callable[[], Dict]] = None,
         run_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         self.args = args
         self.global_config = agent_config
@@ -36,6 +37,7 @@ class WorkflowRunner:
         self._pre_run = pre_run_callable
         # Generate run_id if not provided (format: YYYYMMDD_HHMMSS)
         self.run_id = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.initial_metadata = metadata or {}
 
     def initialize_workflow(self, sql_task: SqlTask):
         """Generate a new workflow plan."""
@@ -78,10 +80,16 @@ class WorkflowRunner:
             self.workflow_ready = False
             self.workflow = None
             self.resume_workflow(self.args)
+            # Set initial metadata after workflow is loaded
+            if self.workflow and self.initial_metadata:
+                self.workflow.metadata.update(self.initial_metadata)
         elif sql_task:
             self.workflow_ready = False
             self.workflow = None
             self.initialize_workflow(sql_task)
+            # Set initial metadata after workflow is initialized
+            if self.workflow and self.initial_metadata:
+                self.workflow.metadata.update(self.initial_metadata)
         elif not self.workflow_ready:
             logger.error("Failed to initialize workflow. need a sql_task or to load from checkpoint.")
             return None

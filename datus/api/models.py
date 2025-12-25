@@ -87,3 +87,119 @@ class FeedbackResponse(BaseModel):
     task_id: str = Field(..., description="Task ID that feedback was recorded for")
     acknowledged: bool = Field(..., description="Whether feedback was successfully recorded")
     recorded_at: str = Field(..., description="ISO timestamp when feedback was recorded")
+
+
+class ChatResearchRequest(BaseModel):
+    """Request model for chat research execution."""
+
+    namespace: str = Field(..., description="Database namespace")
+    task: str = Field(..., description="Natural language task description")
+    catalog_name: Optional[str] = Field(None, description="Catalog name")
+    database_name: Optional[str] = Field(None, description="Database name")
+    schema_name: Optional[str] = Field(None, description="Schema name")
+    current_date: Optional[str] = Field(None, description="Current date reference")
+    domain: Optional[str] = Field(None, description="Domain for the task")
+    layer1: Optional[str] = Field(None, description="Layer1 for the task")
+    layer2: Optional[str] = Field(None, description="Layer2 for the task")
+    ext_knowledge: Optional[str] = Field(None, description="External knowledge")
+    plan_mode: Optional[bool] = Field(False, description="Enable plan mode for structured execution")
+
+
+class DeepResearchEventType(str, Enum):
+    """Event types for deep research streaming."""
+
+    CHAT = "chat"
+    PLAN_UPDATE = "plan_update"
+    TOOL_CALL = "tool_call"
+    TOOL_CALL_RESULT = "tool_call_result"
+    COMPLETE = "complete"
+    REPORT = "report"
+    ERROR = "error"
+
+
+class TodoStatus(str, Enum):
+    """Plan item execution status."""
+
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+
+
+class TodoItem(BaseModel):
+    """Plan execution item."""
+
+    id: str = Field(..., description="Plan item ID")
+    content: str = Field(..., description="Plan item content")
+    status: TodoStatus = Field(..., description="Execution status")
+
+
+class BaseEvent(BaseModel):
+    """Base event structure."""
+
+    id: str = Field(..., description="Unique event ID")
+    planId: Optional[str] = Field(None, description="Plan ID if applicable")
+    timestamp: int = Field(..., description="Event timestamp in milliseconds")
+    event: DeepResearchEventType = Field(..., description="Event type")
+
+
+class ChatEvent(BaseEvent):
+    """Chat message event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.CHAT
+    content: str = Field(..., description="Chat content (markdown/text/sql/html)")
+
+
+class PlanUpdateEvent(BaseEvent):
+    """Plan update event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.PLAN_UPDATE
+    todos: List[TodoItem] = Field(..., description="List of plan items")
+
+
+class ToolCallEvent(BaseEvent):
+    """Tool call event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.TOOL_CALL
+    toolCallId: str = Field(..., description="Tool call ID")
+    toolName: str = Field(..., description="Tool name")
+    input: Dict[str, Any] = Field(..., description="Tool input parameters")
+
+
+class ToolCallResultEvent(BaseEvent):
+    """Tool call result event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.TOOL_CALL_RESULT
+    toolCallId: str = Field(..., description="Corresponding tool call ID")
+    data: Any = Field(..., description="Tool execution result")
+    error: bool = Field(..., description="Whether execution failed")
+
+
+class CompleteEvent(BaseEvent):
+    """Task completion event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.COMPLETE
+    content: Optional[str] = Field(None, description="Final result content")
+
+
+class ReportEvent(BaseEvent):
+    """Report generation event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.REPORT
+    url: str = Field(..., description="Report URL")
+    data: str = Field(..., description="Report HTML content")
+
+
+class ErrorEvent(BaseEvent):
+    """Error event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.ERROR
+    error: str = Field(..., description="Error message")
+
+
+# Union type for all events
+from typing import Union
+
+DeepResearchEvent = Union[
+    ChatEvent, PlanUpdateEvent, ToolCallEvent,
+    ToolCallResultEvent, CompleteEvent, ReportEvent, ErrorEvent
+]

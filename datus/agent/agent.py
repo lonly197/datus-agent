@@ -113,10 +113,10 @@ class Agent:
 
         logger.info(f"Storage modules initialized: {list(self.storage_modules.keys())}")
 
-    def create_workflow_runner(self, check_db: bool = True, run_id: Optional[str] = None) -> WorkflowRunner:
+    def create_workflow_runner(self, check_db: bool = True, run_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> WorkflowRunner:
         """Create a workflow runner that can safely execute in isolation."""
         return WorkflowRunner(
-            self.args, self.global_config, pre_run_callable=self.check_db if check_db else None, run_id=run_id
+            self.args, self.global_config, pre_run_callable=self.check_db if check_db else None, run_id=run_id, metadata=metadata
         )
 
     def run(
@@ -145,6 +145,18 @@ class Agent:
             check_storage=check_storage,
             action_history_manager=action_history_manager,
         ):
+            yield action
+
+    async def run_stream_with_metadata(
+        self, sql_task: SqlTask, metadata: Dict[str, Any] = None
+    ) -> AsyncGenerator[ActionHistory, None]:
+        """Execute workflow with streaming and custom metadata."""
+
+        # Create workflow runner with metadata
+        runner = self.create_workflow_runner(metadata=metadata)
+
+        # Execute with streaming
+        async for action in runner.run_stream(sql_task=sql_task):
             yield action
 
     def check_db(self):

@@ -206,6 +206,153 @@ event: done
 data: {"task_id": "client_20240115143000", "status": "completed", "total_time": 15.2}
 ```
 
+#### POST /workflows/chat_research
+
+Execute a chat research workflow with structured DeepResearchEvent streaming for chatbot applications.
+
+This endpoint provides a specialized interface for deep research tasks with real-time event streaming that matches chatbot UI expectations. It uses the `chat_agentic` workflow internally with plan-mode enabled by default.
+
+**Request Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `namespace` | string | ✅ | Database namespace |
+| `task` | string | ✅ | Natural language task description |
+| `catalog_name` | string | ❌ | Database catalog |
+| `database_name` | string | ❌ | Database name |
+| `schema_name` | string | ❌ | Schema name |
+| `current_date` | string | ❌ | Reference date for time expressions |
+| `domain` | string | ❌ | Business domain |
+| `layer1` | string | ❌ | Business layer 1 |
+| `layer2` | string | ❌ | Business layer 2 |
+| `ext_knowledge` | string | ❌ | Additional business context |
+| `plan_mode` | boolean | ❌ | Enable structured plan execution (default: false) |
+
+**Request Headers:**
+```
+Authorization: Bearer your_jwt_token
+Content-Type: application/json
+Accept: text/event-stream
+Cache-Control: no-cache
+```
+
+**Request Body:**
+```json
+{
+  "namespace": "your_database_namespace",
+  "task": "你是【数仓开发助手】。请根据业务逻辑生成高质量的 StarRocks SQL。从 ODS 试驾表和线索表关联，统计每个月'首次试驾'到'下定'的平均转化周期（天数）。",
+  "catalog_name": "your_catalog",
+  "database_name": "your_database",
+  "plan_mode": true
+}
+```
+
+**Response (Server-Sent Events stream):**
+```
+Content-Type: text/event-stream
+
+data: {"id":"evt_1","planId":"plan_abc123","timestamp":1703123456789,"event":"chat","content":"开始分析您的数据查询需求..."}
+
+data: {"id":"evt_2","planId":"plan_abc123","timestamp":1703123456790,"event":"plan_update","todos":[{"id":"task_1","content":"分析试驾表和线索表结构","status":"in_progress"},{"id":"task_2","content":"生成关联查询SQL","status":"pending"}]}
+
+data: {"id":"evt_3","planId":"plan_abc123","timestamp":1703123456791,"event":"tool_call","toolCallId":"call_456","toolName":"schema_linking","input":{"table":"trial_drive"}}
+
+data: {"id":"evt_4","planId":"plan_abc123","timestamp":1703123456792,"event":"tool_call_result","toolCallId":"call_456","data":{"columns":[{"name":"user_id","type":"string"},{"name":"trial_date","type":"date"}]},"error":false}
+
+data: {"id":"evt_5","planId":"plan_abc123","timestamp":1703123456793,"event":"chat","content":"正在生成SQL查询..."}
+
+data: {"id":"evt_6","planId":"plan_abc123","timestamp":1703123456794,"event":"tool_call","toolCallId":"call_789","toolName":"sql_generation","input":{"query":"转化周期分析"}}
+
+data: {"id":"evt_7","planId":"plan_abc123","timestamp":1703123456795,"event":"tool_call_result","toolCallId":"call_789","data":{"sql":"SELECT DATE_FORMAT(t.trial_date, '%Y-%m') as month, AVG(DATEDIFF(c.order_date, t.trial_date)) as avg_conversion_days FROM trial_drive t JOIN leads c ON t.user_id = c.user_id WHERE t.trial_type = '首次试驾' AND c.status = '下定' GROUP BY month ORDER BY month"},"error":false}
+
+data: {"id":"evt_8","planId":"plan_abc123","timestamp":1703123456796,"event":"complete","content":"SQL生成完成"}
+
+data: {"id":"evt_9","planId":"plan_abc123","timestamp":1703123456797,"event":"report","url":"http://localhost:8000/reports/plan_abc123","data":"<html><body><h1>转化周期分析报告</h1>...</body></html>"}
+```
+
+**DeepResearchEvent Types:**
+
+| Event Type | Description | Key Fields |
+|------------|-------------|------------|
+| `chat` | Chat messages and assistant responses | `content` (string) |
+| `plan_update` | Plan execution status updates | `todos` (TodoItem[]) |
+| `tool_call` | Tool/function execution start | `toolCallId`, `toolName`, `input` |
+| `tool_call_result` | Tool execution completion | `toolCallId`, `data`, `error` |
+| `complete` | Task completion | `content` (optional) |
+| `report` | Generated report | `url`, `data` (HTML content) |
+| `error` | Error occurrence | `error` (error message) |
+
+**TodoItem Structure:**
+```json
+{
+  "id": "task_1",
+  "content": "Analyze schema structure",
+  "status": "pending|in_progress|completed"
+}
+```
+
+**Client Implementation Example (JavaScript):**
+
+```javascript
+// Connect to SSE stream
+const eventSource = new EventSource('/workflows/chat_research', {
+  headers: {
+    'Authorization': 'Bearer your_jwt_token',
+    'Content-Type': 'application/json'
+  }
+});
+
+// Handle different event types
+eventSource.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+
+  switch(data.event) {
+    case 'chat':
+      displayChatMessage(data.content);
+      break;
+
+    case 'plan_update':
+      updatePlanDisplay(data.todos);
+      break;
+
+    case 'tool_call':
+      showToolExecution(data.toolName, data.toolCallId);
+      break;
+
+    case 'tool_call_result':
+      updateToolResult(data.toolCallId, data.data, data.error);
+      break;
+
+    case 'complete':
+      markTaskComplete(data.content);
+      break;
+
+    case 'report':
+      displayReport(data.url, data.data);
+      break;
+
+    case 'error':
+      showError(data.error);
+      break;
+  }
+};
+
+// Send research request
+fetch('/workflows/chat_research', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer your_jwt_token',
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream'
+  },
+  body: JSON.stringify({
+    namespace: 'your_namespace',
+    task: 'Generate SQL for monthly conversion analysis',
+    plan_mode: true
+  })
+});
+```
+
 ### Feedback Submission
 
 #### POST /workflows/feedback
@@ -248,6 +395,14 @@ Submit feedback on workflow execution quality.
 - Leverages predefined business metrics
 - Includes date parsing for temporal queries
 - Best for standardized business intelligence
+
+### chat_agentic
+**Interactive chat-based SQL generation with tool support:**
+- Uses conversational AI with database and filesystem tools
+- Supports plan-mode for structured multi-step execution
+- Includes real-time streaming of thoughts and tool calls
+- Best for complex research tasks and chatbot integrations
+- Accessible via `/workflows/chat_research` endpoint for structured event streaming
 
 ## Configuration
 
