@@ -6,6 +6,7 @@
 Event converter for mapping ActionHistory to DeepResearchEvent format.
 """
 
+import asyncio
 import json
 import uuid
 from typing import AsyncGenerator, Dict, List, Any, Optional

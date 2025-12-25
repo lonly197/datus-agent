@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import argparse
+import asyncio
 import csv
 import os
 import time
