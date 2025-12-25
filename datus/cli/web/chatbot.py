@@ -30,6 +30,7 @@ import structlog
 from datus.cli.repl import DatusCLI
 from datus.cli.web.chat_executor import ChatExecutor
 from datus.cli.web.config_manager import ConfigManager
+from datus.cli.web.locale import t
 from datus.cli.web.session_loader import SessionLoader
 from datus.cli.web.ui_components import UIComponents
 from datus.models.session_manager import SessionManager
@@ -155,7 +156,7 @@ class StreamlitChatbot:
             self.ui.agent_config = self.cli.agent_config
             return True
         except Exception as e:
-            st.error(f"Failed to load configuration: {e}")
+            st.error(t("config_load_failed").format(e=e))
             logger.error(f"Configuration loading error: {e}")
             return False
 
@@ -186,7 +187,7 @@ class StreamlitChatbot:
             return {"config_loaded": self.cli is not None}
 
         with st.sidebar:
-            st.header("📊 Datus Chat")
+            st.header(t("sidebar_title"))
 
             # Auto-load config with startup parameters (only once)
             if not self.cli and not st.session_state.get("initialization_attempted", False):
@@ -202,10 +203,10 @@ class StreamlitChatbot:
                     if self.setup_config(
                         startup_config, startup_namespace, catalog=startup_catalog, database=startup_database
                     ):
-                        st.success("✅ Configuration loaded!")
+                        st.success(t("config_loaded"))
                         st.rerun()
                     else:
-                        st.error("❌ Failed to load configuration")
+                        st.error(t("config_failed"))
                         st.session_state.initialization_attempted = False
 
             # Show current configuration info
@@ -215,16 +216,16 @@ class StreamlitChatbot:
 
                 # Current subagent info
                 if self.current_subagent:
-                    st.subheader("🤖 Current Subagent")
-                    st.info(f"**{st.session_state.subagent_name}** (GenSQL Mode)")
+                    st.subheader(t("sidebar_subagent_title"))
+                    st.info(t("sidebar_subagent_info").format(subagent=st.session_state.subagent_name))
 
                 # Current namespace info
-                st.subheader("🏷️ Current Namespace")
+                st.subheader(t("sidebar_namespace_title"))
                 if hasattr(self.cli.agent_config, "current_namespace"):
-                    st.info(f"**{self.cli.agent_config.current_namespace}**")
+                    st.info(t("sidebar_namespace_info").format(namespace=self.cli.agent_config.current_namespace))
 
                 # Model selection
-                st.subheader("🤖 Chat Model")
+                st.subheader(t("sidebar_model_title"))
                 available_models = self.get_available_models()
                 current_model = self.get_current_chat_model()
 
@@ -237,13 +238,13 @@ class StreamlitChatbot:
                     )
 
                     if selected_model != current_model:
-                        st.info(f"Model changed to: {selected_model}")
+                        st.info(t("model_changed").format(model=selected_model))
                         # Note: Model switching would require config reload
                         # For now, just show the selection
 
                 # Session controls
                 st.markdown("---")
-                st.subheader("💬 Session")
+                st.subheader(t("sidebar_session_title"))
 
                 # Session info
                 if self.cli.chat_commands and self.cli.chat_commands.chat_node:
@@ -255,13 +256,13 @@ class StreamlitChatbot:
                         st.metric("Tokens", session_info.get("token_count", 0))
 
                 # Clear chat button
-                if st.button("🗑️ Clear Chat", type="secondary", use_container_width=True):
+                if st.button(t("button_clear_chat"), type="secondary", use_container_width=True):
                     self.clear_chat()
                     st.rerun()
 
                 # Session History section
                 st.markdown("---")
-                st.subheader("📚 Session History")
+                st.subheader(t("sidebar_history_title"))
 
                 # List only recent 10 sessions (already sorted by modification time)
                 recent_sessions = self.session_manager.list_sessions(limit=10, sort_by_modified=True)
@@ -275,11 +276,11 @@ class StreamlitChatbot:
 
                     # Display recent sessions
                     if session_infos:
-                        st.caption(f"Showing {len(session_infos)} recent session(s)")
+                        st.caption(t("showing_sessions").format(count=len(session_infos)))
                         for info in session_infos:
                             self.ui.render_session_item(info)
                 else:
-                    st.caption("No saved sessions yet")
+                    st.caption(t("no_sessions"))
 
                 # Report Issue section
                 st.markdown("---")
@@ -294,8 +295,8 @@ class StreamlitChatbot:
 
                 # Debug section
                 st.markdown("---")
-                st.subheader("🔍 Debug Info")
-                with st.expander("Debug Details", expanded=False):
+                st.subheader(t("sidebar_debug_title"))
+                with st.expander(t("debug_expander"), expanded=False):
                     st.write("Query Params:", dict(st.query_params))
                     st.write("Startup Subagent:", st.session_state.get("startup_subagent_name"))
                     st.write("Current Subagent:", st.session_state.get("subagent_name"))
@@ -310,7 +311,7 @@ class StreamlitChatbot:
                             )
 
             else:
-                st.warning("⚠️ Loading configuration...")
+                st.warning(t("loading_config"))
 
             return {"config_loaded": self.cli is not None}
 
@@ -359,7 +360,7 @@ class StreamlitChatbot:
         # Get current session ID
         session_id = self.get_current_session_id()
         if not session_id:
-            st.warning("No active session found. Cannot save success story.")
+            st.warning(t("no_active_session"))
             logger.warning("Attempted to save success story without active session")
             return
 
@@ -379,7 +380,7 @@ class StreamlitChatbot:
             target_dir.relative_to(base_dir)
         except ValueError:
             logger.warning(f"Rejected unsafe subagent_name: {subagent_name!r}")
-            st.error("Unsafe subagent name.")
+            st.error(t("unsafe_subagent"))
             return
         target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -412,11 +413,11 @@ class StreamlitChatbot:
                 # Write the success story
                 writer.writerow(row)
 
-            st.success(f"✅ Success story saved! Session link: {session_link}")
+            st.success(t("success_saved").format(link=session_link))
             logger.info(f"Saved success story for session {session_id}")
 
         except Exception as e:
-            st.error(f"Failed to save success story: {e}")
+            st.error(t("save_failed").format(error=e))
             logger.error(f"Failed to save success story: {e}")
 
     def load_session_from_url(self):
@@ -435,7 +436,7 @@ class StreamlitChatbot:
 
         # Verify session exists
         if not self.session_manager.session_exists(session_id):
-            st.error(f"Session {session_id} not found or has no data.")
+            st.error(t("session_not_found").format(id=session_id))
             logger.warning(f"Attempted to load non-existent session: {session_id}")
             return
 
@@ -443,7 +444,7 @@ class StreamlitChatbot:
         try:
             messages = self.get_session_messages(session_id)
             if not messages:
-                st.warning(f"Session {session_id} has no messages to display.")
+                st.warning(t("session_no_messages").format(id=session_id))
                 return
 
             # Populate session state with loaded messages
@@ -454,7 +455,7 @@ class StreamlitChatbot:
             logger.info(f"Loaded session {session_id} with {len(messages)} messages in read-only mode")
 
         except Exception as e:
-            st.error(f"Failed to load session: {e}")
+            st.error(t("session_load_failed").format(error=e))
             logger.error(f"Failed to load session {session_id}: {e}")
 
     def extract_sql_and_response(self, actions: List[ActionHistory]) -> Tuple[Optional[str], Optional[str]]:
@@ -480,7 +481,7 @@ class StreamlitChatbot:
             sql_id = str(uuid.uuid4())
 
         if not self.cli or not getattr(self.cli, "db_connector", None):
-            st.error("Database connector is not initialized. Please configure the agent first.")
+            st.error(t("db_not_initialized"))
             logger.error("Download requested without an active database connector")
             return
         markdown = markdown or ""
@@ -573,7 +574,7 @@ class StreamlitChatbot:
                     writer.sheets["report"] = markdown_sheet
                     _write_text_block(markdown_sheet, markdown)
             except Exception as exc:
-                st.error(f"Failed to generate Excel: {exc}")
+                st.error(t("excel_generation_failed").format(error=exc))
                 logger.error(f"Failed to build download workbook: {exc}", exc_info=True)
                 return
 
@@ -685,15 +686,15 @@ class StreamlitChatbot:
         # Show read-only banner if viewing shared session
         if st.session_state.session_readonly_mode:
             session_id_short = st.session_state.view_session_id[:8] if st.session_state.view_session_id else "unknown"
-            st.info(f"📖 Viewing Shared Session (Read-Only) - ID: {session_id_short}...")
+            st.info(t("viewing_shared_session").format(id=session_id_short))
 
         # Title and description with subagent support - detect directly from URL
         if self.current_subagent:
-            st.title(f"🤖 Datus AI Chat Assistant - {self.current_subagent.title()}")
-            st.caption(f"Specialized {self.current_subagent} subagent for SQL generation - Natural Language to SQL")
+            st.title(t("title_subagent").format(subagent=self.current_subagent.title()))
+            st.caption(t("caption_subagent").format(subagent=self.current_subagent))
         else:
-            st.title("🤖 Datus AI Chat Assistant")
-            st.caption("Intelligent database query assistant based on Datus Agent - Natural Language to SQL")
+            st.title(t("title_main"))
+            st.caption(t("caption_main"))
             # Only show available subagents when NOT in subagent mode and NOT in readonly mode
             if not st.session_state.session_readonly_mode:
                 self.ui.show_available_subagents(self.cli.agent_config if self.cli else None)
@@ -703,14 +704,14 @@ class StreamlitChatbot:
 
         # Main chat interface
         if not sidebar_state["config_loaded"]:
-            st.warning("⚠️ Please wait for configuration to load or check the sidebar")
-            st.info("Configuration file contains database connections, model settings, etc.")
+            st.warning(t("loading_config"))
+            st.info(t("config_description"))
             return
         self.ui.reset_sql_display_state()
         self._display_chat_actions()
 
         if not self.cli or not self.cli.chat_commands:
-            st.warning("⚠️ Something went wrong, please try restarting.")
+            st.warning(t("something_wrong"))
             return
         # Chat input - disabled in read-only mode
         if not st.session_state.session_readonly_mode:
@@ -757,8 +758,7 @@ class StreamlitChatbot:
                         self.ui.display_markdown_response(response)
                     else:
                         st.markdown(
-                            "Sorry, unable to generate a valid response. "
-                            "Please check execution details for more information."
+                            t("response_error", "抱歉，无法生成有效响应。请检查执行详情以获取更多信息。")
                         )
 
                     # Display SQL if available
@@ -869,18 +869,18 @@ def run_web_interface(args):
         web_chatbot_path = os.path.join(current_dir, "chatbot.py")
 
         if not os.path.exists(web_chatbot_path):
-            print(f"❌ Error: Web chatbot not found at {web_chatbot_path}")
+            print(t("console_error_webchat_not_found").format(path=web_chatbot_path))
             sys.exit(1)
 
-        print("🚀 Starting Datus Web Interface...")
+        print(t("console_starting_web_interface"))
         if args.namespace:
-            print(f"🔗 Using namespace: {args.namespace}")
+            print(t("console_using_namespace").format(ns=args.namespace))
         if args.config:
-            print(f"⚙️ Using config: {args.config}")
+            print(t("console_using_config").format(config=args.config))
         if args.database:
-            print(f"📚 Using database: {args.database}")
-        print(f"🌐 Starting server at http://{args.host}:{args.port}")
-        print("⏹️ Press Ctrl+C to stop server")
+            print(t("console_using_database").format(db=args.database))
+        print(t("console_server_started").format(host=args.host, port=args.port))
+        print(t("console_press_ctrl_c"))
         print("-" * 50)
 
         # Prepare streamlit command
@@ -916,9 +916,9 @@ def run_web_interface(args):
         subprocess.run(cmd)
 
     except KeyboardInterrupt:
-        print("\n🛑 Web server stopped")
+        print("\n" + t("console_web_server_stopped"))
     except Exception as e:
-        print(f"❌ Failed to start web interface: {e}")
+        print(t("console_web_interface_failed").format(error=e))
         sys.exit(1)
 
 
@@ -928,11 +928,11 @@ def main():
 
     # Page configuration - MUST be the first Streamlit command
     st.set_page_config(
-        page_title="Datus AI Chat Assistant",
+        page_title=t("page_title"),
         page_icon="🤖",
         layout="wide",
         initial_sidebar_state="expanded",
-        menu_items={"Get Help": None, "Report a bug": None, "About": None},
+        menu_items={t("menu_get_help"): None, t("menu_report_bug"): None, t("menu_about"): None},
     )
 
     # Parse command line arguments

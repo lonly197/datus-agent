@@ -23,6 +23,7 @@ import structlog
 from pandas.core.dtypes.common import is_numeric_dtype
 
 from datus.cli.action_history_display import ActionContentGenerator
+from datus.cli.web.locale import t
 from datus.configuration.agent_config import AgentConfig
 from datus.models.base import LLMBaseModel
 from datus.schemas.action_history import ActionHistory, ActionRole
@@ -90,13 +91,13 @@ class UIComponents:
     def render_session_item(self, info: dict) -> None:
         """Render a single session item in sidebar."""
         sid_short = info["session_id"][:8]
-        with st.expander(f"📝 {sid_short}...", expanded=False):
-            st.caption(f"**Created:** {info.get('created_at', 'N/A')}")
-            st.caption(f"**Messages:** {info.get('message_count', 0)}")
+        with st.expander(t("session_expander").format(sid=sid_short), expanded=False):
+            st.caption(t("session_created").format(date=info.get('created_at', 'N/A')))
+            st.caption(t("session_messages").format(count=info.get('message_count', 0)))
             latest_msg = info.get("latest_user_message", "")
             if latest_msg:
-                st.caption(f"**Latest:** {latest_msg[:50]}...")
-            if st.button("🔗 Load Session", key=f"load_{info['session_id']}", use_container_width=True):
+                st.caption(t("session_latest").format(msg=latest_msg[:50]))
+            if st.button(t("button_load_session"), key=f"load_{info['session_id']}", use_container_width=True):
                 self.safe_update_query_params({"session": info["session_id"]})
                 st.rerun()
 
@@ -241,8 +242,8 @@ class UIComponents:
         if not available_subagents:
             return
 
-        with st.expander("🔧 Access Specialized Subagents", expanded=True):
-            st.markdown("**Available specialized subagents:**")
+        with st.expander(t("subagents_expander"), expanded=True):
+            st.markdown(t("subagents_available"))
 
             # Display each available subagent
             for subagent_name, subagent_config in available_subagents.items():
@@ -256,7 +257,7 @@ class UIComponents:
 
                 with col1:
                     subagent_url = f"http://{self.server_host}:{self.server_port}/?subagent={subagent_name}"
-                    st.markdown(f"**{subagent_name.title()} Subagent**: `{subagent_url}`")
+                    st.markdown(t("subagents_description").format(name=subagent_name.title(), url=subagent_url))
 
                     # Show subagent details
                     details = [f"Model: {model_name}", f"Prompt: {system_prompt}"]
@@ -277,16 +278,16 @@ class UIComponents:
                     st.caption(" | ".join(details))
 
                 with col2:
-                    if st.button(f"🚀 Use {subagent_name}", key=f"switch_{subagent_name}"):
+                    if st.button(t("button_use_subagent").format(subagent=subagent_name), key=f"switch_{subagent_name}"):
                         UIComponents.safe_update_query_params({"subagent": subagent_name})
                         st.rerun()
 
             st.markdown("---")
-            st.info("💡 **Tip**: Bookmark subagent URLs for direct access!")
+            st.info(t("subagents_tip"))
 
     def display_success_button(self, sql: str, user_message: str, sql_id, save_callback):
         # Create unique ID for this SQL block
-        if st.button("👍 Success", key=f"save_{sql_id}", help="Save this query as a success story"):
+        if st.button(t("button_save_success"), key=f"save_{sql_id}", help="Save this query as a success story"):
             save_callback(sql, user_message)
 
     @staticmethod
@@ -413,7 +414,7 @@ class UIComponents:
         sql_id = _sql_union_id(sql)
         state_id = hashlib.md5(sql.encode()).hexdigest()
         result_df = data.sql_return if isinstance(data.sql_return, pd.DataFrame) else None
-        tab1, tab2, tab3 = st.tabs(["🔧Generated SQL", "📊Execute Result", "📈Chart"])
+        tab1, tab2, tab3 = st.tabs([t("tab_generated_sql"), t("tab_execute_result"), t("tab_chart")])
         with tab1:
             # Display SQL with syntax highlighting
             st.code(sql, language="sql")
@@ -422,7 +423,7 @@ class UIComponents:
                 if result_df is not None and not result_df.empty:
                     st.dataframe(result_df)
                 else:
-                    st.warning("No data return")
+                    st.warning(t("no_data_return"))
 
             with tab3:
                 if result_df is not None and not result_df.empty:
@@ -430,7 +431,7 @@ class UIComponents:
 
                     if not (viz_result and viz_result.get("success")):
                         st.button(
-                            label="Chart by AI",
+                            label=t("button_configure_chart"),
                             key=f"prepare_chart_{sql_id}",
                             on_click=self.pre_render_chart,
                             args=[state_id, result_df],
@@ -444,9 +445,9 @@ class UIComponents:
                             self.render_dynamic_chart_in_tab(result_df, state_id, chart_type)
                         else:
                             error_msg = viz_result.get("error") or viz_result.get("reason") or "Unknown error"
-                            st.error(f"Chart suggestion failed: {error_msg}")
+                            st.error(t("chart_failed").format(error=error_msg))
                 else:
-                    st.warning("No data return")
+                    st.warning(t("no_data_return"))
         else:
             with tab2:
                 st.error("SQL execution failed")
@@ -466,7 +467,7 @@ class UIComponents:
             chart_type (str): Suggested chart type from visualization tool.
         """
         if df.empty:
-            st.error("The data is empty and the chart cannot be generated.")
+            st.error(t("chart_empty"))
             return
 
         # 1. Data column analysis
@@ -481,7 +482,7 @@ class UIComponents:
 
         # --- Configuration panel (st.popover) ---
         with st.popover("⚙️ Chart Configuration"):
-            st.write("**Select chart type and axis mapping**")
+            st.write(t("chart_select_type"))
             selected_chart_name = st.selectbox("Chart Type", list(chart_options.keys()), key=chart_key)
             chart_func_name = chart_options[selected_chart_name]
 
@@ -503,13 +504,13 @@ class UIComponents:
 
         # Dynamic rendering logic
         if not y_cols:
-            st.info("Please click the '⚙️ Configure Chart' button above to select at least one Y-axis indicator.")
+            st.info(t("chart_configure_hint"))
             return
 
         # Special treatment for pie charts
         if chart_func_name == "pie":
             if len(y_cols) > 1:
-                st.warning("Only one indicator (Y-axis) can be selected for pie charts.")
+                st.warning(t("chart_pie_warning"))
 
             y_col_single = y_cols[0]
             fig = px.pie(df, names=x_col, values=y_col_single, title=f"{y_col_single} by {x_col}")
@@ -547,7 +548,7 @@ class UIComponents:
     ):
         if not sql:
             return
-        if st.button("⏬ Download", key=f"download_{sql_id}", help="Prepare data for download"):
+        if st.button(t("button_download"), key=f"download_{sql_id}", help="Prepare data for download"):
             download_callback(sql, output_md, execute_result, sql_id, display_column)
 
     def display_markdown_response(self, response: str) -> None:
@@ -555,7 +556,7 @@ class UIComponents:
         if not response:
             return
 
-        st.markdown("### 💬 AI Response")
+        st.markdown(t("ai_response"))
         st.markdown(response)
 
     def render_action_item(
@@ -580,31 +581,31 @@ class UIComponents:
                 col1, col2 = st.columns([1, 1])
 
                 with col1:
-                    st.markdown("**Input:**")
+                    st.markdown(t("action_input"))
                     if action.input:
                         if isinstance(action.input, dict):
                             st.json(action.input)
                         else:
                             st.text(str(action.input))
                     else:
-                        st.caption("(no input)")
+                        st.caption(t("action_no_input"))
 
                 with col2:
-                    st.markdown("**Output:**")
+                    st.markdown(t("action_output"))
                     if action.output:
                         if isinstance(action.output, dict):
                             st.json(action.output)
                         else:
                             st.text(str(action.output))
                     else:
-                        st.caption("(no output)")
+                        st.caption(t("action_no_output"))
 
                 # Timing information
                 if action.start_time and action.end_time:
                     duration = (action.end_time - action.start_time).total_seconds()
-                    st.caption(f"⏱️ Started: {action.start_time.strftime('%H:%M:%S')} | Duration: {duration:.2f}s")
+                    st.caption(t("action_started_duration").format(time=action.start_time.strftime('%H:%M:%S'), duration=duration))
                 elif action.start_time:
-                    st.caption(f"⏱️ Started: {action.start_time.strftime('%H:%M:%S')}")
+                    st.caption(t("action_started").format(time=action.start_time.strftime('%H:%M:%S')))
 
     def render_action_history(self, actions: List[ActionHistory], chat_id: str = None, expanded: bool = False) -> None:
         """Render complete action history with full details.
@@ -620,8 +621,8 @@ class UIComponents:
         chat_id = chat_id or "default"
 
         # Display complete execution history
-        with st.expander(f"🔍 View Full Execution Details ({len(actions)} steps)", expanded=expanded):
-            st.caption("Complete execution trace with all intermediate steps")
+        with st.expander(t("execution_expander").format(count=len(actions)), expanded=expanded):
+            st.caption(t("execution_trace"))
 
             content_generator = ActionContentGenerator(enable_truncation=False)
 
