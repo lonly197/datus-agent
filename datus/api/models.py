@@ -103,6 +103,7 @@ class ChatResearchRequest(BaseModel):
     layer2: Optional[str] = Field(None, description="Layer2 for the task")
     ext_knowledge: Optional[str] = Field(None, description="External knowledge")
     plan_mode: Optional[bool] = Field(False, description="Enable plan mode for structured execution")
+    auto_execute_plan: Optional[bool] = Field(False, description="Auto execute plan without user confirmation")
 
 
 class DeepResearchEventType(str, Enum):

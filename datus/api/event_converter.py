@@ -78,12 +78,16 @@ class DeepResearchEventConverter:
 
         # 3. Handle tool results (when tool call completes)
         elif action.action_type == "tool_call_result" and action.output:
-            # Find corresponding tool call
+            # Find corresponding tool call using exact matching
             tool_call_id = None
-            for action_id, call_id in self.tool_call_map.items():
-                if action_id in action.action_id or action_id in str(action.input or {}):
-                    tool_call_id = call_id
-                    break
+            # First try to find by exact action_id match
+            if action.action_id in self.tool_call_map:
+                tool_call_id = self.tool_call_map[action.action_id]
+            # If not found, try to find by action_id in input
+            elif action.input and isinstance(action.input, dict):
+                input_action_id = action.input.get("action_id")
+                if input_action_id and input_action_id in self.tool_call_map:
+                    tool_call_id = self.tool_call_map[input_action_id]
 
             if tool_call_id:
                 return ToolCallResultEvent(

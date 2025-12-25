@@ -9,11 +9,12 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from io import StringIO
-from typing import Any, AsyncGenerator, Dict, List
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from datus.agent.agent import Agent
 from datus.configuration.agent_config_loader import load_agent_config
@@ -336,7 +337,10 @@ class DatusAPIService:
             )
 
             # Enable plan mode in workflow metadata
-            workflow_metadata = {"plan_mode": request.plan_mode or True}
+            workflow_metadata = {
+                "plan_mode": request.plan_mode if request.plan_mode is not None else True,
+                "auto_execute_plan": request.auto_execute_plan if request.auto_execute_plan is not None else False
+            }
 
             # Initialize task tracking
             if self.task_store:
