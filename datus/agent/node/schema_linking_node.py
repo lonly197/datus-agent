@@ -68,9 +68,7 @@ class SchemaLinkingNode(Node):
         # Search and enhance external knowledge before schema linking
         enhanced_external_knowledge = self._search_external_knowledge(
             workflow.task.task,  # User query
-            workflow.task.domain,  # Business domain
-            workflow.task.layer1,  # First layer
-            workflow.task.layer2,  # Second layer
+            workflow.task.subject_path,  # Subject hierarchy path
         )
 
         # Combine original and searched knowledge
@@ -179,14 +177,12 @@ class SchemaLinkingNode(Node):
                 table_values=[],
             )
 
-    def _search_external_knowledge(self, user_query: str, domain: str = "", layer1: str = "", layer2: str = "") -> str:
-        """Search for relevant external knowledge based on user query and metadata.
+    def _search_external_knowledge(self, user_query: str, subject_path: Optional[List[str]] = None) -> str:
+        """Search for relevant external knowledge based on user query and subject path.
 
         Args:
             user_query: The user's natural language query
-            domain: Business domain filter
-            layer1: First layer filter
-            layer2: Second layer filter
+            subject_path: Subject hierarchy path (e.g., ['Finance', 'Revenue', 'Q1'])
 
         Returns:
             Formatted string of relevant knowledge entries, empty string if no results or error
@@ -200,15 +196,16 @@ class SchemaLinkingNode(Node):
                 logger.debug("External knowledge store is empty or not available, skipping search")
                 return ""
 
-            # Execute search using ContextSearchTools
-            search_result = context_search_tools.search_external_knowledge(
-                query_text=user_query, domain=domain, layer1=layer1, layer2=layer2, top_n=5
+            # Execute semantic search
+            search_results = ext_knowledge_store.search_knowledge(
+                query_text=user_query, subject_path=subject_path, top_n=5
+            )
             )
 
             # Format search results
-            if search_result.success and search_result.result:
+            if search_results is not None and len(search_results) > 0:
                 knowledge_items = []
-                for result in search_result.result:
+                for result in search_results.to_pylist():
                     terminology = result.get("terminology", "")
                     explanation = result.get("explanation", "")
                     if terminology and explanation:
@@ -267,9 +264,7 @@ class SchemaLinkingNode(Node):
             try:
                 enhanced_knowledge = self._search_external_knowledge(
                     self.input.input_text if hasattr(self.input, "input_text") else "",
-                    "",
-                    "",
-                    "",  # domain, layer1, layer2 - would need to get from workflow if available
+                    None,  # subject_path - would need to get from workflow if available
                 )
                 knowledge_action.status = ActionStatus.SUCCESS
                 knowledge_action.output = {
