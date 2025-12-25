@@ -110,7 +110,7 @@ div[data-testid="stChatInput"] {
 }
 /* Reduce default top padding of main container to bring header up */
 .block-container {
-  padding-top: 36px !important;
+  padding-top: 8px !important;
 }
 
 /* Attempt to pin chat input to bottom of the viewport, accounting for sidebar width */
@@ -128,9 +128,6 @@ div[data-testid="stChatInput"] {
   border-radius: 12px !important;
   padding: 12px !important;
 }
-/* Header and vertical block spacing tweaks */
-.stHeader { min-height: 1rem !important; height: auto !important; }
-.stVerticalBlock { gap: 0.2rem !important; }
 """
 
 
@@ -1110,38 +1107,6 @@ def main():
             st.markdown(compute_sidebar_js, unsafe_allow_html=True)
         except Exception:
             logger.debug("Sidebar width JS injection skipped")
-    # Accessibility tweaks: set placeholder and aria-label for chat input textarea
-    adjust_input_attrs_js = r"""
-    <script>
-    (function() {
-      function setChatInputAttrs() {
-        try {
-          var chatContainers = document.querySelectorAll('div[data-testid=\"stChatInput\"], .stChatInput, .stChatInputTextArea');
-          chatContainers.forEach(function(container) {
-            var textarea = container.querySelector('textarea') || container.querySelector('input');
-            if (textarea) {
-              textarea.setAttribute('placeholder', '请输入问题...');
-              textarea.setAttribute('aria-label', '请输入问题...');
-            }
-          });
-        } catch (e) { console.warn('setChatInputAttrs failed', e); }
-      }
-      // run after load and on resize (in case of rerender)
-      document.addEventListener('DOMContentLoaded', setChatInputAttrs);
-      window.addEventListener('load', setChatInputAttrs);
-      // also try periodically for single page dynamic renders
-      var interval = setInterval(function(){ setChatInputAttrs(); }, 800);
-      setTimeout(function(){ clearInterval(interval); }, 5000);
-    })();
-    </script>
-    """
-    try:
-        components.html(adjust_input_attrs_js, height=0)
-    except Exception:
-        try:
-            st.markdown(adjust_input_attrs_js, unsafe_allow_html=True)
-        except Exception:
-            logger.debug("Chat input attrs JS injection skipped")
 
     # Initialize logging once per process
     initialize_logging(debug=debug)
