@@ -14,11 +14,11 @@ from typing import Dict, Optional
 # 中文本地化字典 - 简体中文 (zh_CN)
 LOCALE_ZH_CN: Dict[str, str] = {
 # 页面配置
-"page_title": "Datus AI 聊天助手",
+"page_title": "AI Agent",
 
     # 主标题和描述
-    "title_main": "🤖 Datus AI 聊天助手",
-    "title_subagent": "🤖 Datus AI 聊天助手 - {subagent}",
+    "title_main": "🤖 AI Agent",
+    "title_subagent": "🤖 AI Agent - {subagent}",
     "caption_main": "基于 Datus Agent 的智能数据库查询助手 - 自然语言转 SQL",
     "caption_subagent": "专用的 {subagent} 子代理，用于 SQL 生成 - 自然语言转 SQL",
 
