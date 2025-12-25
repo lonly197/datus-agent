@@ -337,9 +337,16 @@ service = None
 async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
     """Generate Server-Sent Events stream for workflow execution."""
     import json
+    import asyncio
+    import time as time_module
 
     task_id = req.task_id or service._generate_task_id(current_client)
     start_time = time.time()
+    progress_seq = 0  # Progress sequence counter for ordering
+
+    # Throttling for partial streaming events (max 10 per second)
+    last_partial_time = 0
+    min_partial_interval = 0.1  # 100ms minimum interval between partial events
 
     try:
         # Initialize task tracking in database
@@ -348,19 +355,24 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
 
         # Send started event
         yield f"event: started\ndata: {to_str({'task_id': task_id, 'client': current_client})}\n\n"
+        await asyncio.sleep(0)  # Allow event loop to flush
 
         # Execute workflow with streaming
         sql_query = None
 
         async for action in service.run_workflow_stream(req, current_client):
-            # Map different action types to SSE events
+            progress_seq += 1
+
+            # Map different action types to SSE events with prioritized matching
+
+            # 1. Handle specific high-priority business logic events first
             if action.action_type == "sql_generation" and action.status == "success":
                 if action.output and "sql_query" in action.output:
                     sql_query = action.output["sql_query"]
                     # Update task in database
                     if service.task_store:
                         service.task_store.update_task(task_id, sql_query=sql_query)
-                    yield f"event: sql_generated\ndata: {to_str({'sql': sql_query})}\n\n"
+                    yield f"event: sql_generated\ndata: {to_str({'sql': sql_query, 'progress_seq': progress_seq})}\n\n"
 
             elif action.action_type == "sql_execution" and action.status == "success":
                 output = action.output or {}
@@ -369,7 +381,7 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                     # Update task in database
                     if service.task_store:
                         service.task_store.update_task(task_id, sql_result=str(sql_result))
-                    result_data = {"row_count": output.get("row_count", 0), "sql_result": sql_result}
+                    result_data = {"row_count": output.get("row_count", 0), "sql_result": sql_result, "progress_seq": progress_seq}
                     yield f"event: execution_complete\ndata: {to_str(result_data)}\n\n"
 
             elif action.action_type == "output_generation" and action.status == "success":
@@ -378,6 +390,7 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                     "output_generated": output.get("output_generated", True),
                     "sql_query": output.get("sql_query", ""),
                     "sql_result": output.get("sql_result", ""),
+                    "progress_seq": progress_seq,
                 }
                 yield f"event: output_ready\ndata: {to_str(output_data)}\n\n"
 
@@ -390,22 +403,22 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                     if service.task_store:
                         service.task_store.update_task(task_id, status="completed")
                     execution_time_ms = int((time.time() - start_time) * 1000)
-                    yield f"event: done\ndata: {json.dumps({'exec_time_ms': execution_time_ms})}\n\n"
+                    yield f"event: done\ndata: {json.dumps({'exec_time_ms': execution_time_ms, 'progress_seq': progress_seq})}\n\n"
                 elif action.status == "failed":
                     # Update task status to failed
                     if service.task_store:
                         service.task_store.update_task(task_id, status="failed")
                     error_msg = (action.output or {}).get("error", "Unknown error")
-                    yield f"event: error\ndata: {to_str({'error': error_msg})}\n\n"
+                    yield f"event: error\ndata: {to_str({'error': error_msg, 'progress_seq': progress_seq})}\n\n"
                 # For status="processing", do nothing and wait for final status
 
             elif action.status == "failed":
                 error_msg = (action.output or {}).get("error", "Action failed")
-                yield f"event: error\ndata: {to_str({'error': error_msg, 'action_id': action.action_id})}\n\n"
+                yield f"event: error\ndata: {to_str({'error': error_msg, 'action_id': action.action_id, 'progress_seq': progress_seq})}\n\n"
 
-            # Send progress updates for workflow steps and node execution
+            # 2. Handle workflow and node progress events
             elif action.action_id == "workflow_initialization":
-                progress_data = {"action": "initialization", "status": action.status, "message": action.messages}
+                progress_data = {"action": "initialization", "status": action.status, "message": action.messages, "progress_seq": progress_seq}
                 yield f"event: progress\ndata: {to_str(progress_data)}\n\n"
 
             elif action.action_id.startswith("node_execution_"):
@@ -416,34 +429,138 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                     "node_type": node_info.get("node_type", ""),
                     "description": node_info.get("description", ""),
                     "message": action.messages,
+                    "progress_seq": progress_seq,
                 }
                 yield f"event: node_progress\ndata: {to_str(node_data)}\n\n"
 
-            # Send node-specific progress for streaming operations
-            elif action.action_type in [
-                "schema_linking",
-                "sql_preparation",
-                "sql_generation",
-                "sql_execution",
-                "output_preparation",
-                "output_generation",
-            ]:
-                detail_data = {"action_type": action.action_type, "status": action.status, "message": action.messages}
-                yield f"event: node_detail\ndata: {to_str(detail_data)}\n\n"
-
-            # Expose chat_agentic final response to SSE clients (align with chatbot behavior)
+            # 3. Handle chat-specific streaming events
             elif action.action_type == "chat_response" and action.status == ActionStatus.SUCCESS:
                 output = action.output or {}
                 chat_data = {
                     "response": output.get("response", ""),
                     "sql": output.get("sql", ""),
                     "tokens_used": output.get("tokens_used", 0),
+                    "progress_seq": progress_seq,
                 }
                 yield f"event: chat_response\ndata: {to_str(chat_data)}\n\n"
 
+            elif action.role == ActionRole.ASSISTANT and action.action_type in ("message", "llm_generation", "thinking"):
+                # Handle chat thinking and streaming content
+                output = action.output or {}
+                partial_content = ""
+                is_partial = False
+
+                # Extract partial content from various possible fields
+                if "raw_output" in output:
+                    partial_content = output.get("raw_output", "")
+                    is_partial = True
+                elif "content" in output:
+                    partial_content = output.get("content", "")
+                    is_partial = True
+                elif "partial" in output:
+                    partial_content = output.get("partial", "")
+                    is_partial = True
+
+                if is_partial and partial_content:
+                    # Throttle partial events to avoid overwhelming clients (max 10 per second)
+                    current_time = time_module.time()
+                    time_since_last_partial = current_time - last_partial_time
+                    if time_since_last_partial < min_partial_interval:
+                        await asyncio.sleep(min_partial_interval - time_since_last_partial)
+                        current_time = time_module.time()
+
+                    last_partial_time = current_time
+
+                    # Truncate large partials to avoid overwhelming clients (8KB limit)
+                    max_partial_size = 8192
+                    is_truncated = len(partial_content) > max_partial_size
+                    if is_truncated:
+                        partial_content = partial_content[:max_partial_size]
+
+                    stream_data = {
+                        "action_type": action.action_type,
+                        "content": partial_content,
+                        "is_truncated": is_truncated,
+                        "node_type": "chat",
+                        "progress_seq": progress_seq,
+                    }
+                    yield f"event: chat_thinking\ndata: {to_str(stream_data)}\n\n"
+                else:
+                    # Regular chat message without partial content
+                    detail_data = {
+                        "action_type": action.action_type,
+                        "status": action.status,
+                        "message": action.messages,
+                        "node_type": "chat",
+                        "progress_seq": progress_seq,
+                    }
+                    yield f"event: node_detail\ndata: {to_str(detail_data)}\n\n"
+
+            # 4. Handle expanded node-specific progress for streaming operations
+            elif action.action_type in [
+                "schema_linking", "sql_preparation", "sql_generation", "sql_execution",
+                "output_preparation", "output_generation", "llm_generation", "tool_call",
+                "function_call", "message", "thinking", "raw_stream", "response"
+            ]:
+                output = action.output or {}
+                detail_data = {
+                    "action_type": action.action_type,
+                    "status": action.status,
+                    "message": action.messages,
+                    "progress_seq": progress_seq,
+                }
+
+                # Include partial output if available
+                if "raw_output" in output:
+                    partial_content = output.get("raw_output", "")
+                    if partial_content:
+                        # Throttle partial events to avoid overwhelming clients
+                        current_time = time_module.time()
+                        time_since_last_partial = current_time - last_partial_time
+                        if time_since_last_partial < min_partial_interval:
+                            await asyncio.sleep(min_partial_interval - time_since_last_partial)
+                            current_time = time_module.time()
+
+                        last_partial_time = current_time
+
+                        max_partial_size = 8192
+                        is_truncated = len(partial_content) > max_partial_size
+                        if is_truncated:
+                            partial_content = partial_content[:max_partial_size]
+                        detail_data["partial_output"] = partial_content
+                        detail_data["is_truncated"] = is_truncated
+                        yield f"event: node_stream\ndata: {to_str(detail_data)}\n\n"
+                    else:
+                        yield f"event: node_detail\ndata: {to_str(detail_data)}\n\n"
+                else:
+                    yield f"event: node_detail\ndata: {to_str(detail_data)}\n\n"
+
+            # 5. Generic fallback for any ActionHistory not matched above
+            else:
+                # Extract serializable subset to avoid issues with complex objects
+                serializable_action = {
+                    "action_id": action.action_id,
+                    "role": str(action.role) if hasattr(action, 'role') else None,
+                    "action_type": action.action_type,
+                    "messages": action.messages,
+                    "status": str(action.status) if hasattr(action, 'status') else None,
+                    "progress_seq": progress_seq,
+                }
+
+                # Include basic input/output info if available and serializable
+                if action.input and isinstance(action.input, dict):
+                    serializable_action["input_keys"] = list(action.input.keys())
+                if action.output and isinstance(action.output, dict):
+                    serializable_action["output_keys"] = list(action.output.keys())
+
+                yield f"event: generic_action\ndata: {to_str(serializable_action)}\n\n"
+
+            # Allow event loop to flush network buffer (non-blocking)
+            await asyncio.sleep(0)
+
     except Exception as e:
         logger.error(f"SSE stream error for task {task_id}: {e}")
-        yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+        yield f"event: error\ndata: {json.dumps({'error': str(e), 'progress_seq': progress_seq})}\n\n"
 
 
 @asynccontextmanager
