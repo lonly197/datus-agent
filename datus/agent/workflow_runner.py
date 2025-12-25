@@ -264,88 +264,84 @@ class WorkflowRunner:
                 },
             )
 
-        except Exception as e:
-            self._update_action_status(init_action, success=False, error=str(e))
-            logger.error(f"Workflow initialization failed: {e}")
-            return
+            step_count = 0
+            self._prepare_first_node()
 
-        step_count = 0
-        self._prepare_first_node()
-
-        while self.workflow and not self.workflow.is_complete() and step_count < max_steps:
-            current_node = self.workflow.get_current_node()
-            if not current_node:
-                logger.warning("No more tasks to execute. Exiting.")
-                break
-
-            node_start_action = self._create_action_history(
-                action_id=f"node_execution_{current_node.id}",
-                messages=f"Executing node: {current_node.description}",
-                action_type="node_execution",
-                input_data={
-                    "node_id": current_node.id,
-                    "node_type": current_node.type,
-                    "description": current_node.description,
-                    "step_count": step_count,
-                },
-            )
-            yield node_start_action
-
-            try:
-                logger.info(f"Executing task: {current_node.description}")
-
-                async for node_action in current_node.run_stream(action_history_manager):
-                    yield node_action
-
-                if current_node.status == "failed":
-                    self._update_action_status(
-                        node_start_action, success=False, error=f"Node execution failed: {current_node.description}"
-                    )
-                    logger.warning(f"Node failed: {current_node.description}")
+            while self.workflow and not self.workflow.is_complete() and step_count < max_steps:
+                # 检查是否被取消
+                if asyncio.current_task().cancelled():
+                    logger.info("Workflow execution was cancelled")
                     break
 
-                self._update_action_status(
-                    node_start_action,
-                    success=True,
-                    output_data={
-                        "node_completed": True,
-                        "execution_successful": True,
+                current_node = self.workflow.get_current_node()
+                if not current_node:
+                    logger.warning("No more tasks to execute. Exiting.")
+                    break
+
+                node_start_action = self._create_action_history(
+                    action_id=f"node_execution_{current_node.id}",
+                    messages=f"Executing node: {current_node.description}",
+                    action_type="node_execution",
+                    input_data={
+                        "node_id": current_node.id,
+                        "node_type": current_node.type,
+                        "description": current_node.description,
+                        "step_count": step_count,
                     },
                 )
+                yield node_start_action
 
-            except Exception as e:
-                self._update_action_status(node_start_action, success=False, error=str(e))
-                logger.error(f"Node execution error: {e}")
-                break
+                try:
+                    logger.info(f"Executing task: {current_node.description}")
 
-            try:
-                evaluation = evaluate_result(current_node, self.workflow)
-                logger.debug(f"Evaluation result: {evaluation}")
+                    async for node_action in current_node.run_stream(action_history_manager):
+                        yield node_action
 
-                if not evaluation["success"]:
-                    current_node.status = "failed"
+                    if current_node.status == "failed":
+                        self._update_action_status(
+                            node_start_action, success=False, error=f"Node execution failed: {current_node.description}"
+                        )
+                        logger.warning(f"Node failed: {current_node.description}")
+                        break
+
+                    self._update_action_status(
+                        node_start_action,
+                        success=True,
+                        output_data={
+                            "node_completed": True,
+                            "execution_successful": True,
+                        },
+                    )
+
+                except asyncio.CancelledError:
+                    # 重新抛出取消异常
+                    self._update_action_status(node_start_action, success=False, error="Node execution was cancelled")
+                    logger.info(f"Node execution cancelled: {current_node.description}")
+                    raise
+                except Exception as e:
+                    self._update_action_status(node_start_action, success=False, error=str(e))
+                    logger.error(f"Node execution error: {e}")
                     break
 
-            except Exception as e:
-                logger.error(f"Evaluation error: {e}")
-                break
+                try:
+                    evaluation = evaluate_result(current_node, self.workflow)
+                    logger.debug(f"Evaluation result: {evaluation}")
 
-            self.workflow.advance_to_next_node()
-            step_count += 1
+                    if evaluation.get("status") == "success":
+                        self.workflow.advance_node()
+                    else:
+                        logger.warning(f"Node evaluation failed: {evaluation}")
+                        break
 
-        completion_action = self._create_action_history(
-            action_id="workflow_completion",
-            messages="Finalizing workflow execution and saving results",
-            action_type="workflow_completion",
-            input_data={
-                "steps_completed": step_count,
-                "max_steps_reached": step_count >= max_steps,
-                "workflow_complete": self.workflow.is_complete() if self.workflow else False,
-            },
-        )
-        yield completion_action
+                except Exception as e:
+                    logger.error(f"Evaluation error: {e}")
+                    break
 
-        try:
+                step_count += 1
+
+            if step_count >= max_steps:
+                logger.warning(f"Workflow execution stopped after reaching max steps: {max_steps}")
+
             metadata = self._finalize_workflow(step_count)
             self._update_action_status(
                 completion_action,
@@ -358,11 +354,9 @@ class WorkflowRunner:
                 },
             )
 
+        except asyncio.CancelledError:
+            logger.info("Workflow stream execution was cancelled")
+            raise
         except Exception as e:
-            self._update_action_status(completion_action, success=False, error=str(e))
-            logger.error(f"Workflow completion error: {e}")
-
-        yield completion_action
-
-        if step_count >= max_steps:
-            logger.warning(f"Workflow execution stopped after reaching max steps: {max_steps}")
+            logger.error(f"Workflow execution failed: {e}")
+            raise

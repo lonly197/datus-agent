@@ -152,12 +152,20 @@ class Agent:
     ) -> AsyncGenerator[ActionHistory, None]:
         """Execute workflow with streaming and custom metadata."""
 
-        # Create workflow runner with metadata
-        runner = self.create_workflow_runner(metadata=metadata)
+        try:
+            # Create workflow runner with metadata
+            runner = self.create_workflow_runner(metadata=metadata)
 
-        # Execute with streaming
-        async for action in runner.run_stream(sql_task=sql_task):
-            yield action
+            # Execute with streaming
+            async for action in runner.run_stream(sql_task=sql_task):
+                yield action
+
+                # 检查是否被取消
+                if asyncio.current_task().cancelled():
+                    break
+        except asyncio.CancelledError:
+            logger.info("Agent stream execution was cancelled")
+            raise
 
     def check_db(self):
         """Validate database connectivity."""

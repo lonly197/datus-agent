@@ -159,11 +159,19 @@ class DeepResearchEventConverter:
 
         seq_num = 0
 
-        async for action in action_stream:
-            seq_num += 1
-            event = self.convert_action_to_event(action, seq_num)
+        try:
+            async for action in action_stream:
+                seq_num += 1
+                event = self.convert_action_to_event(action, seq_num)
 
-            if event:
-                # Convert to JSON and yield as SSE data
-                event_json = event.model_dump_json()
-                yield f"data: {event_json}\n\n"
+                if event:
+                    # Convert to JSON and yield as SSE data
+                    event_json = event.model_dump_json()
+                    yield f"data: {event_json}\n\n"
+
+                    # 检查是否被取消
+                    if asyncio.current_task().cancelled():
+                        break
+        except asyncio.CancelledError:
+            logger.info("Event conversion stream was cancelled")
+            raise

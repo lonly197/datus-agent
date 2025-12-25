@@ -359,6 +359,12 @@ class DatusAPIService:
             if self.task_store:
                 self.task_store.update_task(task_id, status="completed")
 
+        except asyncio.CancelledError:
+            # 重新抛出 CancelledError，让 asyncio 正确处理取消
+            logger.info(f"Chat research task {task_id} was cancelled")
+            if self.task_store:
+                self.task_store.update_task(task_id, status="cancelled")
+            raise
         except Exception as e:
             logger.error(f"Chat research error for task {task_id}: {e}")
             error_event = ErrorEvent(
