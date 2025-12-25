@@ -102,18 +102,6 @@ class ArgumentParser:
             help="Host for web interface (default: localhost)",
         )
 
-        self.parser.add_argument(
-            "--title",
-            type=str,
-            help="Title for web interface (default: AI Agent)",
-        )
-
-        self.parser.add_argument(
-            "--description",
-            type=str,
-            help="Description for web interface (default: 智能助手)",
-        )
-
     def parse_args(self):
         return self.parser.parse_args()
 
@@ -123,7 +111,23 @@ class Application:
         self.arg_parser = ArgumentParser()
 
     def run(self):
-        args = self.arg_parser.parse_args()
+        # Parse known args first to check if web mode is enabled
+        args, unknown = self.arg_parser.parser.parse_known_args()
+
+        # If web mode, add web-specific arguments and re-parse
+        if args.web:
+            self.arg_parser.parser.add_argument(
+                "--title",
+                type=str,
+                help="Title for web interface (default: AI Agent)",
+            )
+            self.arg_parser.parser.add_argument(
+                "--description",
+                type=str,
+                help="Description for web interface (default: 智能助手)",
+            )
+            # Re-parse with web-specific arguments
+            args = self.arg_parser.parser.parse_args()
 
         configure_logging(args.debug, console_output=False)
 
