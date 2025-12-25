@@ -56,32 +56,34 @@ CUSTOM_THEME_CSS = """
 
 /* Main title and caption */
 .main-title {
-  font-size: 56px !important;
+  font-size: 64px !important;
   font-weight: 800 !important;
   margin-left: 18px !important;
-  margin-top: 8px !important;
+  margin-top: 0px !important;
+  padding-top: 6px !important;
   line-height: 1.02 !important;
 }
 .main-caption {
   color: #6b7280 !important;
-  font-size: 18px !important;
+  font-size: 16px !important;
   margin-left: 20px !important;
-  margin-top: 6px !important;
+  margin-top: 4px !important;
 }
 
 /* Input box styling */
 .stTextInput > div > input, .stTextArea > div > textarea {
-  border-radius: 28px !important;
-  border: 2px solid #f1c0d6 !important;
-  padding: 12px 18px !important;
+  border-radius: 20px !important;
+  border: 1.5px solid #f1c0d6 !important;
+  padding: 10px 20px !important;
 }
 
 /* Chat input area (chat widget) */
-.stChatInput textarea, .stChatInput input {
-  border-radius: 28px !important;
-  border: 2px solid #f1c0d6 !important;
-  padding: 12px 18px !important;
+.stChatInput textarea, .stChatInput input, div[data-testid="stChatInput"] textarea, div[data-testid="stChatInput"] input {
+  border-radius: 20px !important;
+  border: 1.5px solid #f1c0d6 !important;
+  padding: 12px 60px 12px 20px !important; /* leave space for send button */
   background: #fff !important;
+  box-sizing: border-box !important;
 }
 
 /* SQL display wrapper and session items */
@@ -90,6 +92,22 @@ CUSTOM_THEME_CSS = """
 
 /* Tweak expander styling */
 .stExpander { border-radius: 8px !important; padding: 6px !important; }
+
+/* Sidebar buttons smaller */
+section[data-testid="stSidebar"] .stButton>button, section[data-testid="stSidebar"] .stDownloadButton>button {
+  padding: 6px 10px !important;
+  font-size: 13px !important;
+}
+
+/* Reduce spacing above title container to move it closer to top */
+.block-container .main-title { margin-top: 8px !important; }
+
+/* Chat input container at bottom adjustments */
+div[data-testid="stChatInput"] {
+  padding-left: 24px !important;
+  padding-right: 24px !important;
+  margin-bottom: 16px !important;
+}
 """
 
 

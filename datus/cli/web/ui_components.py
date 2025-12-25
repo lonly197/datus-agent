@@ -118,14 +118,14 @@ class UIComponents:
             session_link = f"http://{self.server_host}:{self.server_port}?session={session_id}"
             return f"""
             <div style="width: 100%;">
-                <button id="reportIssueBtn" style="width: 100%; padding: 0.5rem 1rem;
-                    background-color: #ff4b4b; color: white; border: none; border-radius: 0.5rem;
-                    cursor: pointer; font-size: 1rem; font-weight: 500; transition: all 0.3s ease;">
+                <button id="reportIssueBtn" style="width: 100%; padding: 0.35rem 0.75rem;
+                    background-color: #ff4b4b; color: white; border: none; border-radius: 0.375rem;
+                    cursor: pointer; font-size: 0.9rem; font-weight: 500; transition: all 0.2s ease;">
                     🐛 Report Issue</button>
-                <div id="feedbackMsg" style="width: 100%; margin-top: 0.5rem; padding: 0.75rem;
-                    border-radius: 0.5rem; font-size: 0.875rem; display: none;
-                    transition: all 0.3s ease; text-align: center; box-sizing: border-box;
-                    min-height: 3rem; line-height: 1.5;"></div>
+                <div id="feedbackMsg" style="width: 100%; margin-top: 0.4rem; padding: 0.5rem;
+                    border-radius: 0.375rem; font-size: 0.85rem; display: none;
+                    transition: all 0.2s ease; text-align: center; box-sizing: border-box;
+                    min-height: 2.5rem; line-height: 1.4;"></div>
             </div>
             <script>
             document.getElementById('reportIssueBtn').addEventListener('click', function() {{
