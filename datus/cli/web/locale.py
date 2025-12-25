@@ -13,11 +13,8 @@ from typing import Dict, Optional
 
 # 中文本地化字典 - 简体中文 (zh_CN)
 LOCALE_ZH_CN: Dict[str, str] = {
-    # 页面配置
-    "page_title": "Datus AI 聊天助手",
-    "menu_get_help": "获取帮助",
-    "menu_report_bug": "报告问题",
-    "menu_about": "关于",
+# 页面配置
+"page_title": "Datus AI 聊天助手",
 
     # 主标题和描述
     "title_main": "🤖 Datus AI 聊天助手",

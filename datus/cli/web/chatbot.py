@@ -932,7 +932,7 @@ def main():
         page_icon="🤖",
         layout="wide",
         initial_sidebar_state="collapsed",
-        menu_items={t("menu_get_help"): None, t("menu_report_bug"): None, t("menu_about"): None},
+        menu_items={"Get help": None, "Report a bug": None, "About": None},
     )
 
     # Parse command line arguments
