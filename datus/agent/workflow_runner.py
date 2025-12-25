@@ -344,6 +344,22 @@ class WorkflowRunner:
                 logger.warning(f"Workflow execution stopped after reaching max steps: {max_steps}")
 
             metadata = self._finalize_workflow(step_count)
+
+            # Create completion action for workflow completion event
+            completion_action = self._create_action_history(
+                action_id="workflow_completion",
+                messages="Workflow execution completed successfully",
+                action_type="workflow_completion",
+                input_data={
+                    "steps_completed": step_count,
+                    "workflow_saved": True,
+                    "save_path": metadata.get("save_path"),
+                },
+            )
+
+            # Yield the completion action so it can be converted to a CompleteEvent
+            yield completion_action
+
             self._update_action_status(
                 completion_action,
                 success=True,
@@ -360,4 +376,13 @@ class WorkflowRunner:
             raise
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}")
+            # Yield error action for error event conversion
+            error_action = self._create_action_history(
+                action_id="workflow_error",
+                messages=f"Workflow execution failed: {str(e)}",
+                action_type="error",
+                input_data={"error_type": type(e).__name__},
+            )
+            error_action.status = ActionStatus.FAILED
+            yield error_action
             raise
