@@ -92,6 +92,12 @@ class UIComponents:
         """Render a single session item in sidebar."""
         sid_short = info["session_id"][:8]
         with st.expander(t("session_expander").format(sid=sid_short), expanded=False):
+            # wrapper for custom CSS targeting
+            try:
+                st.markdown("<div class='session-item'>", unsafe_allow_html=True)
+            except Exception:
+                pass
+
             st.caption(t("session_created").format(date=info.get('created_at', 'N/A')))
             st.caption(t("session_messages").format(count=info.get('message_count', 0)))
             latest_msg = info.get("latest_user_message", "")
@@ -100,6 +106,11 @@ class UIComponents:
             if st.button(t("button_load_session"), key=f"load_{info['session_id']}", use_container_width=True):
                 self.safe_update_query_params({"session": info["session_id"]})
                 st.rerun()
+
+            try:
+                st.markdown("</div>", unsafe_allow_html=True)
+            except Exception:
+                pass
 
     def generate_report_issue_html(self, session_id: Optional[str] = None) -> str:
         """Generate Report Issue button HTML with JavaScript."""
@@ -416,8 +427,16 @@ class UIComponents:
         result_df = data.sql_return if isinstance(data.sql_return, pd.DataFrame) else None
         tab1, tab2, tab3 = st.tabs([t("tab_generated_sql"), t("tab_execute_result"), t("tab_chart")])
         with tab1:
-            # Display SQL with syntax highlighting
+            # Display SQL with syntax highlighting (wrapped for custom styling)
+            try:
+                st.markdown("<div class='sql-display'>", unsafe_allow_html=True)
+            except Exception:
+                pass
             st.code(sql, language="sql")
+            try:
+                st.markdown("</div>", unsafe_allow_html=True)
+            except Exception:
+                pass
         if data.success:
             with tab2:
                 if result_df is not None and not result_df.empty:

@@ -42,6 +42,56 @@ from datus.utils.loggings import configure_logging, setup_web_chatbot_logging
 logger = structlog.get_logger("web_chatbot")
 _LOGGING_INITIALIZED = False
 
+# Custom theming toggle and CSS (can be disabled by setting ENABLE_CUSTOM_THEME = False)
+ENABLE_CUSTOM_THEME = True
+
+CUSTOM_THEME_CSS = """
+/* Sidebar title */
+.sidebar-title {
+  font-size: 22px !important;
+  font-weight: 700 !important;
+  padding-left: 8px !important;
+  margin-top: 6px !important;
+}
+
+/* Main title and caption */
+.main-title {
+  font-size: 56px !important;
+  font-weight: 800 !important;
+  margin-left: 18px !important;
+  margin-top: 8px !important;
+  line-height: 1.02 !important;
+}
+.main-caption {
+  color: #6b7280 !important;
+  font-size: 18px !important;
+  margin-left: 20px !important;
+  margin-top: 6px !important;
+}
+
+/* Input box styling */
+.stTextInput > div > input, .stTextArea > div > textarea {
+  border-radius: 28px !important;
+  border: 2px solid #f1c0d6 !important;
+  padding: 12px 18px !important;
+}
+
+/* Chat input area (chat widget) */
+.stChatInput textarea, .stChatInput input {
+  border-radius: 28px !important;
+  border: 2px solid #f1c0d6 !important;
+  padding: 12px 18px !important;
+  background: #fff !important;
+}
+
+/* SQL display wrapper and session items */
+.sql-display { padding-left: 12px; }
+.session-item { padding: 8px 12px; border-radius: 10px; background: transparent; }
+
+/* Tweak expander styling */
+.stExpander { border-radius: 8px !important; padding: 6px !important; }
+"""
+
 
 def initialize_logging(debug: bool = False, log_dir: str = None) -> None:
     """Configure logging for the Streamlit subprocess to match CLI behavior."""
@@ -191,7 +241,10 @@ class StreamlitChatbot:
             return {"config_loaded": self.cli is not None}
 
         with st.sidebar:
-            st.header(t("sidebar_title"))
+            try:
+                st.markdown(f"""<div class='sidebar-title'>{t('sidebar_title')}</div>""", unsafe_allow_html=True)
+            except Exception:
+                st.header(t("sidebar_title"))
 
             # Auto-load config with startup parameters (only once)
             if not self.cli and not st.session_state.get("initialization_attempted", False):
@@ -694,11 +747,21 @@ class StreamlitChatbot:
 
         # Title and description with subagent support - detect directly from URL
         if self.current_subagent:
-            st.title(t("title_subagent").format(subagent=self.current_subagent.title()))
-            st.caption(t("caption_subagent").format(subagent=self.current_subagent))
+            # Render with classes for custom styling
+            try:
+                st.markdown(f"""<div class='main-title'>{t("title_subagent").format(subagent=self.current_subagent.title())}</div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class='main-caption'>{t("caption_subagent").format(subagent=self.current_subagent)}</div>""", unsafe_allow_html=True)
+            except Exception:
+                # Fallback to default Streamlit rendering
+                st.title(t("title_subagent").format(subagent=self.current_subagent.title()))
+                st.caption(t("caption_subagent").format(subagent=self.current_subagent))
         else:
-            st.title(self.dynamic_title)
-            st.caption(self.dynamic_description)
+            try:
+                st.markdown(f"""<div class='main-title'>{self.dynamic_title}</div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class='main-caption'>{self.dynamic_description}</div>""", unsafe_allow_html=True)
+            except Exception:
+                st.title(self.dynamic_title)
+                st.caption(self.dynamic_description)
             # Only show available subagents when NOT in subagent mode and NOT in readonly mode
             if not st.session_state.session_readonly_mode:
                 self.ui.show_available_subagents(self.cli.agent_config if self.cli else None)
@@ -967,6 +1030,13 @@ def main():
         initial_sidebar_state="collapsed",
         menu_items={"Get help": None, "Report a bug": None, "About": None},
     )
+    # Inject custom CSS theme if enabled
+    try:
+        if ENABLE_CUSTOM_THEME:
+            st.markdown(f"<style>{CUSTOM_THEME_CSS}</style>", unsafe_allow_html=True)
+    except Exception:
+        # If Streamlit context not ready or injection fails, continue silently
+        logger.debug("Custom theme injection skipped or failed")
 
     # Initialize logging once per process
     initialize_logging(debug=debug)
