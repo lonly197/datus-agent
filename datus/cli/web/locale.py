@@ -23,7 +23,7 @@ LOCALE_ZH_CN: Dict[str, str] = {
     "caption_subagent": "专用的 {subagent} 子代理，用于 SQL 生成 - 自然语言转 SQL",
 
     # 侧边栏
-    "sidebar_title": "📊 Datus 聊天",
+    "sidebar_title": "AI Agent",
     "sidebar_subagent_title": "🤖 当前子代理",
     "sidebar_subagent_info": "**{subagent}** (GenSQL 模式)",
     "sidebar_namespace_title": "🏷️ 当前命名空间",

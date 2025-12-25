@@ -912,6 +912,10 @@ def run_web_interface(args):
             web_args.extend(["--database", args.database])
         if getattr(args, "debug", False):
             web_args.append("--debug")
+        if getattr(args, "title", None):
+            web_args.extend(["--title", args.title])
+        if getattr(args, "description", None):
+            web_args.extend(["--description", args.description])
 
         if web_args:
             cmd.extend(["--"] + web_args)
