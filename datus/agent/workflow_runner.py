@@ -2,7 +2,7 @@ import argparse
 import os
 import time
 from datetime import datetime
-from typing import AsyncGenerator, Callable, Dict, Optional
+from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
 from datus.agent.evaluate import evaluate_result, setup_node_input
 from datus.agent.plan import generate_workflow
