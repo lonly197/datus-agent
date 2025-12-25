@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 import structlog
+import streamlit.components.v1 as components
 
 # Import Datus components to reuse
 from datus.cli.repl import DatusCLI
@@ -107,6 +108,26 @@ div[data-testid="stChatInput"] {
   padding-left: 24px !important;
   padding-right: 24px !important;
   margin-bottom: 16px !important;
+}
+/* Reduce default top padding of main container to bring header up */
+.block-container {
+  padding-top: 8px !important;
+}
+
+/* Attempt to pin chat input to bottom of the viewport, accounting for sidebar width */
+div[data-testid="stChatInput"] {
+  position: fixed !important;
+  left: calc(var(--sidebar-width, 280px) + 32px) !important;
+  right: 32px !important;
+  bottom: 24px !important;
+  z-index: 9999 !important;
+  background: transparent !important;
+}
+
+/* Chat message bubble tweaks */
+.stChatMessage {
+  border-radius: 12px !important;
+  padding: 12px !important;
 }
 """
 
@@ -1055,6 +1076,38 @@ def main():
     except Exception:
         # If Streamlit context not ready or injection fails, continue silently
         logger.debug("Custom theme injection skipped or failed")
+    # Inject JS to compute sidebar width and set CSS variable --sidebar-width
+    compute_sidebar_js = r"""
+    <script>
+    (function() {
+      function setSidebarWidth() {
+        try {
+          var sb = document.querySelector('section[data-testid="stSidebar"]');
+          if (!sb) return;
+          var w = sb.offsetWidth || 280;
+          document.documentElement.style.setProperty('--sidebar-width', w + 'px');
+        } catch (e) { console.warn('sidebar width compute failed', e); }
+      }
+      var resizeTimer;
+      function throttled() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(setSidebarWidth, 150);
+      }
+      document.addEventListener('DOMContentLoaded', setSidebarWidth);
+      window.addEventListener('load', setSidebarWidth);
+      window.addEventListener('resize', throttled);
+      // initial attempt
+      setSidebarWidth();
+    })();
+    </script>
+    """
+    try:
+        components.html(compute_sidebar_js, height=0)
+    except Exception:
+        try:
+            st.markdown(compute_sidebar_js, unsafe_allow_html=True)
+        except Exception:
+            logger.debug("Sidebar width JS injection skipped")
 
     # Initialize logging once per process
     initialize_logging(debug=debug)
