@@ -931,7 +931,7 @@ def main():
         page_title=t("page_title"),
         page_icon="🤖",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
         menu_items={t("menu_get_help"): None, t("menu_report_bug"): None, t("menu_about"): None},
     )
 
