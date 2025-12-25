@@ -718,11 +718,21 @@ class OpenAICompatibleModel(LLMBaseModel):
                                         "arguments": arguments,
                                         "args_display": args_str,
                                     }
-
+                                    start_action = ActionHistory(
+                                        action_id=call_id,
+                                        role=ActionRole.TOOL,
+                                        messages=f"Tool call: {tool_name}('{args_str}...')",
+                                        action_type=tool_name,
+                                        input={"function_name": tool_name, "arguments": arguments},
+                                        output={},
+                                        status=ActionStatus.PROCESSING,
+                                    )
+                                    action_history_manager.add_action(start_action)
                                     logger.debug(
                                         f"Stored tool call: {tool_name} "
                                         f"(call_id={call_id[:20] if call_id else 'None'}...)"
                                     )
+                                    yield start_action
 
                             # Handle tool call completion
                             elif item_type == "tool_call_output_item":
@@ -745,8 +755,46 @@ class OpenAICompatibleModel(LLMBaseModel):
 
                                 # Try to match with stored tool call
                                 if call_id and call_id in temp_tool_calls:
-                                    # Found matching tool call - simplified for debugging
-                                    pass
+                                    # Found matching tool call
+                                    tool_info = temp_tool_calls[call_id]
+                                    tool_name = tool_info["tool_name"]
+                                    args_display = tool_info["args_display"]
+
+                                    # Format result summary (only count info)
+                                    # output_content might already be a dict or string
+                                    if isinstance(output_content, dict):
+                                        result_summary = self._format_tool_result_from_dict(output_content, tool_name)
+                                    elif isinstance(output_content, str):
+                                        result_summary = self._format_tool_result(output_content, tool_name)
+                                    else:
+                                        # Log unexpected type and try to convert
+                                        logger.warning(f"Unexpected output_content type: {type(output_content)}")
+                                        result_summary = self._format_tool_result(str(output_content), tool_name)
+
+                                    # Create complete action with both input and output
+                                    # Put result_summary as the status message to replace default "Success"
+                                    output_data = {
+                                        "success": True,
+                                        "raw_output": output_content,  # Add raw output for action_display_app
+                                        "summary": result_summary,
+                                        "status_message": result_summary,
+                                    }
+                                    logger.debug(
+                                        f"Matched tool: {tool_name}({args_display[:30]}...) -> {result_summary}"
+                                    )
+
+                                    # update action_history_manager before yielding (consistent with thinking messages)
+                                    action_history_manager.update_action_by_id(
+                                        call_id,
+                                        output=output_data,
+                                        end_time=datetime.now(),
+                                        status=ActionStatus.SUCCESS,
+                                    )
+                                    updated_action = action_history_manager.find_action_by_id(call_id)
+                                    yield updated_action
+
+                                    # Remove from temp storage to avoid duplicates
+                                    del temp_tool_calls[call_id]
                                 else:
                                     # No matching tool call found - simplified for debugging
                                     pass
