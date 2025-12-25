@@ -19,7 +19,7 @@ LOCALE_ZH_CN: Dict[str, str] = {
     # 主标题和描述
     "title_main": "🤖 AI Agent",
     "title_subagent": "🤖 AI Agent - {subagent}",
-    "caption_main": "基于 Datus Agent 的智能数据库查询助手 - 自然语言转 SQL",
+    "caption_main": "智能助手",
     "caption_subagent": "专用的 {subagent} 子代理，用于 SQL 生成 - 自然语言转 SQL",
 
     # 侧边栏

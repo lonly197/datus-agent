@@ -78,6 +78,10 @@ class StreamlitChatbot:
         # Initialize UI components
         self.ui = UIComponents(self.server_host, self.server_port)
 
+        # Get dynamic title and description from startup parameters
+        self.dynamic_title = st.session_state.get("startup_title") or t("title_main")
+        self.dynamic_description = st.session_state.get("startup_description") or t("caption_main")
+
         # Initialize session state with defaults
         defaults = {
             "messages": [],
@@ -693,8 +697,8 @@ class StreamlitChatbot:
             st.title(t("title_subagent").format(subagent=self.current_subagent.title()))
             st.caption(t("caption_subagent").format(subagent=self.current_subagent))
         else:
-            st.title(t("title_main"))
-            st.caption(t("caption_main"))
+            st.title(self.dynamic_title)
+            st.caption(self.dynamic_description)
             # Only show available subagents when NOT in subagent mode and NOT in readonly mode
             if not st.session_state.session_readonly_mode:
                 self.ui.show_available_subagents(self.cli.agent_config if self.cli else None)
@@ -926,21 +930,14 @@ def main():
     """Main entry point"""
     import sys
 
-    # Page configuration - MUST be the first Streamlit command
-    st.set_page_config(
-        page_title=t("page_title"),
-        page_icon="🤖",
-        layout="wide",
-        initial_sidebar_state="collapsed",
-        menu_items={"Get help": None, "Report a bug": None, "About": None},
-    )
-
-    # Parse command line arguments
+    # Parse command line arguments first (before any Streamlit commands)
     namespace = None
     config_path = "conf/agent.yml"
     database = ""
     subagent_name = None
     debug = False
+    title = None
+    description = None
 
     # Simple argument parsing for Streamlit
     for i, arg in enumerate(sys.argv):
@@ -950,8 +947,22 @@ def main():
             config_path = sys.argv[i + 1]
         elif arg == "--database" and i + 1 < len(sys.argv):
             database = sys.argv[i + 1]
+        elif arg == "--title" and i + 1 < len(sys.argv):
+            title = sys.argv[i + 1]
+        elif arg == "--description" and i + 1 < len(sys.argv):
+            description = sys.argv[i + 1]
         elif arg == "--debug":
             debug = True
+
+    # Page configuration - MUST be the first Streamlit command
+    page_title = title or t("page_title")
+    st.set_page_config(
+        page_title=page_title,
+        page_icon="🤖",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+        menu_items={"Get help": None, "Report a bug": None, "About": None},
+    )
 
     # Initialize logging once per process
     initialize_logging(debug=debug)
@@ -969,6 +980,10 @@ def main():
         st.session_state.startup_database = database
     if "startup_debug" not in st.session_state:
         st.session_state.startup_debug = debug
+    if "startup_title" not in st.session_state:
+        st.session_state.startup_title = title
+    if "startup_description" not in st.session_state:
+        st.session_state.startup_description = description
 
     chatbot = StreamlitChatbot()
     chatbot.run()
