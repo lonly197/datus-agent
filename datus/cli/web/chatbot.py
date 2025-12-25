@@ -110,7 +110,7 @@ div[data-testid="stChatInput"] {
 }
 /* Reduce default top padding of main container to bring header up */
 .block-container {
-  padding-top: 8px !important;
+  padding-top: 36px !important;
 }
 
 /* Attempt to pin chat input to bottom of the viewport, accounting for sidebar width */
@@ -129,7 +129,7 @@ div[data-testid="stChatInput"] {
   padding: 12px !important;
 }
 /* Header and vertical block spacing tweaks */
-.stHeader { height: 1rem !important; }
+.stHeader { min-height: 1rem !important; height: auto !important; }
 .stVerticalBlock { gap: 0.2rem !important; }
 """
 
