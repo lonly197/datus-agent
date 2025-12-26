@@ -104,6 +104,8 @@ class ChatResearchRequest(BaseModel):
     ext_knowledge: Optional[str] = Field(None, description="External knowledge")
     plan_mode: Optional[bool] = Field(False, description="Enable plan mode for structured execution")
     auto_execute_plan: Optional[bool] = Field(False, description="Auto execute plan without user confirmation")
+    prompt: Optional[str] = Field(None, description="Role definition and task capability prompt to guide the AI agent")
+    prompt_mode: Optional[str] = Field("append", description="How to merge prompt with system prompt: 'replace' or 'append' (default)")
 
 
 class DeepResearchEventType(str, Enum):

@@ -405,10 +405,10 @@ class GenSQLAgenticNode(AgenticNode):
         Args:
             conversation_summary: Optional summary from previous conversation compact
             prompt_version: Optional prompt version to use, overrides agent config version
-            template_context: Optional template context variables
+            workflow: Optional workflow instance to access metadata for prompt merging
 
         Returns:
-            System prompt string loaded from the template
+            System prompt string loaded from the template, potentially merged with custom prompt
         """
         context = prepare_template_context(
             node_config=self.node_config,
@@ -432,12 +432,32 @@ class GenSQLAgenticNode(AgenticNode):
         from datus.prompts.prompt_manager import prompt_manager
 
         try:
-            return prompt_manager.render_template(template_name=template_name, version=version, **context)
+            base_system_prompt = prompt_manager.render_template(template_name=template_name, version=version, **context)
 
         except FileNotFoundError:
             # Template not found - throw DatusException
             logger.warning(f"Failed to render system prompt '{system_prompt_name}', using the default template instead")
-            return prompt_manager.render_template(template_name="sql_system", version=version, **context)
+            base_system_prompt = prompt_manager.render_template(template_name="sql_system", version=version, **context)
+
+        # Merge with custom prompt from workflow metadata if provided
+        if self.workflow and hasattr(self.workflow, 'metadata'):
+            custom_prompt = self.workflow.metadata.get('prompt')
+            prompt_mode = self.workflow.metadata.get('prompt_mode', 'append')
+
+            if custom_prompt and isinstance(custom_prompt, str) and custom_prompt.strip():
+                if prompt_mode == 'replace':
+                    # Replace the entire system prompt
+                    base_system_prompt = custom_prompt.strip()
+                    logger.debug("Replaced system prompt with custom prompt")
+                elif prompt_mode == 'append':
+                    # Append custom prompt to the base system prompt
+                    base_system_prompt = f"{base_system_prompt}\n\n{custom_prompt.strip()}"
+                    logger.debug("Appended custom prompt to system prompt")
+                else:
+                    logger.warning(f"Unknown prompt_mode '{prompt_mode}', using default 'append' behavior")
+                    base_system_prompt = f"{base_system_prompt}\n\n{custom_prompt.strip()}"
+
+        return base_system_prompt
         except Exception as e:
             # Other template errors - wrap in DatusException
             logger.error(f"Template loading error for '{template_name}': {e}")

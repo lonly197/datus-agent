@@ -24,8 +24,18 @@ def create_openai_client(
     api_key: str,
     base_url: str,
     default_headers: Union[dict[str, str], None] = None,
+    timeout: float = 300.0,  # 5-minute timeout for all requests
 ) -> Union[OpenAI, AsyncOpenAI]:
-    client = cls(api_key=api_key, base_url=base_url, default_headers=default_headers)
+    # Create client with timeout settings
+    client_kwargs = {
+        "api_key": api_key,
+        "base_url": base_url,
+        "timeout": timeout,  # Set timeout for all requests
+    }
+    if default_headers:
+        client_kwargs["default_headers"] = default_headers
+
+    client = cls(**client_kwargs)
     if not HAS_LANGSMITH:
         return client
     try:

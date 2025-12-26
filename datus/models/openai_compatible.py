@@ -113,6 +113,7 @@ class OpenAICompatibleModel(LLMBaseModel):
 
         # Initialize clients
         self.client = create_openai_client(OpenAI, self.api_key, self.base_url, default_headers=self.default_headers)
+        self.async_client = create_openai_client(AsyncOpenAI, self.api_key, self.base_url, default_headers=self.default_headers, timeout=300.0)
 
         # Context for tracing ToDo: replace it with Context object
         self.current_node = None
@@ -474,7 +475,7 @@ class OpenAICompatibleModel(LLMBaseModel):
 
         async def _tools_operation():
             async_client = create_openai_client(
-                AsyncOpenAI, self.api_key, self.base_url, default_headers=self.default_headers
+                AsyncOpenAI, self.api_key, self.base_url, default_headers=self.default_headers, timeout=300.0
             )
             model_params = {"model": self.model_name}
             async_model = OpenAIChatCompletionsModel(**model_params, openai_client=async_client)
@@ -603,7 +604,7 @@ class OpenAICompatibleModel(LLMBaseModel):
 
         async def _stream_operation():
             async_client = create_openai_client(
-                AsyncOpenAI, self.api_key, self.base_url, default_headers=self.default_headers
+                AsyncOpenAI, self.api_key, self.base_url, default_headers=self.default_headers, timeout=300.0
             )
 
             try:

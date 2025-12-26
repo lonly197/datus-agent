@@ -340,7 +340,9 @@ class DatusAPIService:
             # Enable plan mode in workflow metadata
             workflow_metadata = {
                 "plan_mode": request.plan_mode if request.plan_mode is not None else True,
-                "auto_execute_plan": request.auto_execute_plan if request.auto_execute_plan is not None else False
+                "auto_execute_plan": request.auto_execute_plan if request.auto_execute_plan is not None else False,
+                "prompt": request.prompt,
+                "prompt_mode": request.prompt_mode
             }
 
             # Initialize task tracking

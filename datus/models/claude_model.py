@@ -162,7 +162,7 @@ class ClaudeModel(LLMBaseModel):
 
         logger.debug(f"Using Claude model: {self.model_name} base Url: {self.api_base}")
 
-        self.client = create_openai_client(OpenAI, api_key=self.api_key, base_url=self.api_base + "/v1")
+        self.client = create_openai_client(OpenAI, api_key=self.api_key, base_url=self.api_base + "/v1", timeout=300.0)
 
         # Optional proxy configuration - only use if environment variable is set
         proxy_url = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
@@ -626,7 +626,7 @@ class ClaudeModel(LLMBaseModel):
     def _get_async_client(self) -> AsyncOpenAI:
         """Get or create the shared async OpenAI client."""
         if self.async_client is None:
-            self.async_client = create_openai_client(AsyncOpenAI, self.api_key, self.api_base + "/v1")
+            self.async_client = create_openai_client(AsyncOpenAI, self.api_key, self.api_base + "/v1", timeout=300.0)
             logger.debug("Created shared AsyncOpenAI client")
         return self.async_client
 

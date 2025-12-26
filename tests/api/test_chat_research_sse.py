@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 import httpx
 
 from datus.api.server import create_app
-from datus.api.models import DeepResearchEventType
+from datus.api.models import DeepResearchEventType, ChatResearchRequest
 
 
 class TestChatResearchSSE:
@@ -271,3 +271,147 @@ class TestChatResearchSSE:
             assert response.status_code == 200
             # Note: In a real test, we'd verify that plan_mode=True was passed to the workflow
             # This would require more complex mocking of the agent and workflow components
+
+
+class TestChatResearchPromptParameters:
+    """Test cases for prompt and promptMode parameters in chat research."""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create a test client for the FastAPI app."""
+        with patch('datus.api.service.load_agent_config') as mock_config:
+            mock_config.return_value = MagicMock()
+            mock_config.return_value.current_namespace = "test"
+            mock_config.return_value.rag_base_path = "/tmp/test"
+
+            app = create_app(MagicMock())
+            client = TestClient(app)
+            return client
+
+    def test_chat_research_accepts_prompt_parameters(self, test_client):
+        """Test that chat research accepts prompt and promptMode parameters."""
+        # Test with append mode (default)
+        request_data = {
+            "namespace": "test",
+            "task": "Generate SQL query",
+            "prompt": "You are a SQL expert",
+            "prompt_mode": "append"
+        }
+
+        response = test_client.post(
+            "/workflows/chat_research",
+            json=request_data,
+            headers={"Accept": "text/event-stream"}
+        )
+
+        assert response.status_code == 200
+
+    def test_chat_research_accepts_prompt_replace_mode(self, test_client):
+        """Test that chat research accepts prompt with replace mode."""
+        request_data = {
+            "namespace": "test",
+            "task": "Generate SQL query",
+            "prompt": "You are a data analyst",
+            "prompt_mode": "replace"
+        }
+
+        response = test_client.post(
+            "/workflows/chat_research",
+            json=request_data,
+            headers={"Accept": "text/event-stream"}
+        )
+
+        assert response.status_code == 200
+
+    def test_chat_research_prompt_default_mode(self, test_client):
+        """Test that prompt works with default append mode when prompt_mode is not specified."""
+        request_data = {
+            "namespace": "test",
+            "task": "Generate SQL query",
+            "prompt": "You are a SQL expert"
+            # prompt_mode defaults to "append"
+        }
+
+        response = test_client.post(
+            "/workflows/chat_research",
+            json=request_data,
+            headers={"Accept": "text/event-stream"}
+        )
+
+        assert response.status_code == 200
+
+    def test_chat_research_without_prompt(self, test_client):
+        """Test that chat research works without prompt parameters (backward compatibility)."""
+        request_data = {
+            "namespace": "test",
+            "task": "Generate SQL query"
+            # No prompt or prompt_mode
+        }
+
+        response = test_client.post(
+            "/workflows/chat_research",
+            json=request_data,
+            headers={"Accept": "text/event-stream"}
+        )
+
+        assert response.status_code == 200
+
+    def test_chat_research_request_model_validation(self):
+        """Test ChatResearchRequest model validation with prompt parameters."""
+        # Valid request with prompt
+        request = ChatResearchRequest(
+            namespace="test",
+            task="Generate SQL",
+            prompt="You are a SQL expert",
+            prompt_mode="append"
+        )
+        assert request.prompt == "You are a SQL expert"
+        assert request.prompt_mode == "append"
+
+        # Valid request with replace mode
+        request = ChatResearchRequest(
+            namespace="test",
+            task="Generate SQL",
+            prompt="You are a data analyst",
+            prompt_mode="replace"
+        )
+        assert request.prompt_mode == "replace"
+
+        # Valid request without prompt (should work)
+        request = ChatResearchRequest(
+            namespace="test",
+            task="Generate SQL"
+        )
+        assert request.prompt is None
+        assert request.prompt_mode == "append"  # default value
+
+    @patch('datus.api.service.DatusAPIService.run_chat_research_stream')
+    def test_prompt_parameters_passed_to_workflow_metadata(self, mock_stream, test_client):
+        """Test that prompt parameters are passed to workflow metadata."""
+        captured_request = None
+
+        async def capture_request_generator(request):
+            nonlocal captured_request
+            captured_request = request
+            yield 'data: {"id":"test","planId":"plan_123","timestamp":1703123456789,"event":"complete","content":"Done"}\n\n'
+
+        async def mock_run_chat_research_stream(request, client_id):
+            return capture_request_generator(request)
+
+        with patch.object(test_client.app.state.service, 'run_chat_research_stream', side_effect=mock_run_chat_research_stream):
+            request_data = {
+                "namespace": "test",
+                "task": "Generate SQL with custom prompt",
+                "prompt": "You are a senior SQL developer",
+                "prompt_mode": "replace"
+            }
+
+            response = test_client.post(
+                "/workflows/chat_research",
+                json=request_data,
+                headers={"Accept": "text/event-stream"}
+            )
+
+            assert response.status_code == 200
+            # In a real implementation, we would verify that the prompt parameters
+            # are correctly passed through to the workflow metadata

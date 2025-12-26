@@ -227,6 +227,8 @@ This endpoint provides a specialized interface for deep research tasks with real
 | `layer2` | string | ❌ | Business layer 2 |
 | `ext_knowledge` | string | ❌ | Additional business context |
 | `plan_mode` | boolean | ❌ | Enable structured plan execution (default: false) |
+| `prompt` | string | ❌ | Role definition and task capability prompt to guide the AI agent |
+| `prompt_mode` | string | ❌ | How to merge prompt with system prompt: 'replace' or 'append' (default: 'append') |
 
 **Request Headers:**
 ```
@@ -240,10 +242,24 @@ Cache-Control: no-cache
 ```json
 {
   "namespace": "your_database_namespace",
-  "task": "你是【数仓开发助手】。请根据业务逻辑生成高质量的 StarRocks SQL。从 ODS 试驾表和线索表关联，统计每个月'首次试驾'到'下定'的平均转化周期（天数）。",
+  "task": "从 ODS 试驾表和线索表关联，统计每个月'首次试驾'到'下定'的平均转化周期（天数）。",
   "catalog_name": "your_catalog",
   "database_name": "your_database",
-  "plan_mode": true
+  "plan_mode": true,
+  "prompt": "你是【数仓开发助手】。请根据业务逻辑生成高质量的 StarRocks SQL。",
+  "prompt_mode": "append"
+}
+```
+
+**Example with prompt replacement:**
+```json
+{
+  "namespace": "your_database_namespace",
+  "task": "分析用户转化周期数据",
+  "catalog_name": "your_catalog",
+  "database_name": "your_database",
+  "prompt": "你是专门负责电商数据分析的AI助手。你需要提供精确的SQL查询和详细的业务分析。请始终使用最优的查询性能优化方案。",
+  "prompt_mode": "replace"
 }
 ```
 
@@ -337,7 +353,7 @@ eventSource.onmessage = (event) => {
   }
 };
 
-// Send research request
+// Send research request with custom prompt
 fetch('/workflows/chat_research', {
   method: 'POST',
   headers: {
@@ -348,7 +364,9 @@ fetch('/workflows/chat_research', {
   body: JSON.stringify({
     namespace: 'your_namespace',
     task: 'Generate SQL for monthly conversion analysis',
-    plan_mode: true
+    plan_mode: true,
+    prompt: 'You are a senior data warehouse developer specializing in StarRocks SQL optimization.',
+    prompt_mode: 'append'
   })
 });
 ```
@@ -435,6 +453,7 @@ python -m datus.api.server \
 - Rotate client credentials regularly
 - Implement rate limiting for production deployments
 - Use HTTPS in production environments
+- **Prompt Parameter Security**: When using the `prompt` parameter, avoid injecting sensitive information or instructions that could compromise security. The prompt is merged with system instructions and may be logged for debugging purposes.
 
 ### Performance
 - Use async mode for long-running queries

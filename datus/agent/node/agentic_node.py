@@ -73,6 +73,7 @@ class AgenticNode(Node):
         self._session_tokens: int = 0
         self.last_summary: Optional[str] = None
         self.context_length: Optional[int] = None
+        self.workflow: Optional["Workflow"] = None
 
         # Parse node configuration from agent.yml (available to all agentic nodes)
         self.node_config = self._parse_node_config(agent_config, self.get_node_name())
@@ -402,6 +403,9 @@ class AgenticNode(Node):
         Returns:
             Dictionary with success status and message
         """
+        # Store workflow reference for access to metadata
+        self.workflow = workflow
+
         if self.input is None:
             self.input = BaseInput()
 
