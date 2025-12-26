@@ -243,6 +243,7 @@ class PlanTool:
                     result={
                         "message": f"Successfully updated todo item to '{status}' status",
                         "updated_item": updated_item.model_dump(),
+                        "todo_list": todo_list.model_dump(),  # 添加完整计划状态
                     }
                 )
             else:

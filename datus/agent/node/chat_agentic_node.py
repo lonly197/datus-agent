@@ -399,6 +399,13 @@ class ChatAgenticNode(GenSQLAgenticNode):
             # Add to internal actions list
             self.actions.extend(action_history_manager.get_actions())
 
+            # Ensure the final response includes SQL code if available
+            if sql_content and sql_content.strip():
+                # Append SQL code to the response
+                sql_section = f"\n\n### 生成的 SQL 代码：\n\n```sql\n{sql_content}\n```"
+                result.response = result.response + sql_section
+                logger.info(f"Added SQL code to final response (length: {len(sql_section)})")
+
             # Create final action
             final_action = ActionHistory.create_action(
                 role=ActionRole.ASSISTANT,
