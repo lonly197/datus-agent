@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import AsyncGenerator, Dict, Optional
 
 from pydantic import ValidationError
@@ -91,10 +92,41 @@ class ExecuteSQLNode(Node):
                     success=False,
                     error="Database connection not initialized in workflow",
                 )
+
             logger.debug(f"SQL execution input: {self.input}")
-            result = db_connector.execute(self.input)
-            logger.debug(f"SQL execution result: {result}")
-            return result
+
+            # determine timeout: per-input -> task-level -> agent config
+            timeout = None
+            if hasattr(self.input, "query_timeout_seconds") and self.input.query_timeout_seconds:
+                timeout = int(self.input.query_timeout_seconds)
+            elif getattr(self, "agent_config", None) and getattr(self.agent_config, "default_query_timeout_seconds", None):
+                timeout = int(self.agent_config.default_query_timeout_seconds)
+
+            # Run blocking execute in thread and enforce timeout if provided
+            def run_execute():
+                return db_connector.execute(self.input)
+
+            if timeout and timeout > 0:
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    future = ex.submit(run_execute)
+                    try:
+                        result = future.result(timeout=timeout)
+                        return result
+                    except FuturesTimeoutError:
+                        # Attempt best-effort cancellation/cleanup
+                        try:
+                            db_connector.close()
+                        except Exception:
+                            pass
+                        return ExecuteSQLResult(
+                            success=False,
+                            error=f"Query timed out after {timeout} seconds",
+                            sql_query=self.input.sql_query,
+                        )
+            else:
+                result = db_connector.execute(self.input)
+                logger.debug(f"SQL execution result: {result}")
+                return result
         except ValidationError as e:
             logger.error(f"SQL execution failed: {str(e)}")
             return ExecuteSQLResult(

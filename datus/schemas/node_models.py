@@ -390,6 +390,10 @@ class ExecuteSQLInput(BaseInput):
     database_name: str = Field(default="", description="The name of the database")
     sql_query: str = Field(..., description="The SQL query to execute")
     result_format: str = Field(default="csv", description="Format of the result: 'csv' or 'arrow' or 'list'")
+    query_timeout_seconds: Optional[int] = Field(
+        default=None,
+        description="Optional per-query timeout in seconds; if None, use AgentConfig.default_query_timeout_seconds",
+    )
 
 
 class ExecuteSQLResult(BaseResult):

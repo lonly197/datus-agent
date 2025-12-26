@@ -1,5 +1,8 @@
 agent:
   target: anthropic
+  # Default timeout for SQL query execution in seconds (default: 60)
+  # This timeout applies to all SQL executions unless overridden per-query
+  default_query_timeout_seconds: 60
   models:
     openai:
       type: openai

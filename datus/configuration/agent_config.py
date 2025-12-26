@@ -214,6 +214,7 @@ class AgentConfig:
         self.benchmark_configs: Dict[str, BenchmarkConfig] = {}
         self.schema_linking_rate = kwargs.get("schema_linking_rate", "fast")
         self.search_metrics_rate = kwargs.get("search_metrics_rate", "fast")
+        self.default_query_timeout_seconds = int(kwargs.get("default_query_timeout_seconds", 60))
         self.db_type = ""
 
         # Benchmark paths are now fixed at {agent.home}/benchmark/{name}

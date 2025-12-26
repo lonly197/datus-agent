@@ -127,12 +127,16 @@ class WorkflowRunner:
         self.workflow.save(save_path)
         logger.info(f"Workflow saved to {save_path}")
         final_result = self.workflow.get_final_result()
-        logger.info(f"Workflow execution completed. Steps:{step_count}")
+
+        # compute completed nodes instead of trusting step_count
+        completed_nodes = sum(1 for n in self.workflow.nodes.values() if n.status == "completed")
+        logger.info(f"Workflow execution completed. StepsAttempted:{step_count} CompletedNodes:{completed_nodes}")
 
         return {
             "final_result": final_result,
             "save_path": save_path,
             "steps": step_count,
+            "completed_nodes": completed_nodes,
             "run_id": self.run_id,
         }
 

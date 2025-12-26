@@ -67,6 +67,17 @@ datus-agent init
 
 For detailed installation instructions, see the [Quickstart Guide](https://docs.datus.ai/getting_started/Quickstart/).
 
+## ⚙️ Configuration
+
+Datus Agent is configured via `agent.yml`. Key configurations include:
+
+- **SQL Query Timeout**: Set `default_query_timeout_seconds` (default: 60s) to control maximum SQL execution time and prevent hanging queries
+- **Models**: Configure LLM providers (OpenAI, Anthropic, Google, etc.)
+- **Databases**: Set up connections to Snowflake, StarRocks, SQLite, DuckDB, etc.
+- **Workflows**: Define custom execution plans and node configurations
+
+See [Configuration Documentation](docs/configuration/) for complete setup instructions.
+
 ## 🧭 User Journey
 
 ### 1️⃣ Initial Exploration
