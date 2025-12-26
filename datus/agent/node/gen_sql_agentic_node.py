@@ -432,32 +432,33 @@ class GenSQLAgenticNode(AgenticNode):
         from datus.prompts.prompt_manager import prompt_manager
 
         try:
-            base_system_prompt = prompt_manager.render_template(template_name=template_name, version=version, **context)
+            try:
+                base_system_prompt = prompt_manager.render_template(template_name=template_name, version=version, **context)
+            except FileNotFoundError:
+                # Template not found - throw DatusException
+                logger.warning(f"Failed to render system prompt '{system_prompt_name}', using the default template instead")
+                base_system_prompt = prompt_manager.render_template(template_name="sql_system", version=version, **context)
 
-        except FileNotFoundError:
-            # Template not found - throw DatusException
-            logger.warning(f"Failed to render system prompt '{system_prompt_name}', using the default template instead")
-            base_system_prompt = prompt_manager.render_template(template_name="sql_system", version=version, **context)
+            # Merge with custom prompt from workflow metadata if provided
+            if self.workflow and hasattr(self.workflow, 'metadata'):
+                custom_prompt = self.workflow.metadata.get('prompt')
+                prompt_mode = self.workflow.metadata.get('prompt_mode', 'append')
 
-        # Merge with custom prompt from workflow metadata if provided
-        if self.workflow and hasattr(self.workflow, 'metadata'):
-            custom_prompt = self.workflow.metadata.get('prompt')
-            prompt_mode = self.workflow.metadata.get('prompt_mode', 'append')
+                if custom_prompt and isinstance(custom_prompt, str) and custom_prompt.strip():
+                    if prompt_mode == 'replace':
+                        # Replace the entire system prompt
+                        base_system_prompt = custom_prompt.strip()
+                        logger.debug("Replaced system prompt with custom prompt")
+                    elif prompt_mode == 'append':
+                        # Append custom prompt to the base system prompt
+                        base_system_prompt = f"{base_system_prompt}\n\n{custom_prompt.strip()}"
+                        logger.debug("Appended custom prompt to system prompt")
+                    else:
+                        logger.warning(f"Unknown prompt_mode '{prompt_mode}', using default 'append' behavior")
+                        base_system_prompt = f"{base_system_prompt}\n\n{custom_prompt.strip()}"
 
-            if custom_prompt and isinstance(custom_prompt, str) and custom_prompt.strip():
-                if prompt_mode == 'replace':
-                    # Replace the entire system prompt
-                    base_system_prompt = custom_prompt.strip()
-                    logger.debug("Replaced system prompt with custom prompt")
-                elif prompt_mode == 'append':
-                    # Append custom prompt to the base system prompt
-                    base_system_prompt = f"{base_system_prompt}\n\n{custom_prompt.strip()}"
-                    logger.debug("Appended custom prompt to system prompt")
-                else:
-                    logger.warning(f"Unknown prompt_mode '{prompt_mode}', using default 'append' behavior")
-                    base_system_prompt = f"{base_system_prompt}\n\n{custom_prompt.strip()}"
+            return base_system_prompt
 
-        return base_system_prompt
         except Exception as e:
             # Other template errors - wrap in DatusException
             logger.error(f"Template loading error for '{template_name}': {e}")
@@ -1028,8 +1029,9 @@ def build_enhanced_message(
         enhanced_parts.append(f"Reference SQL: \n{to_str([item.model_dump() for item in reference_sql])}")
 
     if enhanced_parts:
+        separator = '\n\n'
         enhanced_message = (
-            f"{'\n\n'.join(enhanced_parts)}\n\nNow based on the rules above, answer the user question: {user_message}"
+            f"{separator.join(enhanced_parts)}\n\nNow based on the rules above, answer the user question: {user_message}"
         )
 
     return enhanced_message
