@@ -180,7 +180,7 @@ class DeepResearchEventConverter:
         
         # 1. Handle chat/assistant messages
         if action.role == ActionRole.ASSISTANT:
-            if action.action_type in ["llm_generation", "message", "thinking", "raw_stream"]:
+            if action.action_type in ["llm_generation", "message", "thinking", "raw_stream", "response"]:
                 content = ""
                 if action.output and isinstance(action.output, dict):
                     content = (
@@ -241,23 +241,33 @@ class DeepResearchEventConverter:
                         ))
 
                 if todos:
+                    # Emit a ToolCallEvent for visibility (call start)
+                    events.append(ToolCallEvent(
+                        id=f"{event_id}_call",
+                        planId=self.plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        toolName=action.action_type,
+                        input=action.input if isinstance(action.input, dict) else {}
+                    ))
+
+                    # Emit ToolCallResultEvent with the raw output
+                    if action.output:
+                        events.append(ToolCallResultEvent(
+                            id=f"{event_id}_result",
+                            planId=self.plan_id,
+                            timestamp=timestamp,
+                            toolCallId=tool_call_id,
+                            data=action.output,
+                            error=action.status == ActionStatus.FAILED
+                        ))
+
+                    # Finally emit the PlanUpdateEvent to update plan UI state
                     events.append(PlanUpdateEvent(
                         id=f"{event_id}_plan",
                         planId=self.plan_id,
                         timestamp=timestamp,
                         todos=todos
-                    ))
-
-                # Also yield a ToolCallResultEvent so tool result binding is available,
-                # but do NOT emit a ToolCallEvent for plan generation to avoid UI noise.
-                if action.output:
-                    events.append(ToolCallResultEvent(
-                        id=f"{event_id}_result",
-                        planId=self.plan_id,
-                        timestamp=timestamp,
-                        toolCallId=tool_call_id,
-                        data=action.output,
-                        error=action.status == ActionStatus.FAILED
                     ))
             else:
                 # Normal tool call: emit call + result (if available)
