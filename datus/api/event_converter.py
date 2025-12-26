@@ -27,6 +27,150 @@ class DeepResearchEventConverter:
         self.plan_id = str(uuid.uuid4())
         self.tool_call_map: Dict[str, str] = {}  # action_id -> tool_call_id
 
+    def _extract_plan_from_output(self, output: Any) -> Dict[str, Any]:
+        """
+        Try to find plan-related fields ('todo_list' or 'updated_item') inside
+        a possibly nested output structure. Handles dicts and JSON strings and
+        returns the first matching dict with keys 'todo_list' or 'updated_item',
+        or {} if none found.
+        """
+        def try_parse(obj):
+            if isinstance(obj, dict):
+                return obj
+            if isinstance(obj, str):
+                try:
+                    return json.loads(obj)
+                except Exception:
+                    return None
+            return None
+
+        stack = [output]
+        visited = set()
+        max_depth = 6
+        depth = 0
+        while stack and depth < max_depth:
+            depth += 1
+            current = stack.pop()
+            if current is None:
+                continue
+            # avoid looping on same object (use id where possible)
+            try:
+                cid = id(current)
+            except Exception:
+                cid = None
+            if cid and cid in visited:
+                continue
+            if cid:
+                visited.add(cid)
+
+            parsed = try_parse(current)
+            if isinstance(parsed, dict):
+                # direct matches
+                if "todo_list" in parsed and isinstance(parsed["todo_list"], dict):
+                    return {"todo_list": parsed["todo_list"]}
+                if "updated_item" in parsed and isinstance(parsed["updated_item"], dict):
+                    return {"updated_item": parsed["updated_item"]}
+
+                # common wrapper keys
+                for k in ("raw_output", "result", "data", "output"):
+                    if k in parsed:
+                        child = try_parse(parsed[k])
+                        if isinstance(child, dict):
+                            stack.append(child)
+
+                # push dict values for further traversal
+                for v in parsed.values():
+                    child = try_parse(v)
+                    if isinstance(child, dict):
+                        stack.append(child)
+
+        return {}
+
+    def _extract_callid_from_output(self, output: Any) -> Optional[str]:
+        """
+        Search nested output for common call id fields (action_id, call_id, callId, tool_call_id, toolCallId).
+        Returns the first found string value or None.
+        """
+        def try_parse(obj):
+            if isinstance(obj, dict):
+                return obj
+            if isinstance(obj, str):
+                try:
+                    return json.loads(obj)
+                except Exception:
+                    return None
+            return None
+
+        keys_to_check = ("action_id", "call_id", "callId", "tool_call_id", "toolCallId", "id")
+        stack = [output]
+        visited = set()
+        max_depth = 6
+        depth = 0
+        while stack and depth < max_depth:
+            depth += 1
+            current = stack.pop()
+            if current is None:
+                continue
+            try:
+                cid = id(current)
+            except Exception:
+                cid = None
+            if cid and cid in visited:
+                continue
+            if cid:
+                visited.add(cid)
+
+            parsed = try_parse(current)
+            if isinstance(parsed, dict):
+                # check keys
+                for k in keys_to_check:
+                    if k in parsed:
+                        v = parsed.get(k)
+                        if isinstance(v, str) and v.strip():
+                            return v
+                # push wrapper keys and values
+                for k in ("raw_output", "result", "data", "output"):
+                    if k in parsed:
+                        child = try_parse(parsed[k])
+                        if isinstance(child, dict):
+                            stack.append(child)
+                for v in parsed.values():
+                    child = try_parse(v)
+                    if isinstance(child, dict):
+                        stack.append(child)
+
+        return None
+
+    def _find_tool_call_id(self, action: ActionHistory) -> Optional[str]:
+        """
+        Try to determine the tool_call_id for a given action by:
+          1) mapping action.action_id -> tool_call_id
+          2) checking common id keys in action.input and mapping if present
+          3) extracting call id from nested output
+        Returns the tool_call_id string if found, else None.
+        """
+        # direct mapping by action_id
+        if action.action_id in self.tool_call_map:
+            return self.tool_call_map[action.action_id]
+
+        # check input for possible action/call id that maps to stored call ids
+        if action.input and isinstance(action.input, dict):
+            for k in ("action_id", "call_id", "callId", "tool_call_id", "toolCallId", "id"):
+                v = action.input.get(k)
+                if isinstance(v, str) and v:
+                    if v in self.tool_call_map:
+                        return self.tool_call_map[v]
+        # try to extract from nested output
+        if action.output:
+            candidate = self._extract_callid_from_output(action.output)
+            if candidate:
+                # if candidate is already a mapped key, return mapped value; else return candidate as-is
+                if candidate in self.tool_call_map:
+                    return self.tool_call_map[candidate]
+                return candidate
+
+        return None
+
     def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
         """Convert ActionHistory to DeepResearchEvent list."""
         
@@ -63,59 +207,38 @@ class DeepResearchEventConverter:
                     content=content
                 ))
 
-        # 2. Handle tool calls - 生成 ToolCallEvent 和 ToolCallResultEvent
+        # 2. Handle tool calls - ToolCallEvent / ToolCallResultEvent and PlanUpdateEvent for plan tools
         elif action.role == ActionRole.TOOL:
             tool_call_id = str(uuid.uuid4())
+            # store mapping for later result binding
             self.tool_call_map[action.action_id] = tool_call_id
-            
-            # 生成 ToolCallEvent
-            events.append(ToolCallEvent(
-                id=f"{event_id}_call",
-                planId=self.plan_id,
-                timestamp=timestamp,
-                toolCallId=tool_call_id,
-                toolName=action.action_type,
-                input=action.input if isinstance(action.input, dict) else {}
-            ))
-            
-            # 如果有输出，同时生成 ToolCallResultEvent
+
+            is_plan_tool = action.action_type in ["todo_write", "todo_update"]
+            plan_data = {}
             if action.output:
-                events.append(ToolCallResultEvent(
-                    id=f"{event_id}_result",
-                    planId=self.plan_id,
-                    timestamp=timestamp,
-                    toolCallId=tool_call_id,
-                    data=action.output,
-                    error=action.status == ActionStatus.FAILED
-                ))
-            
-            # 如果是计划工具，同时生成 PlanUpdateEvent
-            if action.action_type in ["todo_write", "todo_update"] and action.output:
+                plan_data = self._extract_plan_from_output(action.output)
+
+            # If this is a plan tool and we found plan data, emit PlanUpdateEvent first
+            if is_plan_tool and plan_data:
                 todos = []
-                if isinstance(action.output, dict):
-                    # 从 todo_write 输出中提取计划信息
-                    if "todo_list" in action.output:
-                        todo_list_data = action.output["todo_list"]
-                        if isinstance(todo_list_data, dict) and "items" in todo_list_data:
-                            for todo_data in todo_list_data["items"]:
-                                if isinstance(todo_data, dict):
-                                    todos.append(TodoItem(
-                                        id=todo_data.get("id", str(uuid.uuid4())),
-                                        content=todo_data.get("content", ""),
-                                        status=TodoStatus(todo_data.get("status", "pending"))
-                                    ))
-                    
-                    # 从 todo_update 输出中提取完整计划信息
-                    elif "todo_list" in action.output:
-                        todo_list_data = action.output["todo_list"]
-                        if isinstance(todo_list_data, dict) and "items" in todo_list_data:
-                            for todo_data in todo_list_data["items"]:
-                                if isinstance(todo_data, dict):
-                                    todos.append(TodoItem(
-                                        id=todo_data.get("id", str(uuid.uuid4())),
-                                        content=todo_data.get("content", ""),
-                                        status=TodoStatus(todo_data.get("status", "pending"))
-                                    ))
+                if "todo_list" in plan_data:
+                    tlist = plan_data["todo_list"]
+                    if isinstance(tlist, dict) and "items" in tlist:
+                        for todo_data in tlist["items"]:
+                            if isinstance(todo_data, dict):
+                                todos.append(TodoItem(
+                                    id=todo_data.get("id", str(uuid.uuid4())),
+                                    content=todo_data.get("content", ""),
+                                    status=TodoStatus(todo_data.get("status", "pending"))
+                                ))
+                elif "updated_item" in plan_data:
+                    ui = plan_data["updated_item"]
+                    if isinstance(ui, dict):
+                        todos.append(TodoItem(
+                            id=ui.get("id", str(uuid.uuid4())),
+                            content=ui.get("content", ""),
+                            status=TodoStatus(ui.get("status", "pending"))
+                        ))
 
                 if todos:
                     events.append(PlanUpdateEvent(
@@ -125,15 +248,41 @@ class DeepResearchEventConverter:
                         todos=todos
                     ))
 
+                # Also yield a ToolCallResultEvent so tool result binding is available,
+                # but do NOT emit a ToolCallEvent for plan generation to avoid UI noise.
+                if action.output:
+                    events.append(ToolCallResultEvent(
+                        id=f"{event_id}_result",
+                        planId=self.plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        data=action.output,
+                        error=action.status == ActionStatus.FAILED
+                    ))
+            else:
+                # Normal tool call: emit call + result (if available)
+                events.append(ToolCallEvent(
+                    id=f"{event_id}_call",
+                    planId=self.plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    toolName=action.action_type,
+                    input=action.input if isinstance(action.input, dict) else {}
+                ))
+                if action.output:
+                    events.append(ToolCallResultEvent(
+                        id=f"{event_id}_result",
+                        planId=self.plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        data=action.output,
+                        error=action.status == ActionStatus.FAILED
+                    ))
+
         # 3. Handle tool results (legacy support)
         elif action.action_type == "tool_call_result" and action.output:
-            tool_call_id = None
-            if action.action_id in self.tool_call_map:
-                tool_call_id = self.tool_call_map[action.action_id]
-            elif action.input and isinstance(action.input, dict):
-                input_action_id = action.input.get("action_id")
-                if input_action_id and input_action_id in self.tool_call_map:
-                    tool_call_id = self.tool_call_map[input_action_id]
+            # Try to find a matching tool_call_id robustly
+            tool_call_id = self._find_tool_call_id(action)
 
             if tool_call_id:
                 events.append(ToolCallResultEvent(
