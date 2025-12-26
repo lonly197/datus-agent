@@ -655,7 +655,17 @@ class OpenAICompatibleModel(LLMBaseModel):
                     temp_tool_calls = {}  # {call_id: ActionHistory}
 
                     while not result.is_complete:
+                        # Check if cancelled before processing next event batch
+                        if asyncio.current_task().cancelled():
+                            logger.info("Streaming operation was cancelled")
+                            break
+
                         async for event in result.stream_events():
+                            # Check if cancelled during event processing
+                            if asyncio.current_task().cancelled():
+                                logger.info("Streaming operation was cancelled during event processing")
+                                break
+
                             if not hasattr(event, "type") or event.type != "run_item_stream_event":
                                 continue
 
@@ -854,6 +864,11 @@ class OpenAICompatibleModel(LLMBaseModel):
         for attempt in range(max_retries):
             try:
                 async for action in _stream_operation():
+                    # Check if cancelled during streaming
+                    if asyncio.current_task().cancelled():
+                        logger.info("Streaming operation was cancelled during final processing")
+                        break
+
                     # Skip actions that were already yielded in previous retry attempts
                     if action.action_id in processed_action_ids:
                         logger.debug(f"Skipping duplicate action: {action.action_id}")
