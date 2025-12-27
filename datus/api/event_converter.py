@@ -159,6 +159,43 @@ class DeepResearchEventConverter:
                 return None
         return None
 
+    def _extract_todo_id_from_action(self, action: ActionHistory) -> Optional[str]:
+        """
+        Extract todo_id from action input if present.
+        Returns the todo_id string if found, else None.
+        """
+        def try_parse(obj):
+            if isinstance(obj, dict):
+                return obj
+            if isinstance(obj, str):
+                try:
+                    return json.loads(obj)
+                except Exception:
+                    return None
+            return None
+
+        # Check action.input for todo_id
+        input_data = action.input
+        if input_data:
+            if isinstance(input_data, dict):
+                input_candidate = dict(input_data)
+                # parse 'arguments' if it's a json string
+                if "arguments" in input_candidate and isinstance(input_candidate["arguments"], str):
+                    parsed_args = self._try_parse_json_like(input_candidate["arguments"])
+                    if isinstance(parsed_args, dict):
+                        input_candidate.update(parsed_args)
+            else:
+                # try to parse string input
+                input_candidate = try_parse(input_data)
+
+            if isinstance(input_candidate, dict):
+                for k in ("todo_id", "todoId", "id"):
+                    v = input_candidate.get(k)
+                    if isinstance(v, str) and v.strip():
+                        return v
+
+        return None
+
     def _find_tool_call_id(self, action: ActionHistory) -> Optional[str]:
         """
         Try to determine the tool_call_id for a given action by:
@@ -211,13 +248,20 @@ class DeepResearchEventConverter:
     def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
         """Convert ActionHistory to DeepResearchEvent list."""
         """Convert ActionHistory to DeepResearchEvent list."""
-        
+
         timestamp = int(action.start_time.timestamp() * 1000)
         event_id = f"{action.action_id}_{seq_num}"
         events: List[DeepResearchEvent] = []
-        
+
+        # Extract todo_id if present (for plan-related events)
+        todo_id = self._extract_todo_id_from_action(action)
+
         # 1. Handle chat/assistant messages
         if action.role == ActionRole.ASSISTANT:
+            # ChatEvent should only have planId when directly related to a specific todo item execution
+            # For general assistant messages (thinking, planning, etc.), planId should be None
+            chat_plan_id = todo_id if todo_id else None
+
             if action.action_type in ["llm_generation", "message", "thinking", "raw_stream", "response"]:
                 content = ""
                 if action.output and isinstance(action.output, dict):
@@ -229,7 +273,7 @@ class DeepResearchEventConverter:
                     )
                 events.append(ChatEvent(
                     id=event_id,
-                    planId=self.plan_id,
+                    planId=chat_plan_id,
                     timestamp=timestamp,
                     content=content
                 ))
@@ -240,7 +284,7 @@ class DeepResearchEventConverter:
                     content = action.output.get("response", "") or action.output.get("content", "")
                 events.append(ChatEvent(
                     id=event_id,
-                    planId=self.plan_id,
+                    planId=chat_plan_id,
                     timestamp=timestamp,
                     content=content
                 ))
@@ -271,6 +315,19 @@ class DeepResearchEventConverter:
                     if isinstance(parsed, dict):
                         normalized_input = parsed
 
+            # Determine planId for tool events:
+            # - For plan tools: use specific todo_id if available, otherwise None for todo_write (creates entire plan)
+            # - For other tools: use todo_id if present (indicates tool is executing a specific todo)
+            tool_plan_id = None
+            if is_plan_tool:
+                if action.action_type == "todo_update" and todo_id:
+                    # todo_update operates on specific todo items
+                    tool_plan_id = todo_id
+                # todo_write creates the entire plan, so planId should be None
+            elif todo_id:
+                # Non-plan tools that are executing specific todos
+                tool_plan_id = todo_id
+
             # If this is a plan tool and we found plan data, emit PlanUpdateEvent first
             if is_plan_tool and plan_data:
                 todos = []
@@ -294,31 +351,36 @@ class DeepResearchEventConverter:
                         ))
 
                 if todos:
-                    # Emit a ToolCallEvent for visibility (call start)
+                    # For plan tools, emit tool events AND plan update event
                     events.append(ToolCallEvent(
                         id=f"{event_id}_call",
-                        planId=self.plan_id,
+                        planId=tool_plan_id,
                         timestamp=timestamp,
                         toolCallId=tool_call_id,
                         toolName=action.action_type,
                         input=normalized_input or (action.input if isinstance(action.input, dict) else {})
                     ))
 
-                    # Emit ToolCallResultEvent with the raw output
                     if action.output:
                         events.append(ToolCallResultEvent(
                             id=f"{event_id}_result",
-                            planId=self.plan_id,
+                            planId=tool_plan_id,
                             timestamp=timestamp,
                             toolCallId=tool_call_id,
                             data=action.output,
                             error=action.status == ActionStatus.FAILED
                         ))
 
-                    # Finally emit the PlanUpdateEvent to update plan UI state
+                    # PlanUpdateEvent uses the specific todo_id for updated items, or None for plan creation
+                    plan_update_plan_id = None
+                    if action.action_type == "todo_update" and "updated_item" in plan_data:
+                        ui = plan_data["updated_item"]
+                        if isinstance(ui, dict) and ui.get("id"):
+                            plan_update_plan_id = ui["id"]
+
                     events.append(PlanUpdateEvent(
                         id=f"{event_id}_plan",
-                        planId=self.plan_id,
+                        planId=plan_update_plan_id,
                         timestamp=timestamp,
                         todos=todos
                     ))
@@ -326,7 +388,7 @@ class DeepResearchEventConverter:
                 # Normal tool call: emit call + result (if available)
                 events.append(ToolCallEvent(
                     id=f"{event_id}_call",
-                    planId=self.plan_id,
+                    planId=tool_plan_id,
                     timestamp=timestamp,
                     toolCallId=tool_call_id,
                     toolName=action.action_type,
@@ -335,7 +397,7 @@ class DeepResearchEventConverter:
                 if action.output:
                     events.append(ToolCallResultEvent(
                         id=f"{event_id}_result",
-                        planId=self.plan_id,
+                        planId=tool_plan_id,
                         timestamp=timestamp,
                         toolCallId=tool_call_id,
                         data=action.output,
@@ -380,16 +442,18 @@ class DeepResearchEventConverter:
         elif action.action_type == "workflow_completion" and action.status == ActionStatus.SUCCESS:
             events.append(CompleteEvent(
                 id=event_id,
-                planId=self.plan_id,
+                planId=None,  # CompleteEvent should not have planId by default
                 timestamp=timestamp,
                 content=action.messages
             ))
 
         # 6. Handle errors
         elif action.status == ActionStatus.FAILED:
+            # ErrorEvent should use todo_id if the error is related to a specific todo
+            error_plan_id = todo_id if todo_id else None
             events.append(ErrorEvent(
                 id=event_id,
-                planId=self.plan_id,
+                planId=error_plan_id,
                 timestamp=timestamp,
                 error=action.messages or "Unknown error"
             ))
@@ -400,9 +464,11 @@ class DeepResearchEventConverter:
                 report_url = action.output.get("report_url", "")
                 report_data = action.output.get("html_content", "")
                 if report_url:
+                    # ReportEvent should use todo_id if related to a specific todo
+                    report_plan_id = todo_id if todo_id else None
                     events.append(ReportEvent(
                         id=event_id,
-                        planId=self.plan_id,
+                        planId=report_plan_id,
                         timestamp=timestamp,
                         url=report_url,
                         data=report_data
