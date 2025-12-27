@@ -31,7 +31,7 @@ class UserCancelledException(Exception):
 class PlanModeHooks(AgentHooks):
     """Plan Mode hooks for workflow management"""
 
-    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False, action_history_manager=None):
+    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False, action_history_manager=None, agent_config=None):
         self.console = console
         self.session = session
         self.auto_mode = auto_mode
@@ -45,6 +45,8 @@ class PlanModeHooks(AgentHooks):
         self._plan_generated_pending = False  # Flag to defer plan display until LLM ends
         # Optional ActionHistoryManager passed from node to allow hooks to add actions
         self.action_history_manager = action_history_manager
+        # Optional agent_config to instantiate DB/Filesystem tools when executing todos
+        self.agent_config = agent_config
         # Executor task handle
         self._executor_task = None
 
@@ -448,6 +450,24 @@ class PlanModeHooks(AgentHooks):
             plan_tool = PlanTool(self.session)
             plan_tool.storage = self.todo_storage
 
+            # Prepare optional DB and filesystem tools if agent_config provided
+            db_tool = None
+            fs_tool = None
+            try:
+                if self.agent_config:
+                    from datus.tools.func_tool.database import db_function_tool_instance
+
+                    db_tool = db_function_tool_instance(self.agent_config, database_name=getattr(self.agent_config, "current_database", ""))
+            except Exception as e:
+                logger.debug(f"Could not initialize DB tool: {e}")
+
+            try:
+                from datus.tools.func_tool.filesystem_tool import FilesystemFuncTool
+
+                fs_tool = FilesystemFuncTool()
+            except Exception as e:
+                logger.debug(f"Could not initialize Filesystem tool: {e}")
+
             for item in list(todo_list.items):
                 if item.status != "pending":
                     continue
@@ -506,9 +526,111 @@ class PlanModeHooks(AgentHooks):
                         pass
                     continue
 
-                # Execute placeholder or mapped tools for the todo.
-                # For scaffold: we don't know exact tool mapping; we simulate execution by sleeping briefly.
-                await asyncio.sleep(0.2)
+                # Execute mapped tools for the todo based on simple heuristics.
+                content_lower = (item.content or "").lower()
+                executed_any = False
+
+                # 1) Search table semantics
+                if db_tool and ("search" in content_lower or "搜索" in content_lower or "表结构" in content_lower):
+                    try:
+                        # call search_table with todo content as query_text
+                        logger.info(f"Server executor: calling db_tool.search_table for todo {item.id}")
+                        res = db_tool.search_table(query_text=item.content, top_n=5)
+                        # create action representing the db tool result
+                        result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                        complete_action_db = ActionHistory(
+                            action_id=f"{call_id}_db",
+                            role=ActionRole.TOOL,
+                            messages=f"Server executor: db.search_table for todo {item.id}",
+                            action_type="search_table",
+                            input={"function_name": "search_table", "arguments": json.dumps({"query_text": item.content, "top_n": 5, "todo_id": item.id})},
+                            output=result_payload,
+                            status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                        )
+                        if self.action_history_manager:
+                            self.action_history_manager.add_action(complete_action_db)
+                        executed_any = True
+                    except Exception as e:
+                        logger.error(f"Server executor db_tool.search_table failed for {item.id}: {e}")
+
+                # 2) Execute SQL if action history contains generated SQL and todo requests execution
+                if db_tool and ("execute sql" in content_lower or "执行sql" in content_lower or ("执行" in content_lower and "sql" in content_lower)):
+                    try:
+                        # Find latest SQL in action history
+                        sql_text = None
+                        if self.action_history_manager:
+                            for a in reversed(self.action_history_manager.get_actions()):
+                                if getattr(a, "role", "") == "assistant" or getattr(a, "role", "") == ActionRole.ASSISTANT:
+                                    out = getattr(a, "output", None)
+                                    if isinstance(out, dict) and out.get("sql"):
+                                        sql_text = out.get("sql")
+                                        break
+                                    # fallback: look into messages/content string for code block
+                                    content_field = out.get("content") if isinstance(out, dict) else None
+                                    if content_field and isinstance(content_field, str) and "```sql" in content_field:
+                                        # crude extraction
+                                        start = content_field.find("```sql")
+                                        end = content_field.find("```", start + 6)
+                                        if start != -1 and end != -1:
+                                            sql_text = content_field[start + 6 : end].strip()
+                                            break
+
+                        if sql_text:
+                            logger.info(f"Server executor: executing SQL for todo {item.id}")
+                            res = db_tool.read_query(sql=sql_text)
+                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                            complete_action_db = ActionHistory(
+                                action_id=f"{call_id}_exec",
+                                role=ActionRole.TOOL,
+                                messages=f"Server executor: db.read_query for todo {item.id}",
+                                action_type="read_query",
+                                input={"function_name": "read_query", "arguments": json.dumps({"sql": sql_text, "todo_id": item.id})},
+                                output=result_payload,
+                                status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                            )
+                            if self.action_history_manager:
+                                self.action_history_manager.add_action(complete_action_db)
+                            executed_any = True
+                    except Exception as e:
+                        logger.error(f"Server executor db_tool.read_query failed for {item.id}: {e}")
+
+                # 3) Generate final report file if filesystem tool available
+                if fs_tool and ("生成最终html" in content_lower or "生成最终" in content_lower or "生成html" in content_lower or "生成报告" in content_lower or "write" in content_lower):
+                    try:
+                        report_path = f"reports/{item.id}_report.html"
+                        # try to extract assistant content as report body
+                        report_body = f"<html><body><h1>Report for {item.content}</h1><p>Generated by server executor.</p></body></html>"
+                        # attempt to use last assistant content if available
+                        if self.action_history_manager:
+                            for a in reversed(self.action_history_manager.get_actions()):
+                                if getattr(a, "role", "") == "assistant" or getattr(a, "role", "") == ActionRole.ASSISTANT:
+                                    out = getattr(a, "output", None)
+                                    if isinstance(out, dict):
+                                        body = out.get("response") or out.get("content")
+                                        if body and isinstance(body, str):
+                                            report_body = body
+                                            break
+
+                        res = fs_tool.write_file(path=report_path, content=report_body, file_type="report")
+                        result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                        complete_action_fs = ActionHistory(
+                            action_id=f"{call_id}_write",
+                            role=ActionRole.TOOL,
+                            messages=f"Server executor: write_file for todo {item.id}",
+                            action_type="write_file",
+                            input={"function_name": "write_file", "arguments": json.dumps({"path": report_path, "todo_id": item.id})},
+                            output=result_payload,
+                            status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                        )
+                        if self.action_history_manager:
+                            self.action_history_manager.add_action(complete_action_fs)
+                        executed_any = True
+                    except Exception as e:
+                        logger.error(f"Server executor fs_tool.write_file failed for {item.id}: {e}")
+
+                # If nothing was mapped/executed, just sleep briefly (no-op) — still mark completed below
+                if not executed_any:
+                    await asyncio.sleep(0.1)
 
                 # Mark completed
                 try:
