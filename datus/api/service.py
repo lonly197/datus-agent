@@ -8,6 +8,7 @@ import csv
 import os
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -49,6 +50,16 @@ _form_grant_type = Form(...)
 _depends_get_current_client = Depends(get_current_client)
 
 
+@dataclass
+class RunningTask:
+    """Represents a currently running task."""
+    task_id: str
+    task: asyncio.Task[Any]
+    created_at: datetime
+    status: str  # 'running' | 'cancelled' | 'completed' | 'failed'
+    meta: Optional[Dict[str, Any]] = None
+
+
 class DatusAPIService:
     """Main service class for Datus Agent API."""
 
@@ -57,6 +68,165 @@ class DatusAPIService:
         self.agent_config = None
         self.args = args
         self.task_store = None
+        self.running_tasks: Dict[str, RunningTask] = {}
+        self.running_tasks_lock = asyncio.Lock()
+
+    async def register_running_task(self, task_id: str, task: asyncio.Task[Any], meta: Optional[Dict[str, Any]] = None) -> None:
+        """Register a running task in the registry."""
+        async with self.running_tasks_lock:
+            self.running_tasks[task_id] = RunningTask(
+                task_id=task_id,
+                task=task,
+                created_at=datetime.now(),
+                status="running",
+                meta=meta
+            )
+
+    async def unregister_running_task(self, task_id: str) -> None:
+        """Unregister a task from the registry."""
+        async with self.running_tasks_lock:
+            self.running_tasks.pop(task_id, None)
+
+    async def get_running_task(self, task_id: str) -> Optional[RunningTask]:
+        """Get a running task by ID."""
+        async with self.running_tasks_lock:
+            return self.running_tasks.get(task_id)
+
+    async def get_all_running_tasks(self) -> Dict[str, RunningTask]:
+        """Get all running tasks."""
+        async with self.running_tasks_lock:
+            return dict(self.running_tasks)
+
+    async def _run_streaming_workflow_task(self, req: RunWorkflowRequest, current_client: str, task_id: str) -> None:
+        """Run a streaming workflow task and handle completion."""
+        try:
+            # The actual streaming work is handled by generate_sse_stream
+            # This task just ensures proper cleanup - it will be cancelled when the client disconnects
+            await asyncio.sleep(0)  # Allow task registration to complete
+
+            # If we get here, the streaming completed successfully
+            logger.info(f"Streaming workflow task {task_id} completed successfully")
+            if self.task_store:
+                self.task_store.update_task(task_id, status="completed")
+
+        except asyncio.CancelledError:
+            logger.info(f"Streaming workflow task {task_id} was cancelled")
+            if self.task_store:
+                self.task_store.update_task(task_id, status="cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Streaming workflow task {task_id} failed: {e}")
+            if self.task_store:
+                self.task_store.update_task(task_id, status="failed")
+            raise
+        finally:
+            # Clean up the task from registry when done
+            await self.unregister_running_task(task_id)
+
+    async def _generate_registered_stream(self, task_id: str):
+        """Generate stream for a registered task."""
+        try:
+            # Get the task request from the registry
+            running_task = await self.get_running_task(task_id)
+            if not running_task or not running_task.meta:
+                raise ValueError(f"No registered task found for {task_id}")
+
+            req_data = running_task.meta.get("request")
+            current_client = running_task.meta.get("client")
+
+            if not req_data or not current_client:
+                raise ValueError(f"Invalid task metadata for {task_id}")
+
+            # Reconstruct the request
+            from .models import RunWorkflowRequest
+            req = RunWorkflowRequest(**req_data)
+
+            # Generate the stream
+            async for event in generate_sse_stream(req, current_client):
+                yield event
+
+        except Exception as e:
+            logger.error(f"Error in registered stream for task {task_id}: {e}")
+            yield f"event: error\ndata: {to_str({'error': str(e)})}\n\n"
+
+    async def _run_chat_research_task(self, req: ChatResearchRequest, current_client: str, task_id: str) -> None:
+        """Run a chat research task and handle completion."""
+        try:
+            # The actual work is handled by _generate_chat_research_stream
+            # This task just ensures proper cleanup - it will be cancelled when the client disconnects
+            await asyncio.sleep(0)  # Allow task registration to complete
+
+            # If we get here, the streaming completed successfully
+            logger.info(f"Chat research task {task_id} completed successfully")
+            if self.task_store:
+                self.task_store.update_task(task_id, status="completed")
+
+        except asyncio.CancelledError:
+            logger.info(f"Chat research task {task_id} was cancelled")
+            if self.task_store:
+                self.task_store.update_task(task_id, status="cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Chat research task {task_id} failed: {e}")
+            if self.task_store:
+                self.task_store.update_task(task_id, status="failed")
+            raise
+        finally:
+            # Clean up the task from registry when done
+            await self.unregister_running_task(task_id)
+
+    async def _generate_chat_research_stream(self, task_id: str):
+        """Generate chat research stream for a registered task."""
+        try:
+            # Get the task request from the registry
+            running_task = await self.get_running_task(task_id)
+            if not running_task or not running_task.meta:
+                raise ValueError(f"No registered task found for {task_id}")
+
+            req_data = running_task.meta.get("request")
+            current_client = running_task.meta.get("client")
+
+            if not req_data or not current_client:
+                raise ValueError(f"Invalid task metadata for {task_id}")
+
+            # Reconstruct the request
+            from .models import ChatResearchRequest
+            req = ChatResearchRequest(**req_data)
+
+            # Generate the stream
+            async for event in self.run_chat_research_stream(req, current_client):
+                yield event
+
+        except Exception as e:
+            logger.error(f"Error in chat research stream for task {task_id}: {e}")
+            yield f"data: {to_str({'error': str(e)})}\n\n"
+
+    async def _run_sync_workflow_task(self, req: RunWorkflowRequest, current_client: str, task_id: str):
+        """Run a synchronous workflow task and return result."""
+        try:
+            # Run the synchronous workflow
+            result = await self.run_workflow(req, current_client)
+
+            # If we get here, the workflow completed successfully
+            logger.info(f"Synchronous workflow task {task_id} completed successfully")
+            if self.task_store:
+                self.task_store.update_task(task_id, status="completed")
+
+            return result
+
+        except asyncio.CancelledError:
+            logger.info(f"Synchronous workflow task {task_id} was cancelled")
+            if self.task_store:
+                self.task_store.update_task(task_id, status="cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Synchronous workflow task {task_id} failed: {e}")
+            if self.task_store:
+                self.task_store.update_task(task_id, status="failed")
+            raise
+        finally:
+            # Clean up the task from registry when done
+            await self.unregister_running_task(task_id)
 
     async def initialize(self):
         """Initialize the service with default configurations."""
@@ -441,6 +611,11 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
         sql_query = None
 
         async for action in service.run_workflow_stream(req, current_client):
+            # Check if task was cancelled
+            running_task = await service.get_running_task(task_id)
+            if running_task and running_task.status == "cancelled":
+                logger.info(f"Task {task_id} was cancelled, stopping stream")
+                break
             progress_seq += 1
 
             # Map different action types to SSE events with prioritized matching
@@ -720,9 +895,20 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
                         status_code=400, detail="For async mode, Accept header must include 'text/event-stream'"
                     )
 
+                # Create and register the streaming task
+                task_id = req.task_id or service._generate_task_id(current_client)
+                stream_task = asyncio.create_task(
+                    service._run_streaming_workflow_task(req, current_client, task_id)
+                )
+                await service.register_running_task(
+                    task_id,
+                    stream_task,
+                    meta={"type": "workflow_stream", "request": req.model_dump(), "client": current_client}
+                )
+
                 # Return streaming response
                 return StreamingResponse(
-                    generate_sse_stream(req, current_client),
+                    service._generate_registered_stream(task_id),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",
@@ -731,8 +917,24 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
                     },
                 )
             else:
-                # Synchronous mode - original behavior
-                return await service.run_workflow(req, current_client)
+                # Synchronous mode - run in background task for cancellation support
+                task_id = req.task_id or service._generate_task_id(current_client)
+                sync_task = asyncio.create_task(
+                    service._run_sync_workflow_task(req, current_client, task_id)
+                )
+                await service.register_running_task(
+                    task_id,
+                    sync_task,
+                    meta={"type": "workflow_sync", "request": req.model_dump(), "client": current_client}
+                )
+
+                # Wait for completion and return result
+                try:
+                    return await sync_task
+                except asyncio.CancelledError:
+                    if service.task_store:
+                        service.task_store.update_task(task_id, status="cancelled")
+                    raise
 
         except Exception as e:
             logger.error(f"Workflow execution error: {e}")
@@ -754,9 +956,20 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
                     detail="Accept header must include 'text/event-stream'"
                 )
 
+            # Create and register the streaming task
+            task_id = f"research_{current_client}_{int(time.time())}"
+            stream_task = asyncio.create_task(
+                service._run_chat_research_task(req, current_client, task_id)
+            )
+            await service.register_running_task(
+                task_id,
+                stream_task,
+                meta={"type": "chat_research", "request": req.model_dump(), "client": current_client}
+            )
+
             # Return streaming response
             return StreamingResponse(
-                service.run_chat_research_stream(req, current_client),
+                service._generate_chat_research_stream(task_id),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -777,6 +990,133 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
             return await service.record_feedback(req)
         except Exception as e:
             logger.error(f"Feedback recording error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/workflows/tasks", tags=["workflows"])
+    async def list_tasks(current_client: str = _depends_get_current_client):
+        """List all running and recent tasks."""
+        try:
+            logger.info(f"Task list request from client: {current_client}")
+
+            # Get running tasks
+            running_tasks = await service.get_all_running_tasks()
+
+            # Get recent tasks from database (last 24 hours)
+            recent_tasks = []
+            if service.task_store:
+                # Get all tasks and filter recent ones
+                all_tasks = service.task_store.get_all_feedback()
+                cutoff_time = datetime.now().timestamp() - (24 * 60 * 60)  # 24 hours ago
+
+                for task in all_tasks:
+                    if task.get("created_at"):
+                        # Convert string timestamp to float if needed
+                        created_ts = task["created_at"]
+                        if isinstance(created_ts, str):
+                            try:
+                                created_ts = datetime.fromisoformat(created_ts.replace('Z', '+00:00')).timestamp()
+                            except:
+                                continue
+
+                        if created_ts > cutoff_time:
+                            recent_tasks.append(task)
+
+            return {
+                "running_tasks": [
+                    {
+                        "task_id": rt.task_id,
+                        "status": rt.status,
+                        "created_at": rt.created_at.isoformat(),
+                        "type": rt.meta.get("type", "unknown") if rt.meta else "unknown",
+                        "client": rt.meta.get("client") if rt.meta else None,
+                    }
+                    for rt in running_tasks.values()
+                ],
+                "recent_tasks": recent_tasks
+            }
+        except Exception as e:
+            logger.error(f"Task list error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/workflows/tasks/{task_id}", tags=["workflows"])
+    async def get_task(task_id: str, current_client: str = _depends_get_current_client):
+        """Get details for a specific task."""
+        try:
+            logger.info(f"Task detail request from client: {current_client} for task: {task_id}")
+
+            # Check running tasks first
+            running_task = await service.get_running_task(task_id)
+            if running_task:
+                return {
+                    "task_id": running_task.task_id,
+                    "status": running_task.status,
+                    "created_at": running_task.created_at.isoformat(),
+                    "type": running_task.meta.get("type", "unknown") if running_task.meta else "unknown",
+                    "client": running_task.meta.get("client") if running_task.meta else None,
+                    "is_running": True,
+                    "request": running_task.meta.get("request") if running_task.meta else None,
+                }
+
+            # Check database for completed tasks
+            if service.task_store:
+                task_data = service.task_store.get_task(task_id)
+                if task_data:
+                    return {
+                        "task_id": task_data["task_id"],
+                        "status": task_data["status"],
+                        "created_at": task_data["created_at"],
+                        "is_running": False,
+                        "sql_query": task_data.get("sql_query"),
+                        "sql_result": task_data.get("sql_result"),
+                    }
+
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Task detail error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.delete("/workflows/tasks/{task_id}", tags=["workflows"])
+    async def cancel_task(task_id: str, current_client: str = _depends_get_current_client):
+        """Cancel a running task."""
+        try:
+            logger.info(f"Task cancel request from client: {current_client} for task: {task_id}")
+
+            # Check if task is running
+            running_task = await service.get_running_task(task_id)
+            if running_task:
+                # Cancel the asyncio task
+                running_task.task.cancel()
+                running_task.status = "cancelled"
+
+                # Update database
+                if service.task_store:
+                    service.task_store.update_task(task_id, status="cancelled")
+
+                return {
+                    "task_id": task_id,
+                    "status": "cancelled",
+                    "message": "Task cancellation requested"
+                }
+
+            # Check if task exists in database
+            if service.task_store:
+                task_data = service.task_store.get_task(task_id)
+                if task_data and task_data["status"] == "running":
+                    # Task exists but not in memory (maybe different worker)
+                    service.task_store.update_task(task_id, status="cancelled")
+                    return {
+                        "task_id": task_id,
+                        "status": "cancelled",
+                        "message": "Task cancellation requested (best-effort)"
+                    }
+
+            raise HTTPException(status_code=404, detail=f"Running task {task_id} not found")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Task cancel error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     return app

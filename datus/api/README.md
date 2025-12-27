@@ -66,6 +66,11 @@ Once the server is running, you can access:
 - **Health Check**: `GET /health`
 - **Authentication**: `POST /auth/token`
 - **Workflow Execution**: `POST /workflows/run`
+- **Chat Research**: `POST /workflows/chat_research`
+- **Task Management**:
+  - `GET /workflows/tasks` - List running and recent tasks
+  - `GET /workflows/tasks/{task_id}` - Get task details
+  - `DELETE /workflows/tasks/{task_id}` - Cancel a running task
 - **Feedback Recording**: `POST /workflows/feedback`
 
 ## Usage Examples
@@ -118,6 +123,24 @@ curl -X POST "http://localhost:8000/workflows/feedback" \
     "task_id": "your_task_id",
     "status": "success"
   }'
+```
+
+### List Tasks
+```bash
+curl -X GET "http://localhost:8000/workflows/tasks" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Get Task Details
+```bash
+curl -X GET "http://localhost:8000/workflows/tasks/your_task_id" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Cancel Task
+```bash
+curl -X DELETE "http://localhost:8000/workflows/tasks/your_task_id" \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 ## Development Mode
