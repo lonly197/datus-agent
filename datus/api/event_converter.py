@@ -141,11 +141,27 @@ class DeepResearchEventConverter:
 
         return None
 
+    def _try_parse_json_like(self, obj: Any) -> Optional[Dict[str, Any]]:
+        """
+        Try to parse an object that may be a dict or a JSON string into a dict.
+        Returns the dict if successful, otherwise None.
+        """
+        if isinstance(obj, dict):
+            return obj
+        if isinstance(obj, str):
+            try:
+                parsed = json.loads(obj)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return None
+        return None
+
     def _find_tool_call_id(self, action: ActionHistory) -> Optional[str]:
         """
         Try to determine the tool_call_id for a given action by:
           1) mapping action.action_id -> tool_call_id
-          2) checking common id keys in action.input and mapping if present
+          2) checking common id keys in action.input (including parsing stringified 'arguments')
           3) extracting call id from nested output
         Returns the tool_call_id string if found, else None.
         """
@@ -153,18 +169,37 @@ class DeepResearchEventConverter:
         if action.action_id in self.tool_call_map:
             return self.tool_call_map[action.action_id]
 
-        # check input for possible action/call id that maps to stored call ids
-        if action.input and isinstance(action.input, dict):
-            for k in ("action_id", "call_id", "callId", "tool_call_id", "toolCallId", "id"):
-                v = action.input.get(k)
+        # Normalize and inspect input for candidate ids
+        input_candidate = None
+        if action.input:
+            # If it's a dict, copy and try to parse common string fields like 'arguments'
+            if isinstance(action.input, dict):
+                input_candidate = dict(action.input)
+                # parse 'arguments' if it's a json string
+                if "arguments" in input_candidate and isinstance(input_candidate["arguments"], str):
+                    parsed_args = self._try_parse_json_like(input_candidate["arguments"])
+                    if isinstance(parsed_args, dict):
+                        input_candidate.update(parsed_args)
+            else:
+                # try to parse string input
+                parsed = self._try_parse_json_like(action.input)
+                if isinstance(parsed, dict):
+                    input_candidate = parsed
+
+        if input_candidate and isinstance(input_candidate, dict):
+            for k in ("tool_call_id", "toolCallId", "call_id", "callId", "action_id", "id", "todo_id", "todoId"):
+                v = input_candidate.get(k)
                 if isinstance(v, str) and v:
+                    # if value maps to our stored map, return mapped id
                     if v in self.tool_call_map:
                         return self.tool_call_map[v]
+                    # otherwise, return the candidate (best-effort)
+                    return v
+
         # try to extract from nested output
         if action.output:
             candidate = self._extract_callid_from_output(action.output)
             if candidate:
-                # if candidate is already a mapped key, return mapped value; else return candidate as-is
                 if candidate in self.tool_call_map:
                     return self.tool_call_map[candidate]
                 return candidate
@@ -218,6 +253,21 @@ class DeepResearchEventConverter:
             if action.output:
                 plan_data = self._extract_plan_from_output(action.output)
 
+            # Build normalized input: parse stringified 'arguments' if present so fields like todo_id are exposed.
+            normalized_input: Dict[str, Any] = {}
+            if action.input:
+                if isinstance(action.input, dict):
+                    normalized_input = dict(action.input)
+                    # parse 'arguments' field if it's a JSON string
+                    if "arguments" in normalized_input and isinstance(normalized_input["arguments"], str):
+                        parsed_args = self._try_parse_json_like(normalized_input["arguments"])
+                        if isinstance(parsed_args, dict):
+                            normalized_input.update(parsed_args)
+                else:
+                    parsed = self._try_parse_json_like(action.input)
+                    if isinstance(parsed, dict):
+                        normalized_input = parsed
+
             # If this is a plan tool and we found plan data, emit PlanUpdateEvent first
             if is_plan_tool and plan_data:
                 todos = []
@@ -248,7 +298,7 @@ class DeepResearchEventConverter:
                         timestamp=timestamp,
                         toolCallId=tool_call_id,
                         toolName=action.action_type,
-                        input=action.input if isinstance(action.input, dict) else {}
+                        input=normalized_input or (action.input if isinstance(action.input, dict) else {})
                     ))
 
                     # Emit ToolCallResultEvent with the raw output
@@ -277,7 +327,7 @@ class DeepResearchEventConverter:
                     timestamp=timestamp,
                     toolCallId=tool_call_id,
                     toolName=action.action_type,
-                    input=action.input if isinstance(action.input, dict) else {}
+                    input=normalized_input or (action.input if isinstance(action.input, dict) else {})
                 ))
                 if action.output:
                     events.append(ToolCallResultEvent(

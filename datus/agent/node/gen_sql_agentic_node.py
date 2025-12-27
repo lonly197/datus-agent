@@ -842,14 +842,17 @@ class GenSQLAgenticNode(AgenticNode):
                 if getattr(original_input, "auto_execute_plan", False):
                     execution_override = (
                         "\n\nIMPORTANT EXECUTION INSTRUCTIONS (OVERRIDE):\n"
-                        "You MUST execute the generated execution plan step-by-step by invoking the available tools. "
-                        "Do NOT directly output the final SQL as plain text. For each TodoItem in the plan:\n"
+                        "YOU MUST execute the generated execution plan step-by-step by invoking the available tools. "
+                        "DO NOT directly output the final SQL as plain text. For each TodoItem in the plan:\n"
                         " - First, issue a tool call that performs the required task (e.g., search_table / execute_sql / inspect_sql_values),\n"
-                        " - Include the TodoItem's id as `todo_id` in the tool call arguments so the system can bind results to the plan,\n+                        \" - After the tool returns, update the corresponding todo status (pending -> in_progress -> completed) via the plan tool,\n"
+                        " - Include the TodoItem's id as `todo_id` in the tool call arguments so the system can bind results to the plan,\n"
+                        " - After the tool returns, update the corresponding todo status (pending -> in_progress -> completed) via the plan tool,\n"
                         " - Only after all todos are completed, produce a final `chat_response` action with the final SQL under the `sql` field.\n"
                         "If you encounter errors when calling a tool, emit the error via tool result and mark the todo as failed.\n"
                     )
-                    instruction = base_instruction + execution_override
+                    # Prepend the execution override so it takes precedence over any existing instructions.
+                    instruction = execution_override + "\n\n" + base_instruction
+                    logger.info("Applied AUTO_EXECUTE_PLAN instruction override for plan execution")
             except Exception:
                 instruction = base_instruction
 
