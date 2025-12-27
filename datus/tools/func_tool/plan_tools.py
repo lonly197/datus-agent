@@ -23,6 +23,7 @@ class TodoStatus(str, Enum):
     """Status of a todo item"""
 
     PENDING = "pending"
+    IN_PROGRESS = "in_progress"  # 添加此状态
     COMPLETED = "completed"
     FAILED = "failed"
 

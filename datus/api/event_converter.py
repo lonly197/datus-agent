@@ -161,38 +161,40 @@ class DeepResearchEventConverter:
 
     def _extract_todo_id_from_action(self, action: ActionHistory) -> Optional[str]:
         """
-        Extract todo_id from action input if present.
-        Returns the todo_id string if found, else None.
+        Extracts the todo_id from an ActionHistory object, looking in various places.
+        This is crucial for correctly setting the planId for events related to specific todos.
         """
-        def try_parse(obj):
-            if isinstance(obj, dict):
-                return obj
-            if isinstance(obj, str):
-                try:
-                    return json.loads(obj)
-                except Exception:
-                    return None
-            return None
+        # Try to extract from input arguments first
+        if action.input and isinstance(action.input, dict):
+            # Check for 'todo_id' directly in input
+            if action.input.get("todo_id"):
+                return action.input["todo_id"]
+            # Check for 'arguments' field which might be a JSON string containing 'todo_id'
+            if "arguments" in action.input and isinstance(action.input["arguments"], str):
+                parsed_args = self._try_parse_json_like(action.input["arguments"])
+                if isinstance(parsed_args, dict) and parsed_args.get("todo_id"):
+                    return parsed_args["todo_id"]
 
-        # Check action.input for todo_id
-        input_data = action.input
-        if input_data:
-            if isinstance(input_data, dict):
-                input_candidate = dict(input_data)
-                # parse 'arguments' if it's a json string
-                if "arguments" in input_candidate and isinstance(input_candidate["arguments"], str):
-                    parsed_args = self._try_parse_json_like(input_candidate["arguments"])
-                    if isinstance(parsed_args, dict):
-                        input_candidate.update(parsed_args)
-            else:
-                # try to parse string input
-                input_candidate = try_parse(input_data)
+        # For plan_update actions, try to extract from output's 'updated_item' or 'todo_list'
+        if action.action_type == "plan_update" and action.output:
+            plan_data = self._extract_plan_from_output(action.output)
+            if "updated_item" in plan_data and isinstance(plan_data["updated_item"], dict):
+                return plan_data["updated_item"].get("id")
+            if "todo_list" in plan_data and isinstance(plan_data["todo_list"], dict):
+                # If it's a full todo_list, we might not have a single todo_id,
+                # but if there's only one item, we can use its ID.
+                items = plan_data["todo_list"].get("items")
+                if isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict):
+                    return items[0].get("id")
 
-            if isinstance(input_candidate, dict):
-                for k in ("todo_id", "todoId", "id"):
-                    v = input_candidate.get(k)
-                    if isinstance(v, str) and v.strip():
-                        return v
+        # For tool_call_result, try to find the original tool_call_id and then its todo_id
+        if action.action_type == "tool_call_result" and action.input and isinstance(action.input, dict):
+            original_action_id = action.input.get("action_id")
+            if original_action_id and original_action_id in self.tool_call_map:
+                # This is complex as we don't store todo_id in tool_call_map directly.
+                # This would require looking up the original ActionHistory for the tool call.
+                # For now, we rely on todo_id being in the tool call's input.
+                pass
 
         return None
 
@@ -245,6 +247,32 @@ class DeepResearchEventConverter:
 
         return None
 
+    def _is_internal_todo_update(self, action: ActionHistory) -> bool:
+        """
+        Check if this is an internal todo_update call from server executor that should be filtered.
+
+        Args:
+            action: The ActionHistory to check
+
+        Returns:
+            bool: True if this is an internal todo_update that should be filtered
+        """
+        # Internal todo_update calls from the server executor often have specific action_id patterns
+        # or messages. We want to filter these out as ToolCallEvents.
+        if action.action_type == "todo_update":
+            # Check if the action_id starts with "server_call_"
+            if action.action_id.startswith("server_call_"):
+                return True
+            # Additionally, check if the message indicates it's an internal update
+            if action.messages and (
+                "Server executor: starting todo" in action.messages or
+                "Server executor: todo_in_progress" in action.messages or
+                "Server executor: todo_completed" in action.messages or
+                "Server executor: todo_complete failed" in action.messages
+            ):
+                return True
+        return False
+
     def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
         """Convert ActionHistory to DeepResearchEvent list."""
         """Convert ActionHistory to DeepResearchEvent list."""
@@ -271,26 +299,34 @@ class DeepResearchEventConverter:
                         action.output.get("raw_output", "") or
                         action.messages
                     )
-                events.append(ChatEvent(
-                    id=event_id,
-                    planId=chat_plan_id,
-                    timestamp=timestamp,
-                    content=content
-                ))
+                # Only send chat events if they have actual content or are important messages
+                if content and content.strip():
+                    events.append(ChatEvent(
+                        id=event_id,
+                        planId=chat_plan_id,
+                        timestamp=timestamp,
+                        content=content
+                    ))
 
             elif action.action_type == "chat_response":
                 content = ""
                 if action.output and isinstance(action.output, dict):
                     content = action.output.get("response", "") or action.output.get("content", "")
-                events.append(ChatEvent(
-                    id=event_id,
-                    planId=chat_plan_id,
-                    timestamp=timestamp,
-                    content=content
-                ))
+                # Always send chat_response events as they are final responses
+                if content or action.output:
+                    events.append(ChatEvent(
+                        id=event_id,
+                        planId=chat_plan_id,
+                        timestamp=timestamp,
+                        content=content
+                    ))
 
         # 2. Handle tool calls - ToolCallEvent / ToolCallResultEvent and PlanUpdateEvent for plan tools
         elif action.role == ActionRole.TOOL:
+            # 过滤掉内部的todo_update状态管理调用
+            if action.action_type == "todo_update" and self._is_internal_todo_update(action):
+                return []  # 不生成任何事件
+
             tool_call_id = str(uuid.uuid4())
             # store mapping for later result binding
             self.tool_call_map[action.action_id] = tool_call_id
@@ -419,21 +455,30 @@ class DeepResearchEventConverter:
                     error=action.status == ActionStatus.FAILED
                 ))
 
-        # 4. Handle plan updates (legacy support)
+        # 4. Handle plan updates
         elif action.action_type == "plan_update" and action.output:
             todos = []
-            if isinstance(action.output, dict) and "todos" in action.output:
-                for todo_data in action.output["todos"]:
-                    if isinstance(todo_data, dict):
-                        todos.append(TodoItem(
-                            id=todo_data.get("id", str(uuid.uuid4())),
-                            content=todo_data.get("content", ""),
-                            status=TodoStatus(todo_data.get("status", "pending"))
-                        ))
+            if isinstance(action.output, dict):
+                # Handle both "todos" (legacy) and "todo_list" (new) formats
+                todo_data_source = None
+                if "todo_list" in action.output and isinstance(action.output["todo_list"], dict):
+                    todo_data_source = action.output["todo_list"].get("items", [])
+                elif "todos" in action.output and isinstance(action.output["todos"], list):
+                    todo_data_source = action.output["todos"]
 
+                if todo_data_source:
+                    for todo_data in todo_data_source:
+                        if isinstance(todo_data, dict):
+                            todos.append(TodoItem(
+                                id=todo_data.get("id", str(uuid.uuid4())),
+                                content=todo_data.get("content", ""),
+                                status=TodoStatus(todo_data.get("status", "pending"))
+                            ))
+
+            # For plan_update events, planId should be None (global plan update)
             events.append(PlanUpdateEvent(
                 id=event_id,
-                planId=self.plan_id,
+                planId=None,
                 timestamp=timestamp,
                 todos=todos
             ))

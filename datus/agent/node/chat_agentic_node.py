@@ -442,7 +442,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 result.response = result.response + sql_section
                 logger.info(f"Added SQL code to final response (length: {len(sql_section)})")
 
-            # Create final action
+            # Create final response action
             final_action = ActionHistory.create_action(
                 role=ActionRole.ASSISTANT,
                 action_type="chat_response",
@@ -453,6 +453,17 @@ class ChatAgenticNode(GenSQLAgenticNode):
             )
             action_history_manager.add_action(final_action)
             yield final_action
+
+            # Create and yield complete event
+            complete_action = ActionHistory.create_action(
+                role=ActionRole.SYSTEM,
+                action_type="workflow_completion",
+                messages="DONE",
+                input_data={"source": "chat_agentic_node"},
+                status=ActionStatus.SUCCESS,
+            )
+            action_history_manager.add_action(complete_action)
+            yield complete_action
 
         except Exception as e:
             # Handle user cancellation as success, not error

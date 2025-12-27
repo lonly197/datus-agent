@@ -126,6 +126,15 @@ class PlanModeHooks(AgentHooks):
             self.execution_mode = "auto"
             self._transition_state("executing", {"mode": "auto"})
             self.console.print("[green]Auto execution mode (workflow/benchmark context)[/]")
+
+            # Send initial plan_update event to notify frontend of current plan state
+            if self.action_history_manager and self.emit_queue is not None:
+                try:
+                    await self._emit_plan_update_event()
+                    logger.info("Sent initial plan_update event for auto execution")
+                except Exception as e:
+                    logger.error(f"Failed to send initial plan_update event: {e}")
+
             # Start server-side executor in auto mode if action_history_manager is available
             if self.action_history_manager:
                 try:
@@ -479,68 +488,16 @@ class PlanModeHooks(AgentHooks):
                     logger.info(f"Server executor: todo {item.id} already executed by LLM, skipping")
                     continue
 
-                # Create a server-initiated tool call action (start)
-                call_id = f"server_call_{uuid.uuid4().hex[:8]}"
-                start_action = ActionHistory(
-                    action_id=call_id,
-                    role=ActionRole.TOOL,
-                    messages=f"Server executor: starting todo {item.content}",
-                    action_type="todo_update",
-                    input={"function_name": "todo_update", "arguments": json.dumps({"todo_id": item.id, "status": "in_progress"})},
-                    status=ActionStatus.PROCESSING,
-                )
-                # Add start action to history (will be converted to ToolCallEvent)
-                if self.action_history_manager:
-                    self.action_history_manager.add_action(start_action)
-                    # also emit to node stream if emit_queue provided
-                    if self.emit_queue is not None:
-                        try:
-                            self.emit_queue.put_nowait(start_action)
-                        except Exception as e:
-                            logger.debug(f"emit_queue put failed for start_action: {e}")
-
-                # Mark in_progress using plan tool
+                # Mark in_progress using plan tool (directly, no ActionHistory for internal updates)
                 try:
                     res1 = plan_tool._update_todo_status(item.id, "in_progress")
-                    # Build result action
-                    result_payload = res1.model_dump() if hasattr(res1, "model_dump") else dict(res1) if isinstance(res1, dict) else {"result": res1}
-                    complete_action = ActionHistory(
-                        action_id=call_id,
-                        role=ActionRole.TOOL,
-                        messages=f"Server executor: todo_in_progress {item.id}",
-                        action_type="todo_update",
-                        input={"function_name": "todo_update", "arguments": json.dumps({"todo_id": item.id, "status": "in_progress"})},
-                        output=result_payload,
-                        status=ActionStatus.SUCCESS,
-                    )
-                    if self.action_history_manager:
-                        self.action_history_manager.add_action(complete_action)
-                        if self.emit_queue is not None:
-                            try:
-                                self.emit_queue.put_nowait(complete_action)
-                            except Exception as e:
-                                logger.debug(f"emit_queue put failed for complete_action: {e}")
+                    # Send plan_update event to notify frontend of status change
+                    await self._emit_plan_update_event(item.id, "in_progress")
                 except Exception as e:
                     logger.error(f"Server executor failed to set in_progress for {item.id}: {e}")
-                    fail_action = ActionHistory(
-                        action_id=call_id,
-                        role=ActionRole.TOOL,
-                        messages=f"Server executor: todo_in_progress failed {item.id}: {e}",
-                        action_type="todo_update",
-                        input={"function_name": "todo_update", "arguments": json.dumps({"todo_id": item.id, "status": "in_progress"})},
-                        output={"success": 0, "error": str(e)},
-                        status=ActionStatus.FAILED,
-                    )
-                    if self.action_history_manager:
-                        self.action_history_manager.add_action(fail_action)
-                        if self.emit_queue is not None:
-                            try:
-                                self.emit_queue.put_nowait(fail_action)
-                            except Exception as e:
-                                logger.debug(f"emit_queue put failed for fail_action: {e}")
-                    # mark todo failed in storage
                     try:
                         plan_tool._update_todo_status(item.id, "failed")
+                        await self._emit_plan_update_event(item.id, "failed")
                     except Exception:
                         pass
                     continue
@@ -668,46 +625,64 @@ class PlanModeHooks(AgentHooks):
 
                 # Mark completed
                 try:
-                    res2 = plan_tool._update_todo_status(item.id, "completed")
-                    result_payload2 = res2.model_dump() if hasattr(res2, "model_dump") else dict(res2) if isinstance(res2, dict) else {"result": res2}
-                    complete_action2 = ActionHistory(
-                        action_id=f"{call_id}_done",
-                        role=ActionRole.TOOL,
-                        messages=f"Server executor: todo_completed {item.id}",
-                        action_type="todo_update",
-                        input={"function_name": "todo_update", "arguments": json.dumps({"todo_id": item.id, "status": "completed"})},
-                        output=result_payload2,
-                        status=ActionStatus.SUCCESS,
-                    )
-                    if self.action_history_manager:
-                        self.action_history_manager.add_action(complete_action2)
-                        if self.emit_queue is not None:
-                            try:
-                                self.emit_queue.put_nowait(complete_action2)
-                            except Exception as e:
-                                logger.debug(f"emit_queue put failed for complete_action2: {e}")
+                    plan_tool._update_todo_status(item.id, "completed")
+                    await self._emit_plan_update_event(item.id, "completed")
                 except Exception as e:
                     logger.error(f"Server executor failed to set completed for {item.id}: {e}")
-                    fail_action2 = ActionHistory(
-                        action_id=f"{call_id}_done",
-                        role=ActionRole.TOOL,
-                        messages=f"Server executor: todo_complete failed {item.id}: {e}",
-                        action_type="todo_update",
-                        input={"function_name": "todo_update", "arguments": json.dumps({"todo_id": item.id, "status": "completed"})},
-                        output={"success": 0, "error": str(e)},
-                        status=ActionStatus.FAILED,
-                    )
-                    if self.action_history_manager:
-                        self.action_history_manager.add_action(fail_action2)
-                        if self.emit_queue is not None:
-                            try:
-                                self.emit_queue.put_nowait(fail_action2)
-                            except Exception as e:
-                                logger.debug(f"emit_queue put failed for fail_action2: {e}")
+                    try:
+                        plan_tool._update_todo_status(item.id, "failed")
+                        await self._emit_plan_update_event(item.id, "failed")
+                    except Exception:
+                        pass
 
             logger.info("Server executor finished all pending todos")
         except Exception as e:
             logger.error(f"Unhandled server executor error: {e}")
+
+    async def _emit_plan_update_event(self, todo_id: str = None, status: str = None):
+        """
+        Emit a plan_update event to notify frontend of plan status changes.
+
+        Args:
+            todo_id: Specific todo ID if updating a single item, None for full plan
+            status: Status to set for the todo item
+        """
+        try:
+            from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+            import uuid
+            import time
+
+            todo_list = self.storage.get_todo_list()
+            if not todo_list:
+                return
+
+            # Create plan_update action
+            plan_update_id = f"plan_update_{uuid.uuid4().hex[:8]}"
+            plan_update_action = ActionHistory(
+                action_id=plan_update_id,
+                role=ActionRole.SYSTEM,  # Use SYSTEM role for internal events
+                messages=f"Plan status update: {todo_id or 'full_plan'} -> {status or 'current'}",
+                action_type="plan_update",
+                input={"source": "server_executor", "todo_id": todo_id, "status": status},
+                output={"todo_list": todo_list.model_dump()},
+                status=ActionStatus.SUCCESS,
+                start_time=time.time()
+            )
+
+            # Add to action history manager
+            if self.action_history_manager:
+                self.action_history_manager.add_action(plan_update_action)
+
+            # Emit to queue if available
+            if self.emit_queue is not None:
+                try:
+                    self.emit_queue.put_nowait(plan_update_action)
+                    logger.debug(f"Emitted plan_update event for todo {todo_id}")
+                except Exception as e:
+                    logger.debug(f"Failed to emit plan_update event: {e}")
+
+        except Exception as e:
+            logger.error(f"Failed to emit plan_update event: {e}")
 
     def _is_pending_update(self, context) -> bool:
         """
