@@ -9,6 +9,8 @@ Event converter for mapping ActionHistory to DeepResearchEvent format.
 import asyncio
 import json
 import uuid
+import hashlib
+from collections import deque
 from typing import AsyncGenerator, Dict, List, Any, Optional
 from datetime import datetime
 
@@ -28,6 +30,14 @@ class DeepResearchEventConverter:
         self.plan_id = str(uuid.uuid4())
         self.tool_call_map: Dict[str, str] = {}  # action_id -> tool_call_id
         self.logger = get_logger(__name__)
+        # small rolling cache to deduplicate near-identical assistant messages
+        self._recent_assistant_hashes: "deque[str]" = deque(maxlen=50)
+
+    def _hash_text(self, s: str) -> str:
+        try:
+            return hashlib.sha1(s.strip().encode("utf-8")).hexdigest()
+        except Exception:
+            return ""
 
     def _extract_plan_from_output(self, output: Any) -> Dict[str, Any]:
         """
@@ -290,7 +300,17 @@ class DeepResearchEventConverter:
             # For general assistant messages (thinking, planning, etc.), planId should be None
             chat_plan_id = todo_id if todo_id else None
 
-            if action.action_type in ["llm_generation", "message", "thinking", "raw_stream", "response"]:
+            # Emit streaming token chunks ("raw_stream") always.
+            # Emit intermediate "message" or "thinking" actions only when explicitly flagged
+            # by the producer via an `emit_chat` boolean in action.output or action.input.
+            emit_flag = False
+            if action.output and isinstance(action.output, dict):
+                emit_flag = bool(action.output.get("emit_chat"))
+            if not emit_flag and action.input and isinstance(action.input, dict):
+                emit_flag = bool(action.input.get("emit_chat"))
+
+            # Only allow raw_stream unconditionally; allow message/thinking when flagged.
+            if action.action_type == "raw_stream" or (action.action_type in ("message", "thinking") and emit_flag):
                 content = ""
                 if action.output and isinstance(action.output, dict):
                     content = (
@@ -301,6 +321,13 @@ class DeepResearchEventConverter:
                     )
                 # Only send chat events if they have actual content or are important messages
                 if content and content.strip():
+                    # dedupe near-identical assistant messages
+                    h = self._hash_text(content)
+                    if h and h in self._recent_assistant_hashes:
+                        # skip duplicate message
+                        return []
+                    if h:
+                        self._recent_assistant_hashes.append(h)
                     events.append(ChatEvent(
                         id=event_id,
                         planId=chat_plan_id,
@@ -314,6 +341,11 @@ class DeepResearchEventConverter:
                     content = action.output.get("response", "") or action.output.get("content", "")
                 # Always send chat_response events as they are final responses
                 if content or action.output:
+                    h = self._hash_text(content or str(action.output))
+                    if h and h in self._recent_assistant_hashes:
+                        return []
+                    if h:
+                        self._recent_assistant_hashes.append(h)
                     events.append(ChatEvent(
                         id=event_id,
                         planId=chat_plan_id,

@@ -274,8 +274,11 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 input_data={"prompt": enhanced_message, "system": system_instruction},
                 status=ActionStatus.PROCESSING,
             )
-            action_history_manager.add_action(assistant_action)
-            yield assistant_action
+            # Do NOT add the interim assistant generation action to action history or emit it.
+            # We keep a local reference so we can update it later if needed, but avoid persisting
+            # or emitting interim LLM-generated actions as final ChatEvents to prevent duplicates.
+            # (Final response will be produced as a single `chat_response` action below.)
+            _assistant_action_local = assistant_action
 
             # Determine execution mode and start unified recursive execution
             execution_mode = "plan" if is_plan_mode and self.plan_hooks else "normal"

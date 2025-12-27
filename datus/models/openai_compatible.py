@@ -40,7 +40,7 @@ try:
 
     # Modify the model field annotation to accept both list and None
     if hasattr(ResponseTextDeltaEvent, "__annotations__") and "logprobs" in ResponseTextDeltaEvent.__annotations__:
-            # Make logprobs accept list or None
+        # Make logprobs accept list or None
         ResponseTextDeltaEvent.__annotations__["logprobs"] = Union[list, None]
         # Rebuild the pydantic model with new annotations
         ResponseTextDeltaEvent.model_rebuild(force=True)
@@ -56,9 +56,9 @@ def classify_openai_compatible_error(error: Exception) -> tuple[ErrorCode, bool]
     error_msg = str(error).lower()
 
     if isinstance(error, APIError):
-            # Handle specific HTTP status codes and error types
+        # Handle specific HTTP status codes and error types
         if any(indicator in error_msg for indicator in ["401", "unauthorized", "authentication"]):
-                return ErrorCode.MODEL_AUTHENTICATION_ERROR, False
+            return ErrorCode.MODEL_AUTHENTICATION_ERROR, False
         elif any(indicator in error_msg for indicator in ["403", "forbidden", "permission"]):
             return ErrorCode.MODEL_PERMISSION_ERROR, False
         elif any(indicator in error_msg for indicator in ["404", "not found"]):
@@ -67,7 +67,7 @@ def classify_openai_compatible_error(error: Exception) -> tuple[ErrorCode, bool]
             return ErrorCode.MODEL_REQUEST_TOO_LARGE, False
         elif any(indicator in error_msg for indicator in ["429", "rate limit", "quota", "billing"]):
             if any(indicator in error_msg for indicator in ["quota", "billing"]):
-                    return ErrorCode.MODEL_QUOTA_EXCEEDED, False
+                return ErrorCode.MODEL_QUOTA_EXCEEDED, False
             else:
                 return ErrorCode.MODEL_RATE_LIMIT, True
         elif any(indicator in error_msg for indicator in ["500", "internal", "server error"]):
@@ -78,13 +78,13 @@ def classify_openai_compatible_error(error: Exception) -> tuple[ErrorCode, bool]
             return ErrorCode.MODEL_INVALID_RESPONSE, False
 
     if isinstance(error, RateLimitError):
-            return ErrorCode.MODEL_RATE_LIMIT, True
+        return ErrorCode.MODEL_RATE_LIMIT, True
 
     if isinstance(error, APITimeoutError):
-            return ErrorCode.MODEL_TIMEOUT_ERROR, True
+        return ErrorCode.MODEL_TIMEOUT_ERROR, True
 
     if isinstance(error, APIConnectionError):
-            return ErrorCode.MODEL_CONNECTION_ERROR, True
+        return ErrorCode.MODEL_CONNECTION_ERROR, True
 
     # Default to general request failure
     return ErrorCode.MODEL_REQUEST_FAILED, False
@@ -139,9 +139,9 @@ class OpenAICompatibleModel(LLMBaseModel):
         class CustomJSONEncoder(json.JSONEncoder):
             def default(self, obj):
                 if isinstance(obj, AnyUrl):
-                        return str(obj)
+                    return str(obj)
                 if isinstance(obj, (date, datetime)):
-                        return obj.isoformat()
+                    return obj.isoformat()
                 return super().default(obj)
 
         json._default_encoder = CustomJSONEncoder()
@@ -247,22 +247,22 @@ class OpenAICompatibleModel(LLMBaseModel):
 
             # Add temperature and top_p only if explicitly provided
             if "temperature" in kwargs:
-                    params["temperature"] = kwargs["temperature"]
+                params["temperature"] = kwargs["temperature"]
             elif not hasattr(self, "_uses_completion_tokens_parameter") or not self._uses_completion_tokens_parameter():
                 # Add default temperature only for non-reasoning models
                 params["temperature"] = 0.7
 
             if "top_p" in kwargs:
-                    params["top_p"] = kwargs["top_p"]
+                params["top_p"] = kwargs["top_p"]
             elif not hasattr(self, "_uses_completion_tokens_parameter") or not self._uses_completion_tokens_parameter():
                 # Add default top_p only for non-reasoning models
                 params["top_p"] = 1.0
 
             # Handle both max_tokens and max_completion_tokens parameters (only if explicitly provided)
             if "max_tokens" in kwargs:
-                    params["max_tokens"] = kwargs["max_tokens"]
+                params["max_tokens"] = kwargs["max_tokens"]
             if "max_completion_tokens" in kwargs:
-                    params["max_completion_tokens"] = kwargs["max_completion_tokens"]
+                params["max_completion_tokens"] = kwargs["max_completion_tokens"]
 
             # Filter out handled parameters from remaining kwargs
             excluded_params = ["temperature", "top_p", "max_tokens", "max_completion_tokens"]
@@ -270,7 +270,7 @@ class OpenAICompatibleModel(LLMBaseModel):
 
             # Convert prompt to messages format
             if isinstance(prompt, list):
-                    messages = prompt
+                messages = prompt
             else:
                 messages = [{"role": "user", "content": str(prompt)}]
 
@@ -281,17 +281,17 @@ class OpenAICompatibleModel(LLMBaseModel):
             # Handle reasoning content for reasoning models (DeepSeek R1, OpenAI O-series)
             reasoning_content = None
             if enable_thinking:
-                    if hasattr(message, "reasoning_content") and message.reasoning_content:
-                        reasoning_content = message.reasoning_content
+                if hasattr(message, "reasoning_content") and message.reasoning_content:
+                    reasoning_content = message.reasoning_content
                     # If main content is empty but reasoning_content exists, use reasoning_content
                     if not content or content.strip() == "":
-                            content = reasoning_content + "\n" + content
+                        content = reasoning_content + "\n" + content
                     logger.debug(f"Found reasoning_content: {reasoning_content[:100]}...")
 
             final_content = content or ""
 
             if hasattr(self, "_save_llm_trace"):
-                    self._save_llm_trace(messages, final_content, reasoning_content)
+                self._save_llm_trace(messages, final_content, reasoning_content)
 
             # Extract usage information for LangSmith tracking
             usage_info = {}
@@ -318,7 +318,7 @@ class OpenAICompatibleModel(LLMBaseModel):
 
         # Return just the content for backward compatibility, but LangSmith will capture the full result
         if isinstance(result, dict):
-                return result.get("content", "")
+            return result.get("content", "")
         return result
 
     def generate_with_json_output(self, prompt: Any, **kwargs) -> Dict:
@@ -439,7 +439,7 @@ class OpenAICompatibleModel(LLMBaseModel):
             ActionHistory objects for streaming updates
         """
         if action_history_manager is None:
-                action_history_manager = ActionHistoryManager()
+            action_history_manager = ActionHistoryManager()
 
         async for action in self._generate_with_tools_stream_internal(
             prompt,
@@ -491,15 +491,15 @@ class OpenAICompatibleModel(LLMBaseModel):
 
                 # Only add mcp_servers if we have connected servers
                 if connected_servers:
-                        agent_kwargs["mcp_servers"] = list(connected_servers.values())
+                    agent_kwargs["mcp_servers"] = list(connected_servers.values())
 
                 # Only add tools if we have them
                 if tools:
-                        agent_kwargs["tools"] = tools
+                    agent_kwargs["tools"] = tools
 
                 # Add hooks to agent if provided (AgentHooks)
                 if hooks:
-                        agent_kwargs["hooks"] = hooks
+                    agent_kwargs["hooks"] = hooks
 
                 agent = Agent(**agent_kwargs)
                 try:
@@ -510,10 +510,10 @@ class OpenAICompatibleModel(LLMBaseModel):
 
                 # Save LLM trace if method exists (for models that support it like DeepSeekModel)
                 if hasattr(self, "_save_llm_trace"):
-                        # For tools calls, we need to extract messages from the result
+                    # For tools calls, we need to extract messages from the result
                     messages = [{"role": "user", "content": prompt}]
                     if instruction:
-                            messages.insert(0, {"role": "system", "content": instruction})
+                        messages.insert(0, {"role": "system", "content": instruction})
 
                     # Get complete conversation history including tool calls
                     conversation_history = None
@@ -528,43 +528,43 @@ class OpenAICompatibleModel(LLMBaseModel):
                 # Extract usage information from the correct location: result.context_wrapper.usage
                 usage_info = {}
                 if hasattr(result, "context_wrapper") and hasattr(result.context_wrapper, "usage"):
-                        usage = result.context_wrapper.usage
+                    usage = result.context_wrapper.usage
 
-                        # Extract basic token counts
-                        input_tokens = getattr(usage, "input_tokens", 0)
-                        output_tokens = getattr(usage, "output_tokens", 0)
-                        total_tokens = getattr(usage, "total_tokens", 0)
+                    # Extract basic token counts
+                    input_tokens = getattr(usage, "input_tokens", 0)
+                    output_tokens = getattr(usage, "output_tokens", 0)
+                    total_tokens = getattr(usage, "total_tokens", 0)
 
-                        # Extract cache information
-                        cached_tokens = 0
-                        if hasattr(usage, "input_tokens_details") and usage.input_tokens_details:
-                            cached_tokens = getattr(usage.input_tokens_details, "cached_tokens", 0)
+                    # Extract cache information
+                    cached_tokens = 0
+                    if hasattr(usage, "input_tokens_details") and usage.input_tokens_details:
+                        cached_tokens = getattr(usage.input_tokens_details, "cached_tokens", 0)
 
-                        # Extract reasoning tokens (for reasoning models like DeepSeek R1)
-                        reasoning_tokens = 0
-                        if hasattr(usage, "output_tokens_details") and usage.output_tokens_details:
-                            reasoning_tokens = getattr(usage.output_tokens_details, "reasoning_tokens", 0)
+                    # Extract reasoning tokens (for reasoning models like DeepSeek R1)
+                    reasoning_tokens = 0
+                    if hasattr(usage, "output_tokens_details") and usage.output_tokens_details:
+                        reasoning_tokens = getattr(usage.output_tokens_details, "reasoning_tokens", 0)
 
-                        # Calculate cache hit rate
-                        cache_hit_rate = round(cached_tokens / input_tokens, 3) if input_tokens > 0 else 0
+                    # Calculate cache hit rate
+                    cache_hit_rate = round(cached_tokens / input_tokens, 3) if input_tokens > 0 else 0
 
-                        # Calculate context usage ratio
-                        context_usage_ratio = 0
-                        max_context = self.context_length()
-                        if max_context and total_tokens > 0:
-                            context_usage_ratio = round(total_tokens / max_context, 3)
+                    # Calculate context usage ratio
+                    context_usage_ratio = 0
+                    max_context = self.context_length()
+                    if max_context and total_tokens > 0:
+                        context_usage_ratio = round(total_tokens / max_context, 3)
 
-                        usage_info = {
-                            "requests": getattr(usage, "requests", 0),
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "total_tokens": total_tokens,
-                            "cached_tokens": cached_tokens,
-                            "reasoning_tokens": reasoning_tokens,
-                            "cache_hit_rate": cache_hit_rate,
-                            "context_usage_ratio": context_usage_ratio,
-                        }
-                        logger.debug(f"Agent execution usage: {usage_info}")
+                    usage_info = {
+                        "requests": getattr(usage, "requests", 0),
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens,
+                        "cached_tokens": cached_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                        "cache_hit_rate": cache_hit_rate,
+                        "context_usage_ratio": context_usage_ratio,
+                    }
+                    logger.debug(f"Agent execution usage: {usage_info}")
                 else:
                     logger.warning("No usage information found in result.context_wrapper")
 
@@ -626,15 +626,15 @@ class OpenAICompatibleModel(LLMBaseModel):
 
                     # Only add mcp_servers if we have connected servers
                     if connected_servers:
-                            agent_kwargs["mcp_servers"] = list(connected_servers.values())
+                        agent_kwargs["mcp_servers"] = list(connected_servers.values())
 
                     # Only add tools if we have them
                     if tools:
-                            agent_kwargs["tools"] = tools
+                        agent_kwargs["tools"] = tools
 
                     # Add hooks to agent if provided (AgentHooks)
                     if hooks:
-                            agent_kwargs["hooks"] = hooks
+                        agent_kwargs["hooks"] = hooks
 
                     agent = Agent(**agent_kwargs)
 
@@ -672,99 +672,99 @@ class OpenAICompatibleModel(LLMBaseModel):
                             if not (hasattr(event, "item") and hasattr(event.item, "type")):
                                 continue
 
-                        item_type = event.item.type
+                            item_type = event.item.type
 
-                        # Handle tool call start
-                        if item_type == "tool_call_item":
-                            raw_item = getattr(event.item, "raw_item", None)
-                            if raw_item:
-                                tool_name = getattr(raw_item, "name", None)
-                                if not tool_name:
-                                    logger.warning(
-                                        f"Tool call has no name field: {type(raw_item)}, {dir(raw_item)}"
-                                    )
-                                    tool_name = "unknown"
+                            # Handle tool call start
+                            if item_type == "tool_call_item":
+                                raw_item = getattr(event.item, "raw_item", None)
+                                if raw_item:
+                                    tool_name = getattr(raw_item, "name", None)
+                                    if not tool_name:
+                                        logger.warning(
+                                            f"Tool call has no name field: {type(raw_item)}, {dir(raw_item)}"
+                                        )
+                                        tool_name = "unknown"
 
-                                arguments = getattr(raw_item, "arguments", "{}")
-                                call_id = getattr(raw_item, "call_id", None)
-
-                                # Generate call_id if missing
-                                if not call_id:
-                                    call_id = f"tool_{uuid.uuid4().hex[:8]}"
-                                    logger.warning(f"Tool call missing call_id, generated: {call_id}")
-
-                                # Try to format arguments
-                                try:
-                                    args_dict = json.loads(arguments) if arguments else {}
-                                    args_str = to_str(args_dict)[:80]
-                                except Exception:
-                                    args_str = str(arguments)[:80]
-
-                                # Store tool call info for matching with result
-                                temp_tool_calls[call_id] = {
-                                    "tool_name": tool_name,
-                                    "arguments": arguments,
-                                    "args_display": args_str,
-                                }
-
-                                logger.debug(
-                                    f"Stored tool call: {tool_name} "
-                                    f"(call_id={call_id[:20] if call_id else 'None'}...)"
-                                )
-
-                        # Handle tool call completion
-                        elif item_type == "tool_call_output_item":
-                            raw_item = getattr(event.item, "raw_item", None)
-                            output_content = getattr(event.item, "output", "")
-
-                            # Extract call_id from raw_item
-                            # raw_item can be either a dict or an object
-                            call_id = None
-                            if raw_item:
-                                if isinstance(raw_item, dict):
-                                    call_id = raw_item.get("call_id")
-                                else:
+                                    arguments = getattr(raw_item, "arguments", "{}")
                                     call_id = getattr(raw_item, "call_id", None)
 
-                            logger.debug(
-                                f"🔍 Tool output call_id={call_id}, type={type(output_content)}, "
-                                f"stored={list(temp_tool_calls.keys())}"
-                            )
+                                    # Generate call_id if missing
+                                    if not call_id:
+                                        call_id = f"tool_{uuid.uuid4().hex[:8]}"
+                                        logger.warning(f"Tool call missing call_id, generated: {call_id}")
 
-                            # Try to match with stored tool call
-                            if call_id and call_id in temp_tool_calls:
+                                    # Try to format arguments
+                                    try:
+                                        args_dict = json.loads(arguments) if arguments else {}
+                                        args_str = to_str(args_dict)[:80]
+                                    except Exception:
+                                        args_str = str(arguments)[:80]
+
+                                    # Store tool call info for matching with result
+                                    temp_tool_calls[call_id] = {
+                                        "tool_name": tool_name,
+                                        "arguments": arguments,
+                                        "args_display": args_str,
+                                    }
+
+                                    logger.debug(
+                                        f"Stored tool call: {tool_name} "
+                                        f"(call_id={call_id[:20] if call_id else 'None'}...)"
+                                    )
+
+                            # Handle tool call completion
+                            elif item_type == "tool_call_output_item":
+                                raw_item = getattr(event.item, "raw_item", None)
+                                output_content = getattr(event.item, "output", "")
+
+                                # Extract call_id from raw_item
+                                # raw_item can be either a dict or an object
+                                call_id = None
+                                if raw_item:
+                                    if isinstance(raw_item, dict):
+                                        call_id = raw_item.get("call_id")
+                                    else:
+                                        call_id = getattr(raw_item, "call_id", None)
+
+                                logger.debug(
+                                    f"🔍 Tool output call_id={call_id}, type={type(output_content)}, "
+                                    f"stored={list(temp_tool_calls.keys())}"
+                                )
+
+                                # Try to match with stored tool call
+                                if call_id and call_id in temp_tool_calls:
                                     # Found matching tool call - simplified for debugging
                                 pass
-                            else:
+                                    else:
                                 # No matching tool call found - simplified for debugging
                                 pass
 
-                        # Handle thinking messages
-                        elif item_type == "message_output_item":
-                            raw_item = getattr(event.item, "raw_item", None)
-                            if raw_item and hasattr(raw_item, "content"):
-                                content = raw_item.content
-                                if isinstance(content, list) and content:
-                                    text_content = (
-                                        content[0].text if hasattr(content[0], "text") else str(content[0])
-                                    )
-                                else:
-                                    text_content = str(content)
+                            # Handle thinking messages
+                            elif item_type == "message_output_item":
+                                raw_item = getattr(event.item, "raw_item", None)
+                                if raw_item and hasattr(raw_item, "content"):
+                                    content = raw_item.content
+                                    if isinstance(content, list) and content:
+                                        text_content = (
+                                            content[0].text if hasattr(content[0], "text") else str(content[0])
+                                        )
+                                    else:
+                                        text_content = str(content)
 
-                                if text_content and len(text_content.strip()) > 0:
-                                    # Create thinking/final output action and yield it
-                                    # External AgenticNode will parse raw_output for SQL extraction
-                                    thinking_action = ActionHistory(
-                                        action_id=f"assistant_{uuid.uuid4().hex[:8]}",
-                                        role=ActionRole.ASSISTANT,
-                                        messages=f"Thinking: {text_content[:200]}...",
-                                        action_type="response",
-                                        input={},
-                                        output={"raw_output": text_content},
-                                        status=ActionStatus.SUCCESS,
-                                    )
-                                    action_history_manager.add_action(thinking_action)
-                                    yield thinking_action
+                                    if text_content and len(text_content.strip()) > 0:
+                                        # Create thinking/final output action and yield it
+                                        # External AgenticNode will parse raw_output for SQL extraction
+                                        thinking_action = ActionHistory(
+                                            action_id=f"assistant_{uuid.uuid4().hex[:8]}",
+                                            role=ActionRole.ASSISTANT,
+                                            messages=f"Thinking: {text_content[:200]}...",
+                                            action_type="response",
+                                            input={},
+                                            output={"raw_output": text_content},
+                                            status=ActionStatus.SUCCESS,
+                                        )
+                                        action_history_manager.add_action(thinking_action)
+                                        yield thinking_action
 
                     except asyncio.CancelledError:
                         logger.info("Streaming loop was cancelled, closing HTTP client immediately")
@@ -774,10 +774,10 @@ class OpenAICompatibleModel(LLMBaseModel):
 
                     # Save LLM trace if method exists
                     if hasattr(self, "_save_llm_trace"):
-                            # For tools calls, we need to extract messages from the result
+                        # For tools calls, we need to extract messages from the result
                         messages = [{"role": "user", "content": prompt}]
                         if instruction:
-                                messages.insert(0, {"role": "system", "content": instruction})
+                            messages.insert(0, {"role": "system", "content": instruction})
 
                         # Get complete conversation history including tool calls
                         conversation_history = None
@@ -829,27 +829,27 @@ class OpenAICompatibleModel(LLMBaseModel):
                 raise
             except (httpx.RemoteProtocolError, APIConnectionError, APITimeoutError) as e:
                 if attempt < max_retries - 1:
-                        logger.warning(
+                    logger.warning(
                         f"Stream connection error (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {e}. "
                         f"Retrying in {retry_delay}s..."
                     )
 
-                        # Yield a retry notification action to inform user
-                        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+                    # Yield a retry notification action to inform user
+                    from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
-                        retry_action = ActionHistory.create_action(
-                            role=ActionRole.ASSISTANT,
-                            action_type="retry_notification",
-                            messages=f"Connection interrupted, retrying ({attempt + 2}/{max_retries})...",
-                            input_data={"error": str(e), "attempt": attempt + 1},
-                            status=ActionStatus.PROCESSING,
-                        )
-                        action_history_manager.add_action(retry_action)
-                        processed_action_ids.add(retry_action.action_id)
-                        yield retry_action
+                    retry_action = ActionHistory.create_action(
+                        role=ActionRole.ASSISTANT,
+                        action_type="retry_notification",
+                        messages=f"Connection interrupted, retrying ({attempt + 2}/{max_retries})...",
+                        input_data={"error": str(e), "attempt": attempt + 1},
+                        status=ActionStatus.PROCESSING,
+                    )
+                    action_history_manager.add_action(retry_action)
+                    processed_action_ids.add(retry_action.action_id)
+                    yield retry_action
 
-                        await asyncio.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
                 else:
                     # All retries exhausted
                     logger.exception(f"Stream failed after {max_retries} attempts: {type(e).__name__}: {e}")
@@ -916,7 +916,7 @@ class OpenAICompatibleModel(LLMBaseModel):
         try:
             actions = action_history_manager.get_actions()
             if not actions:
-                    return
+                return
 
             total_tokens = usage_info.get("total_tokens", 0)
             assistant_actions = [a for a in actions if a.role == "assistant"]
@@ -935,7 +935,7 @@ class OpenAICompatibleModel(LLMBaseModel):
     def _add_usage_to_action(self, action: ActionHistory, usage_info: dict) -> None:
         """Add usage information to an action's output."""
         if action.output is None:
-                action.output = {}
+            action.output = {}
         elif not isinstance(action.output, dict):
             action.output = {"raw_output": action.output}
 
@@ -999,7 +999,7 @@ class OpenAICompatibleModel(LLMBaseModel):
             Formatted summary string
         """
         if not content:
-                return "Empty result"
+            return "Empty result"
 
         try:
             # Try to parse as JSON and delegate to _format_tool_result_from_dict
@@ -1007,7 +1007,7 @@ class OpenAICompatibleModel(LLMBaseModel):
 
             data = json.loads(content)
             if isinstance(data, dict):
-                    return self._format_tool_result_from_dict(data, tool_name)
+                return self._format_tool_result_from_dict(data, tool_name)
             elif isinstance(data, list):
                 return f"{len(data)} items"
             else:
@@ -1054,12 +1054,12 @@ class OpenAICompatibleModel(LLMBaseModel):
         """
         # First try exact match
         if self.model_name in self.model_specs:
-                return self.model_specs[self.model_name]["max_tokens"]
+            return self.model_specs[self.model_name]["max_tokens"]
 
         # Try prefix matching for models like gpt-4o-mini, kimi-k2-0711-preview
         for spec_model in self.model_specs:
             if self.model_name.startswith(spec_model):
-                    return self.model_specs[spec_model]["max_tokens"]
+                return self.model_specs[spec_model]["max_tokens"]
 
         return None
 
@@ -1072,12 +1072,12 @@ class OpenAICompatibleModel(LLMBaseModel):
         """
         # First try exact match
         if self.model_name in self.model_specs:
-                return self.model_specs[self.model_name]["context_length"]
+            return self.model_specs[self.model_name]["context_length"]
 
         # Try prefix matching for models like gpt-4o-mini, kimi-k2-0711-preview
         for spec_model in self.model_specs:
             if self.model_name.startswith(spec_model):
-                    return self.model_specs[spec_model]["context_length"]
+                return self.model_specs[spec_model]["context_length"]
 
         return None
 
@@ -1097,7 +1097,7 @@ class OpenAICompatibleModel(LLMBaseModel):
             reasoning_content: Optional reasoning content for reasoning models
         """
         if not self.model_config.save_llm_trace:
-                return
+            return
 
         try:
             # Get workflow and node context from current execution

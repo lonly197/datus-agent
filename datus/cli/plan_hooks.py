@@ -6,6 +6,7 @@
 
 import asyncio
 import time
+from datetime import datetime
 from typing import Optional
 
 from agents import SQLiteSession
@@ -502,6 +503,9 @@ class PlanModeHooks(AgentHooks):
                         pass
                     continue
 
+                # Define call_id for this execution step
+                call_id = f"server_call_{uuid.uuid4().hex[:8]}"
+
                 # Execute mapped tools for the todo based on simple heuristics.
                 content_lower = (item.content or "").lower()
                 executed_any = False
@@ -652,7 +656,7 @@ class PlanModeHooks(AgentHooks):
             import uuid
             import time
 
-            todo_list = self.storage.get_todo_list()
+            todo_list = self.todo_storage.get_todo_list()
             if not todo_list:
                 return
 
@@ -666,7 +670,7 @@ class PlanModeHooks(AgentHooks):
                 input={"source": "server_executor", "todo_id": todo_id, "status": status},
                 output={"todo_list": todo_list.model_dump()},
                 status=ActionStatus.SUCCESS,
-                start_time=time.time()
+                start_time=datetime.now()
             )
 
             # Add to action history manager
