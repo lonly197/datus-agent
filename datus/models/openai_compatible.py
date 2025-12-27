@@ -643,6 +643,11 @@ class OpenAICompatibleModel(LLMBaseModel):
                     except MaxTurnsExceeded as e:
                         logger.error(f"Max turns exceeded in streaming: {str(e)}")
                         raise DatusException(ErrorCode.MODEL_MAX_TURNS_EXCEEDED, message_args={"max_turns": max_turns})
+                    except asyncio.CancelledError:
+                        logger.info("Runner.run_streamed was cancelled, closing HTTP client immediately")
+                        # Close client immediately to cancel any ongoing HTTP requests
+                        await async_client.close()
+                        raise
 
                     # Streaming phase: yield progress actions in real-time
                     # After streaming completes, generate final summary report
@@ -654,7 +659,8 @@ class OpenAICompatibleModel(LLMBaseModel):
                     # Track tool calls and results for immediate feedback
                     temp_tool_calls = {}  # {call_id: ActionHistory}
 
-                    while not result.is_complete:
+                    try:
+                        while not result.is_complete:
                         # Check if cancelled before processing next event batch
                         if asyncio.current_task().cancelled():
                             logger.info("Streaming operation was cancelled")
@@ -828,6 +834,12 @@ class OpenAICompatibleModel(LLMBaseModel):
                                         action_history_manager.add_action(thinking_action)
                                         yield thinking_action
 
+                    except asyncio.CancelledError:
+                        logger.info("Streaming loop was cancelled, closing HTTP client immediately")
+                        # Close client immediately to cancel any ongoing HTTP requests
+                        await async_client.close()
+                        raise
+
                     # Save LLM trace if method exists
                     if hasattr(self, "_save_llm_trace"):
                         # For tools calls, we need to extract messages from the result
@@ -880,6 +892,9 @@ class OpenAICompatibleModel(LLMBaseModel):
                 # If we successfully complete, break out of retry loop
                 break
 
+            except asyncio.CancelledError:
+                logger.info("Streaming operation was cancelled during retry loop")
+                raise
             except (httpx.RemoteProtocolError, APIConnectionError, APITimeoutError) as e:
                 if attempt < max_retries - 1:
                     logger.warning(
