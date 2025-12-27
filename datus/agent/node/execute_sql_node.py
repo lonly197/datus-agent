@@ -111,6 +111,7 @@ class ExecuteSQLNode(Node):
                     future = ex.submit(run_execute)
                     try:
                         result = future.result(timeout=timeout)
+                        logger.debug(f"SQL execution result: {result}")
                         return result
                     except FuturesTimeoutError:
                         # Attempt best-effort cancellation/cleanup

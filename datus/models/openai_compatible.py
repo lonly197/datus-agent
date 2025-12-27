@@ -112,7 +112,7 @@ class OpenAICompatibleModel(LLMBaseModel):
         self.default_headers = self.model_config.default_headers
 
         # Initialize clients
-        self.client = create_openai_client(OpenAI, self.api_key, self.base_url, default_headers=self.default_headers)
+        self.client = create_openai_client(OpenAI, self.api_key, self.base_url, default_headers=self.default_headers, timeout=300.0)
         self.async_client = create_openai_client(AsyncOpenAI, self.api_key, self.base_url, default_headers=self.default_headers, timeout=300.0)
 
         # Context for tracing ToDo: replace it with Context object

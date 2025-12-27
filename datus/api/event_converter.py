@@ -12,6 +12,7 @@ import uuid
 from typing import AsyncGenerator, Dict, List, Any, Optional
 from datetime import datetime
 
+from datus.utils.loggings import get_logger
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from .models import (
     DeepResearchEvent, DeepResearchEventType, BaseEvent,
@@ -26,6 +27,7 @@ class DeepResearchEventConverter:
     def __init__(self):
         self.plan_id = str(uuid.uuid4())
         self.tool_call_map: Dict[str, str] = {}  # action_id -> tool_call_id
+        self.logger = get_logger(__name__)
 
     def _extract_plan_from_output(self, output: Any) -> Dict[str, Any]:
         """
@@ -208,10 +210,11 @@ class DeepResearchEventConverter:
 
     def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
         """Convert ActionHistory to DeepResearchEvent list."""
+        """Convert ActionHistory to DeepResearchEvent list."""
         
         timestamp = int(action.start_time.timestamp() * 1000)
         event_id = f"{action.action_id}_{seq_num}"
-        events = []
+        events: List[DeepResearchEvent] = []
         
         # 1. Handle chat/assistant messages
         if action.role == ActionRole.ASSISTANT:
@@ -428,5 +431,5 @@ class DeepResearchEventConverter:
                     if asyncio.current_task().cancelled():
                         break
         except asyncio.CancelledError:
-            logger.info("Event conversion stream was cancelled")
+            self.logger.info("Event conversion stream was cancelled")
             raise

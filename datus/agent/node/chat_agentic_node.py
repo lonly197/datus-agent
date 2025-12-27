@@ -8,6 +8,7 @@ ChatAgenticNode implementation for flexible CLI chat interactions.
 This module provides a concrete implementation of GenSQLAgenticNode specifically
 designed for chat interactions with database and filesystem tool support.
 """
+import asyncio
 from typing import AsyncGenerator, Optional, override
 
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
