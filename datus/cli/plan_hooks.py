@@ -6,6 +6,7 @@
 
 import asyncio
 import time
+from typing import Optional
 
 from agents import SQLiteSession
 from agents.lifecycle import AgentHooks
