@@ -734,10 +734,10 @@ class OpenAICompatibleModel(LLMBaseModel):
                                 # Try to match with stored tool call
                                 if call_id and call_id in temp_tool_calls:
                                     # Found matching tool call - simplified for debugging
-                                pass
-                                    else:
-                                # No matching tool call found - simplified for debugging
-                                pass
+                                    pass
+                                else:
+                                    # No matching tool call found - simplified for debugging
+                                    pass
 
                             # Handle thinking messages
                             elif item_type == "message_output_item":
