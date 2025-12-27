@@ -162,7 +162,8 @@ class Agent:
                 yield action
 
                 # 检查是否被取消
-                if asyncio.current_task().cancelled():
+                current_task = asyncio.current_task()
+                if current_task and current_task.cancelled():
                     break
         except asyncio.CancelledError:
             logger.info("Agent stream execution was cancelled")

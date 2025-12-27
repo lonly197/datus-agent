@@ -274,7 +274,8 @@ class WorkflowRunner:
 
             while self.workflow and not self.workflow.is_complete() and step_count < max_steps:
                 # 检查是否被取消
-                if asyncio.current_task().cancelled():
+                current_task = asyncio.current_task()
+                if current_task and current_task.cancelled():
                     logger.info("Workflow execution was cancelled")
                     break
 

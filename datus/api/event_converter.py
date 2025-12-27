@@ -494,7 +494,8 @@ class DeepResearchEventConverter:
                     yield f"data: {event_json}\n\n"
 
                     # 检查是否被取消
-                    if asyncio.current_task().cancelled():
+                    current_task = asyncio.current_task()
+                    if current_task and current_task.cancelled():
                         break
         except asyncio.CancelledError:
             self.logger.info("Event conversion stream was cancelled")
