@@ -332,8 +332,8 @@ class WorkflowRunner:
                     evaluation = evaluate_result(current_node, self.workflow)
                     logger.debug(f"Evaluation result: {evaluation}")
 
-                    if evaluation.get("status") == "success":
-                        self.workflow.advance_node()
+                    if evaluation.get("success"):
+                        self.workflow.advance_to_next_node()
                     else:
                         logger.warning(f"Node evaluation failed: {evaluation}")
                         break

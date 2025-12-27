@@ -195,6 +195,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
         user_input = self.input
 
         is_plan_mode = getattr(user_input, "plan_mode", False)
+        # emit_queue used to stream ActionHistory produced by PlanModeHooks back to node stream
+        emit_queue: "asyncio.Queue[ActionHistory]" = asyncio.Queue()
+
         if is_plan_mode:
             self.plan_mode_active = True
 
@@ -216,6 +219,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 auto_mode=auto_mode,
                 action_history_manager=action_history_manager,
                 agent_config=self.agent_config,
+                emit_queue=emit_queue,
             )
 
         # Create initial action
@@ -285,6 +289,14 @@ class ChatAgenticNode(GenSQLAgenticNode):
             ):
                 yield stream_action
 
+                # Drain any actions emitted by hooks/executor into the node stream
+                try:
+                    while True:
+                        qaction = emit_queue.get_nowait()
+                        yield qaction
+                except asyncio.QueueEmpty:
+                    pass
+
                 # Collect response content from successful actions
                 if stream_action.status == ActionStatus.SUCCESS and stream_action.output:
                     if isinstance(stream_action.output, dict):
@@ -301,6 +313,23 @@ class ChatAgenticNode(GenSQLAgenticNode):
                             or raw_output_value
                             or response_content
                         )
+
+            # After model stream completes, drain remaining emitted actions to ensure nothing is left
+            try:
+                while True:
+                    # Use timeout to avoid infinite blocking, check for cancellation
+                    try:
+                        qaction = await asyncio.wait_for(emit_queue.get(), timeout=0.1)
+                        yield qaction
+                    except asyncio.TimeoutError:
+                        # No more items in queue within timeout, break
+                        break
+                    except asyncio.CancelledError:
+                        # Task was cancelled, stop draining
+                        break
+            except Exception:
+                # queue empty or cancelled
+                pass
 
             # If we still don't have response_content, check the last successful output
             if not response_content and last_successful_output:

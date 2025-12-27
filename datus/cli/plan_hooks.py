@@ -31,7 +31,7 @@ class UserCancelledException(Exception):
 class PlanModeHooks(AgentHooks):
     """Plan Mode hooks for workflow management"""
 
-    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False, action_history_manager=None, agent_config=None):
+    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False, action_history_manager=None, agent_config=None, emit_queue: Optional[asyncio.Queue] = None):
         self.console = console
         self.session = session
         self.auto_mode = auto_mode
@@ -47,6 +47,8 @@ class PlanModeHooks(AgentHooks):
         self.action_history_manager = action_history_manager
         # Optional agent_config to instantiate DB/Filesystem tools when executing todos
         self.agent_config = agent_config
+        # Optional emit queue to stream ActionHistory produced by hooks back to node
+        self.emit_queue = emit_queue
         # Executor task handle
         self._executor_task = None
 
@@ -489,6 +491,12 @@ class PlanModeHooks(AgentHooks):
                 # Add start action to history (will be converted to ToolCallEvent)
                 if self.action_history_manager:
                     self.action_history_manager.add_action(start_action)
+                    # also emit to node stream if emit_queue provided
+                    if self.emit_queue is not None:
+                        try:
+                            self.emit_queue.put_nowait(start_action)
+                        except Exception as e:
+                            logger.debug(f"emit_queue put failed for start_action: {e}")
 
                 # Mark in_progress using plan tool
                 try:
@@ -506,6 +514,11 @@ class PlanModeHooks(AgentHooks):
                     )
                     if self.action_history_manager:
                         self.action_history_manager.add_action(complete_action)
+                        if self.emit_queue is not None:
+                            try:
+                                self.emit_queue.put_nowait(complete_action)
+                            except Exception as e:
+                                logger.debug(f"emit_queue put failed for complete_action: {e}")
                 except Exception as e:
                     logger.error(f"Server executor failed to set in_progress for {item.id}: {e}")
                     fail_action = ActionHistory(
@@ -519,6 +532,11 @@ class PlanModeHooks(AgentHooks):
                     )
                     if self.action_history_manager:
                         self.action_history_manager.add_action(fail_action)
+                        if self.emit_queue is not None:
+                            try:
+                                self.emit_queue.put_nowait(fail_action)
+                            except Exception as e:
+                                logger.debug(f"emit_queue put failed for fail_action: {e}")
                     # mark todo failed in storage
                     try:
                         plan_tool._update_todo_status(item.id, "failed")
@@ -549,6 +567,11 @@ class PlanModeHooks(AgentHooks):
                         )
                         if self.action_history_manager:
                             self.action_history_manager.add_action(complete_action_db)
+                            if self.emit_queue is not None:
+                                try:
+                                    self.emit_queue.put_nowait(complete_action_db)
+                                except Exception as e:
+                                    logger.debug(f"emit_queue put failed for complete_action_db: {e}")
                         executed_any = True
                     except Exception as e:
                         logger.error(f"Server executor db_tool.search_table failed for {item.id}: {e}")
@@ -590,6 +613,11 @@ class PlanModeHooks(AgentHooks):
                             )
                             if self.action_history_manager:
                                 self.action_history_manager.add_action(complete_action_db)
+                                if self.emit_queue is not None:
+                                    try:
+                                        self.emit_queue.put_nowait(complete_action_db)
+                                    except Exception as e:
+                                        logger.debug(f"emit_queue put failed for complete_action_db: {e}")
                             executed_any = True
                     except Exception as e:
                         logger.error(f"Server executor db_tool.read_query failed for {item.id}: {e}")
@@ -624,6 +652,11 @@ class PlanModeHooks(AgentHooks):
                         )
                         if self.action_history_manager:
                             self.action_history_manager.add_action(complete_action_fs)
+                            if self.emit_queue is not None:
+                                try:
+                                    self.emit_queue.put_nowait(complete_action_fs)
+                                except Exception as e:
+                                    logger.debug(f"emit_queue put failed for complete_action_fs: {e}")
                         executed_any = True
                     except Exception as e:
                         logger.error(f"Server executor fs_tool.write_file failed for {item.id}: {e}")
@@ -647,6 +680,11 @@ class PlanModeHooks(AgentHooks):
                     )
                     if self.action_history_manager:
                         self.action_history_manager.add_action(complete_action2)
+                        if self.emit_queue is not None:
+                            try:
+                                self.emit_queue.put_nowait(complete_action2)
+                            except Exception as e:
+                                logger.debug(f"emit_queue put failed for complete_action2: {e}")
                 except Exception as e:
                     logger.error(f"Server executor failed to set completed for {item.id}: {e}")
                     fail_action2 = ActionHistory(
@@ -660,6 +698,11 @@ class PlanModeHooks(AgentHooks):
                     )
                     if self.action_history_manager:
                         self.action_history_manager.add_action(fail_action2)
+                        if self.emit_queue is not None:
+                            try:
+                                self.emit_queue.put_nowait(fail_action2)
+                            except Exception as e:
+                                logger.debug(f"emit_queue put failed for fail_action2: {e}")
 
             logger.info("Server executor finished all pending todos")
         except Exception as e:
