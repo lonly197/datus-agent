@@ -10,10 +10,12 @@ import time
 from agents import SQLiteSession
 from agents.lifecycle import AgentHooks
 from rich.console import Console
-
 from datus.cli.blocking_input_manager import blocking_input_manager
 from datus.cli.execution_state import execution_controller
 from datus.utils.loggings import get_logger
+import json
+import uuid
+from datus.schemas.action_history import ActionRole, ActionStatus, ActionHistory
 
 logger = get_logger(__name__)
 
@@ -29,7 +31,7 @@ class UserCancelledException(Exception):
 class PlanModeHooks(AgentHooks):
     """Plan Mode hooks for workflow management"""
 
-    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False):
+    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False, action_history_manager=None):
         self.console = console
         self.session = session
         self.auto_mode = auto_mode
@@ -41,6 +43,10 @@ class PlanModeHooks(AgentHooks):
         self.replan_feedback = ""
         self._state_transitions = []
         self._plan_generated_pending = False  # Flag to defer plan display until LLM ends
+        # Optional ActionHistoryManager passed from node to allow hooks to add actions
+        self.action_history_manager = action_history_manager
+        # Executor task handle
+        self._executor_task = None
 
     async def on_start(self, context, agent) -> None:
         logger.debug(f"Plan mode start: phase={self.plan_phase}")
@@ -115,6 +121,14 @@ class PlanModeHooks(AgentHooks):
             self.execution_mode = "auto"
             self._transition_state("executing", {"mode": "auto"})
             self.console.print("[green]Auto execution mode (workflow/benchmark context)[/]")
+            # Start server-side executor in auto mode if action_history_manager is available
+            if self.action_history_manager:
+                try:
+                    # schedule executor as background task
+                    self._executor_task = asyncio.create_task(self._run_server_executor())
+                    logger.info("Started server-side plan executor task")
+                except Exception as e:
+                    logger.error(f"Failed to start server-side executor: {e}")
             return
 
         # Interactive mode: ask for user confirmation
@@ -362,6 +376,172 @@ class PlanModeHooks(AgentHooks):
         except (KeyboardInterrupt, EOFError):
             self._transition_state("cancelled", {"reason": "execution_interrupted"})
             self.console.print("\n[yellow]Execution cancelled[/]")
+
+    def _todo_already_executed(self, todo_id: str) -> bool:
+        """Check action history for a completed tool action referencing todo_id."""
+        try:
+            if not self.action_history_manager:
+                return False
+            for a in self.action_history_manager.get_actions():
+                if a.role == "tool" or a.role == ActionRole.TOOL:
+                    # inspect input: may be dict or string
+                    inp = a.input
+                    if isinstance(inp, dict):
+                        # parsed arguments may be nested under 'arguments' as json string
+                        if inp.get("todo_id") == todo_id or inp.get("todoId") == todo_id:
+                            if a.status == ActionStatus.SUCCESS:
+                                return True
+                        args = inp.get("arguments")
+                        if isinstance(args, str):
+                            try:
+                                parsed = json.loads(args)
+                                if isinstance(parsed, dict) and (parsed.get("todo_id") == todo_id or parsed.get("todoId") == todo_id):
+                                    if a.status == ActionStatus.SUCCESS:
+                                        return True
+                            except Exception:
+                                pass
+                    else:
+                        # try parse string input
+                        if isinstance(inp, str):
+                            try:
+                                parsed = json.loads(inp)
+                                if isinstance(parsed, dict) and (parsed.get("todo_id") == todo_id or parsed.get("todoId") == todo_id):
+                                    if a.status == ActionStatus.SUCCESS:
+                                        return True
+                            except Exception:
+                                pass
+                # Also inspect output for updated_item references
+                if a.output and isinstance(a.output, dict):
+                    raw = a.output
+                    # find nested updated_item or todo_list entries
+                    if "raw_output" in raw and isinstance(raw["raw_output"], dict):
+                        ro = raw["raw_output"]
+                        try:
+                            res = ro.get("result", {})
+                            if isinstance(res, dict):
+                                updated = res.get("updated_item") or res.get("updatedItem")
+                                if isinstance(updated, dict) and updated.get("id") == todo_id:
+                                    if a.status == ActionStatus.SUCCESS:
+                                        return True
+                        except Exception:
+                            pass
+            return False
+        except Exception as e:
+            logger.debug(f"Error checking action history for todo execution: {e}")
+            return False
+
+    async def _run_server_executor(self):
+        """
+        Server-side plan executor: sequentially execute pending todos when LLM did not drive tool calls.
+        This is a conservative scaffold: it marks todos in_progress -> executes minimal placeholder work ->
+        marks completed and emits ActionHistory entries so the event_converter will stream proper events.
+        """
+        try:
+            # Small delay to allow any in-flight LLM-driven tool calls to finish
+            await asyncio.sleep(0.5)
+            todo_list = self.todo_storage.get_todo_list()
+            if not todo_list:
+                logger.info("Server executor: no todo list found, exiting")
+                return
+
+            from datus.tools.func_tool.plan_tools import PlanTool
+            plan_tool = PlanTool(self.session)
+            plan_tool.storage = self.todo_storage
+
+            for item in list(todo_list.items):
+                if item.status != "pending":
+                    continue
+
+                if self._todo_already_executed(item.id):
+                    logger.info(f"Server executor: todo {item.id} already executed by LLM, skipping")
+                    continue
+
+                # Create a server-initiated tool call action (start)
+                call_id = f"server_call_{uuid.uuid4().hex[:8]}"
+                start_action = ActionHistory(
+                    action_id=call_id,
+                    role=ActionRole.TOOL,
+                    messages=f"Server executor: starting todo {item.content}",
+                    action_type="todo_update",
+                    input={"function_name": "todo_update", "arguments": json.dumps({"todo_id": item.id, "status": "in_progress"})},
+                    status=ActionStatus.PROCESSING,
+                )
+                # Add start action to history (will be converted to ToolCallEvent)
+                if self.action_history_manager:
+                    self.action_history_manager.add_action(start_action)
+
+                # Mark in_progress using plan tool
+                try:
+                    res1 = plan_tool._update_todo_status(item.id, "in_progress")
+                    # Build result action
+                    result_payload = res1.model_dump() if hasattr(res1, "model_dump") else dict(res1) if isinstance(res1, dict) else {"result": res1}
+                    complete_action = ActionHistory(
+                        action_id=call_id,
+                        role=ActionRole.TOOL,
+                        messages=f"Server executor: todo_in_progress {item.id}",
+                        action_type="todo_update",
+                        input={"function_name": "todo_update", "arguments": json.dumps({"todo_id": item.id, "status": "in_progress"})},
+                        output=result_payload,
+                        status=ActionStatus.SUCCESS,
+                    )
+                    if self.action_history_manager:
+                        self.action_history_manager.add_action(complete_action)
+                except Exception as e:
+                    logger.error(f"Server executor failed to set in_progress for {item.id}: {e}")
+                    fail_action = ActionHistory(
+                        action_id=call_id,
+                        role=ActionRole.TOOL,
+                        messages=f"Server executor: todo_in_progress failed {item.id}: {e}",
+                        action_type="todo_update",
+                        input={"function_name": "todo_update", "arguments": json.dumps({"todo_id": item.id, "status": "in_progress"})},
+                        output={"success": 0, "error": str(e)},
+                        status=ActionStatus.FAILED,
+                    )
+                    if self.action_history_manager:
+                        self.action_history_manager.add_action(fail_action)
+                    # mark todo failed in storage
+                    try:
+                        plan_tool._update_todo_status(item.id, "failed")
+                    except Exception:
+                        pass
+                    continue
+
+                # Execute placeholder or mapped tools for the todo.
+                # For scaffold: we don't know exact tool mapping; we simulate execution by sleeping briefly.
+                await asyncio.sleep(0.2)
+
+                # Mark completed
+                try:
+                    res2 = plan_tool._update_todo_status(item.id, "completed")
+                    result_payload2 = res2.model_dump() if hasattr(res2, "model_dump") else dict(res2) if isinstance(res2, dict) else {"result": res2}
+                    complete_action2 = ActionHistory(
+                        action_id=f"{call_id}_done",
+                        role=ActionRole.TOOL,
+                        messages=f"Server executor: todo_completed {item.id}",
+                        action_type="todo_update",
+                        input={"function_name": "todo_update", "arguments": json.dumps({"todo_id": item.id, "status": "completed"})},
+                        output=result_payload2,
+                        status=ActionStatus.SUCCESS,
+                    )
+                    if self.action_history_manager:
+                        self.action_history_manager.add_action(complete_action2)
+                except Exception as e:
+                    logger.error(f"Server executor failed to set completed for {item.id}: {e}")
+                    fail_action2 = ActionHistory(
+                        action_id=f"{call_id}_done",
+                        role=ActionRole.TOOL,
+                        messages=f"Server executor: todo_complete failed {item.id}: {e}",
+                        action_type="todo_update",
+                        input={"function_name": "todo_update", "arguments": json.dumps({"todo_id": item.id, "status": "completed"})},
+                        output={"success": 0, "error": str(e)},
+                        status=ActionStatus.FAILED,
+                    )
+                    if self.action_history_manager:
+                        self.action_history_manager.add_action(fail_action2)
+
+            logger.info("Server executor finished all pending todos")
+        except Exception as e:
+            logger.error(f"Unhandled server executor error: {e}")
 
     def _is_pending_update(self, context) -> bool:
         """

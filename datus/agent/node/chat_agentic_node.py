@@ -210,7 +210,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             auto_mode = getattr(user_input, "auto_execute_plan", False)
             logger.info(f"Plan mode auto_mode: {auto_mode} (from input)")
 
-            self.plan_hooks = PlanModeHooks(console=console, session=session, auto_mode=auto_mode)
+            self.plan_hooks = PlanModeHooks(console=console, session=session, auto_mode=auto_mode, action_history_manager=action_history_manager)
 
         # Create initial action
         action_type = "plan_mode_interaction" if is_plan_mode else "chat_interaction"
