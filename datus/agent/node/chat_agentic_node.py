@@ -527,9 +527,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 # Add error action to history and emit for streaming
                 if action_history_manager:
                     action_history_manager.add_action(error_action)
-                    if self.emit_queue:
+                    if emit_queue:
                         try:
-                            await self.emit_queue.put(error_action)
+                            await emit_queue.put(error_action)
                         except Exception as emit_e:
                             logger.debug(f"Failed to emit error event: {emit_e}")
 
@@ -546,9 +546,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 # Add complete action to history and emit for streaming
                 if action_history_manager:
                     action_history_manager.add_action(complete_action)
-                    if self.emit_queue:
+                    if emit_queue:
                         try:
-                            await self.emit_queue.put(complete_action)
+                            await emit_queue.put(complete_action)
                         except Exception as emit_e:
                             logger.debug(f"Failed to emit complete event: {emit_e}")
 

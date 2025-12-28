@@ -54,6 +54,8 @@ class PlanModeHooks(AgentHooks):
         self.agent_config = agent_config
         # Optional emit queue to stream ActionHistory produced by hooks back to node
         self.emit_queue = emit_queue
+        # Executor task handle
+        self._executor_task = None
         # load keyword->tool mapping from agent_config if provided, otherwise use default
         self.keyword_map: Dict[str, List[str]] = {}
         # Comprehensive keyword mapping with exact phrase matching
@@ -376,8 +378,6 @@ Respond with only the tool name, nothing else."""
             return "report"
 
         return None
-        # Executor task handle
-        self._executor_task = None
 
     async def on_start(self, context, agent) -> None:
         logger.debug(f"Plan mode start: phase={self.plan_phase}")
