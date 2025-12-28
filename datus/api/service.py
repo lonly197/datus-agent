@@ -660,6 +660,75 @@ class DatusAPIService:
                 status="unhealthy", version="1.0.0", database_status={"error": str(e)}, llm_status="error"
             )
 
+    def _enhance_error_message(self, error_message: str) -> Tuple[str, List[str]]:
+        """
+        Enhance error messages with user-friendly descriptions and suggestions.
+
+        Args:
+            error_message: The original error message
+
+        Returns:
+            Tuple of (enhanced_message, suggestions_list)
+        """
+        error_lower = error_message.lower()
+        suggestions = []
+
+        # Database connection errors
+        if any(keyword in error_lower for keyword in ["connection", "connect", "network", "timeout"]):
+            enhanced_msg = "数据库连接出现问题"
+            suggestions = [
+                "检查数据库服务是否正在运行",
+                "确认网络连接是否正常",
+                "验证数据库连接配置",
+                "稍后重试操作"
+            ]
+
+        # Table/column not found errors
+        elif any(keyword in error_lower for keyword in ["table", "column", "relation", "does not exist"]):
+            enhanced_msg = "查询的表或列不存在"
+            suggestions = [
+                "检查表名和列名是否正确",
+                "确认数据库schema",
+                "使用搜索功能查找可用表"
+            ]
+
+        # Permission errors
+        elif any(keyword in error_lower for keyword in ["permission", "access", "denied", "privilege"]):
+            enhanced_msg = "数据库访问权限不足"
+            suggestions = [
+                "检查数据库用户权限",
+                "确认有查询相关表的权限",
+                "联系数据库管理员"
+            ]
+
+        # SQL syntax errors
+        elif any(keyword in error_lower for keyword in ["syntax", "invalid sql", "parse error"]):
+            enhanced_msg = "SQL语法错误"
+            suggestions = [
+                "检查SQL语句语法",
+                "确认引号和括号匹配",
+                "验证SQL语句结构"
+            ]
+
+        # Resource exhausted errors
+        elif any(keyword in error_lower for keyword in ["resource", "memory", "disk", "quota"]):
+            enhanced_msg = "系统资源不足"
+            suggestions = [
+                "减少查询的数据量",
+                "优化查询条件",
+                "分批处理大数据"
+            ]
+
+        else:
+            enhanced_msg = "执行过程中出现错误"
+            suggestions = [
+                "检查输入参数是否正确",
+                "确认系统配置",
+                "联系技术支持"
+            ]
+
+        return enhanced_msg, suggestions
+
 
 # Global service instance - will be initialized with command line args
 service = None
@@ -897,75 +966,6 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
     except Exception as e:
         logger.error(f"SSE stream error for task {task_id}: {e}")
         yield f"event: error\ndata: {json.dumps({'error': str(e), 'progress_seq': progress_seq})}\n\n"
-
-    def _enhance_error_message(self, error_message: str) -> Tuple[str, List[str]]:
-        """
-        Enhance error messages with user-friendly descriptions and suggestions.
-
-        Args:
-            error_message: The original error message
-
-        Returns:
-            Tuple of (enhanced_message, suggestions_list)
-        """
-        error_lower = error_message.lower()
-        suggestions = []
-
-        # Database connection errors
-        if any(keyword in error_lower for keyword in ["connection", "connect", "network", "timeout"]):
-            enhanced_msg = "数据库连接出现问题"
-            suggestions = [
-                "检查数据库服务是否正在运行",
-                "确认网络连接是否正常",
-                "验证数据库连接配置",
-                "稍后重试操作"
-            ]
-
-        # Table/column not found errors
-        elif any(keyword in error_lower for keyword in ["table", "column", "relation", "does not exist"]):
-            enhanced_msg = "查询的表或列不存在"
-            suggestions = [
-                "检查表名和列名是否正确",
-                "确认数据库schema",
-                "使用搜索功能查找可用表"
-            ]
-
-        # Permission errors
-        elif any(keyword in error_lower for keyword in ["permission", "access", "denied", "privilege"]):
-            enhanced_msg = "数据库访问权限不足"
-            suggestions = [
-                "检查数据库用户权限",
-                "确认有查询相关表的权限",
-                "联系数据库管理员"
-            ]
-
-        # SQL syntax errors
-        elif any(keyword in error_lower for keyword in ["syntax", "invalid sql", "parse error"]):
-            enhanced_msg = "SQL语法错误"
-            suggestions = [
-                "检查SQL语句语法",
-                "确认引号和括号匹配",
-                "验证SQL语句结构"
-            ]
-
-        # Resource exhausted errors
-        elif any(keyword in error_lower for keyword in ["resource", "memory", "disk", "quota"]):
-            enhanced_msg = "系统资源不足"
-            suggestions = [
-                "减少查询的数据量",
-                "优化查询条件",
-                "分批处理大数据"
-            ]
-
-        else:
-            enhanced_msg = "执行过程中出现错误"
-            suggestions = [
-                "检查输入参数是否正确",
-                "确认系统配置",
-                "联系技术支持"
-            ]
-
-        return enhanced_msg, suggestions
 
 
 @asynccontextmanager
