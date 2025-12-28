@@ -1091,7 +1091,7 @@ Respond with only the tool name, nothing else."""
                 # If a tool was matched, execute mapped action
                 if not executed_any and matched_tool:
                     try:
-                        logger.info(f"Server executor: matched tool '{matched_tool}' for todo {item.id}")
+                        logger.info(f"Server executor: matched tool '{matched_tool}' for todo {item.id} (fs_tool: {fs_tool is not None}, db_tool: {db_tool is not None})")
                         if matched_tool == "search_table" and db_tool:
                             res = db_tool.search_table(query_text=item.content, top_n=5)
                             result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
@@ -1420,16 +1420,16 @@ Respond with only the tool name, nothing else."""
                                 logger.debug(f"Failed to emit current date note for todo {item.id}: {e}")
                         elif matched_tool == "write_file" and fs_tool:
                             # Write file operation
-                            file_path = f"output/{item.id}_output.txt"
-                            file_content = f"Content generated for: {item.content}"
-                            res = fs_tool.write_file(path=file_path, content=file_content)
+                            write_file_path = f"output/{item.id}_output.txt"
+                            write_file_content = f"Content generated for: {item.content}"
+                            res = fs_tool.write_file(path=write_file_path, content=write_file_content)
                             result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
                             complete_action_fs = ActionHistory(
                                 action_id=f"{call_id}_write",
                                 role=ActionRole.TOOL,
                                 messages=f"Server executor: write_file for todo {item.id}",
                                 action_type="write_file",
-                                input={"function_name": "write_file", "arguments": json.dumps({"path": file_path, "content": file_content, "todo_id": item.id})},
+                                input={"function_name": "write_file", "arguments": json.dumps({"path": write_file_path, "content": write_file_content, "todo_id": item.id})},
                                 output=result_payload,
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
@@ -1548,6 +1548,9 @@ Respond with only the tool name, nothing else."""
                                 logger.debug(f"Failed to emit todo read note for todo {item.id}: {e}")
                     except Exception as e:
                         logger.error(f"Server executor matched_tool '{matched_tool}' failed for {item.id}: {e}")
+                        logger.error(f"Exception type: {type(e).__name__}, matched_tool was: {matched_tool}")
+                        import traceback
+                        logger.error(f"Traceback: {traceback.format_exc()}")
 
                 # Execute LLM-suggested tool calls if available
                 if not executed_any and item.tool_calls:
