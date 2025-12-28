@@ -44,6 +44,7 @@ class RunWorkflowRequest(BaseModel):
     layer1: Optional[str] = Field(None, description="Layer1 for the task")
     layer2: Optional[str] = Field(None, description="Layer2 for the task")
     ext_knowledge: Optional[str] = Field(None, description="External knowledge for the task")
+    plan_mode: Optional[bool] = Field(False, description="Enable plan mode for structured execution")
 
 
 class RunWorkflowResponse(BaseModel):
