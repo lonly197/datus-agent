@@ -7,7 +7,7 @@
 import asyncio
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from agents import SQLiteSession
 from agents.lifecycle import AgentHooks
@@ -1215,41 +1215,41 @@ Respond with only the tool name, nothing else."""
                             executed_any = True
                         elif matched_tool == "read_query" and db_tool:
                             # Read query execution
-                        sql_text = None
-                        if self.action_history_manager:
-                            for a in reversed(self.action_history_manager.get_actions()):
-                                if getattr(a, "role", "") == "assistant" or getattr(a, "role", "") == ActionRole.ASSISTANT:
-                                    out = getattr(a, "output", None)
-                                    if isinstance(out, dict) and out.get("sql"):
-                                        sql_text = out.get("sql")
-                                        break
-                                    content_field = out.get("content") if isinstance(out, dict) else None
-                                    if content_field and isinstance(content_field, str) and "```sql" in content_field:
-                                        start = content_field.find("```sql")
-                                        end = content_field.find("```", start + 6)
-                                        if start != -1 and end != -1:
-                                            sql_text = content_field[start + 6 : end].strip()
-                                            break
-                        if sql_text:
-                            res = db_tool.read_query(sql=sql_text)
-                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
-                            complete_action_db = ActionHistory(
-                                    action_id=f"{call_id}_read",
-                                role=ActionRole.TOOL,
-                                messages=f"Server executor: db.read_query for todo {item.id}",
-                                action_type="read_query",
-                                input={"function_name": "read_query", "arguments": json.dumps({"sql": sql_text, "todo_id": item.id})},
-                                output=result_payload,
-                                status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
-                            )
+                            sql_text = None
                             if self.action_history_manager:
-                                self.action_history_manager.add_action(complete_action_db)
-                                if self.emit_queue is not None:
-                                    try:
-                                        self.emit_queue.put_nowait(complete_action_db)
-                                    except Exception as e:
-                                        logger.debug(f"emit_queue put failed for complete_action_db: {e}")
-                            executed_any = True
+                                for a in reversed(self.action_history_manager.get_actions()):
+                                    if getattr(a, "role", "") == "assistant" or getattr(a, "role", "") == ActionRole.ASSISTANT:
+                                        out = getattr(a, "output", None)
+                                        if isinstance(out, dict) and out.get("sql"):
+                                            sql_text = out.get("sql")
+                                            break
+                                        content_field = out.get("content") if isinstance(out, dict) else None
+                                        if content_field and isinstance(content_field, str) and "```sql" in content_field:
+                                            start = content_field.find("```sql")
+                                            end = content_field.find("```", start + 6)
+                                            if start != -1 and end != -1:
+                                                sql_text = content_field[start + 6 : end].strip()
+                                                break
+                            if sql_text:
+                                res = db_tool.read_query(sql=sql_text)
+                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                complete_action_db = ActionHistory(
+                                        action_id=f"{call_id}_read",
+                                    role=ActionRole.TOOL,
+                                    messages=f"Server executor: db.read_query for todo {item.id}",
+                                    action_type="read_query",
+                                    input={"function_name": "read_query", "arguments": json.dumps({"sql": sql_text, "todo_id": item.id})},
+                                    output=result_payload,
+                                    status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                )
+                                if self.action_history_manager:
+                                    self.action_history_manager.add_action(complete_action_db)
+                                    if self.emit_queue is not None:
+                                        try:
+                                            self.emit_queue.put_nowait(complete_action_db)
+                                        except Exception as e:
+                                            logger.debug(f"emit_queue put failed for complete_action_db: {e}")
+                                executed_any = True
                         elif matched_tool == "search_metrics" and db_tool:
                             # Search for business metrics
                             res = db_tool.search_metrics(query_text=item.content)
@@ -1268,7 +1268,7 @@ Respond with only the tool name, nothing else."""
                                 if self.emit_queue is not None:
                                     try:
                                         self.emit_queue.put_nowait(complete_action_db)
-                    except Exception as e:
+                                    except Exception as e:
                                         logger.debug(f"emit_queue put failed for complete_action_db: {e}")
                             executed_any = True
                         elif matched_tool == "search_reference_sql" and db_tool:
@@ -1303,7 +1303,7 @@ Respond with only the tool name, nothing else."""
                                     output={"raw_output": f"Domain layers exploration completed for: {item.content}", "emit_chat": True},
                                     status=ActionStatus.SUCCESS,
                                 )
-                        if self.action_history_manager:
+                                if self.action_history_manager:
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
@@ -1459,8 +1459,8 @@ Respond with only the tool name, nothing else."""
                                             self.emit_queue.put_nowait(note_action)
                                         except Exception:
                                             pass
-                        executed_any = True
-                    except Exception as e:
+                                executed_any = True
+                            except Exception as e:
                                 logger.debug(f"Failed to emit file read note for todo {item.id}: {e}")
                         elif matched_tool == "list_directory" and fs_tool:
                             # List directory operation - placeholder
@@ -1604,17 +1604,17 @@ Respond with only the tool name, nothing else."""
                         try:
                             if tool_name == "search_table" and db_tool:
                                 logger.info(f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})")
-                            res = db_tool.search_table(query_text=item.content, top_n=3)
-                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
-                            fallback_action = ActionHistory(
-                                    action_id=f"{call_id}_fallback_{tool_name}",
-                                role=ActionRole.TOOL,
-                                    messages=f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})",
-                                    action_type=tool_name,
-                                    input={"function_name": tool_name, "arguments": json.dumps({"query_text": item.content, "top_n": 3, "todo_id": item.id, "is_fallback": True})},
-                                output=result_payload,
-                                status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
-                            )
+                                res = db_tool.search_table(query_text=item.content, top_n=3)
+                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                fallback_action = ActionHistory(
+                                        action_id=f"{call_id}_fallback_{tool_name}",
+                                    role=ActionRole.TOOL,
+                                        messages=f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})",
+                                        action_type=tool_name,
+                                        input={"function_name": tool_name, "arguments": json.dumps({"query_text": item.content, "top_n": 3, "todo_id": item.id, "is_fallback": True})},
+                                    output=result_payload,
+                                    status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                )
                                 success = True
 
                             elif tool_name == "describe_table" and db_tool:
@@ -1645,7 +1645,7 @@ Respond with only the tool name, nothing else."""
                                 if self.emit_queue is not None:
                                     try:
                                         self.emit_queue.put_nowait(fallback_action)
-                        except Exception as e:
+                                    except Exception as e:
                                         logger.debug(f"emit_queue put failed for fallback action: {e}")
                             executed_any = True
                             break
@@ -1654,7 +1654,7 @@ Respond with only the tool name, nothing else."""
                 if not executed_any:
                     try:
                         fallback_status = "disabled" if not self.enable_fallback else "no suitable fallback found"
-                            note_action = ActionHistory.create_action(
+                        note_action = ActionHistory.create_action(
                                 role=ActionRole.SYSTEM,
                                 action_type="thinking",
                             messages=f"No tool executed for todo {item.id} ({fallback_status}); marking completed",
@@ -1662,14 +1662,14 @@ Respond with only the tool name, nothing else."""
                             output={"raw_output": f"No tool matched or executed ({fallback_status}); step marked completed", "emit_chat": True},
                                 status=ActionStatus.SUCCESS,
                             )
-                            if self.action_history_manager:
+                        if self.action_history_manager:
                                 self.action_history_manager.add_action(note_action)
                                 if self.emit_queue is not None:
                                     try:
                                         self.emit_queue.put_nowait(note_action)
                                     except Exception:
                                         pass
-                        except Exception as e:
+                    except Exception as e:
                         logger.debug(f"Failed to emit completion note for todo {item.id}: {e}")
 
                 # Mark completed

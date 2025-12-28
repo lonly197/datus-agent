@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 import httpx
 
-from datus.api.server import create_app
+from datus.api.service import create_app
 from datus.api.models import DeepResearchEventType, ChatResearchRequest
 
 
