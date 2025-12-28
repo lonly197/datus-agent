@@ -3346,7 +3346,12 @@ Respond with only the tool name, nothing else."""
 
                     # Initialize SmartExecutionRouter if not exists
                     if not hasattr(self, '_smart_router'):
-                        self._smart_router = SmartExecutionRouter(self.agent_config, self.model)
+                        self._smart_router = SmartExecutionRouter(
+                            agent_config=self.agent_config,
+                            model=self.model,
+                            action_history_manager=self.action_history_manager,
+                            emit_queue=self.emit_queue
+                        )
 
                     try:
                         # Use smart router to determine execution strategy
