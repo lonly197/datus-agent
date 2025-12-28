@@ -65,6 +65,10 @@ class ChatAgenticNode(GenSQLAgenticNode):
             tools=tools,
             node_name="chat",
         )
+
+        # Initialize action_history_manager attribute for plan mode support
+        self.action_history_manager = None
+
         logger.debug(
             f"ChatAgenticNode initialized: {self.agent_config.current_namespace} {self.agent_config.current_database}"
         )
@@ -147,25 +151,41 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 sql_explanation = result.response if hasattr(result, "response") else ""
 
             # For plan mode or when result.sql is not available, try to extract from action history
-            if not sql_content and self.action_history_manager:
-                # Extract SQL directly from summary_report action if available (plan mode final result)
-                for stream_action in reversed(self.action_history_manager.get_actions()):
-                    if stream_action.action_type == "summary_report" and stream_action.output:
-                        if isinstance(stream_action.output, dict):
-                            sql_content = stream_action.output.get("sql")
-                            if sql_content:
-                                sql_explanation = stream_action.output.get("content", "") or stream_action.output.get("response", "")
-                                break
+            action_history_manager = getattr(self, 'action_history_manager', None)
+            if not sql_content and action_history_manager:
+                try:
+                    # Extract SQL directly from summary_report action if available (plan mode final result)
+                    for stream_action in reversed(action_history_manager.get_actions()):
+                        if stream_action.action_type == "summary_report" and stream_action.output:
+                            if isinstance(stream_action.output, dict):
+                                sql_content = stream_action.output.get("sql")
+                                if sql_content:
+                                    sql_explanation = stream_action.output.get("content", "") or stream_action.output.get("response", "")
+                                    break
 
-                # Fallback: try to extract SQL from any action that might contain it
-                if not sql_content:
-                    response_content = result.response if hasattr(result, "response") and result.response else ""
-                    extracted_sql, extracted_output = self._extract_sql_and_output_from_response(
-                        {"content": response_content}
-                    )
-                    if extracted_sql:
-                        sql_content = extracted_sql
-                        sql_explanation = extracted_output or response_content
+                    # Fallback: try to extract SQL from any action that might contain it
+                    if not sql_content:
+                        response_content = result.response if hasattr(result, "response") and result.response else ""
+                        extracted_sql, extracted_output = self._extract_sql_and_output_from_response(
+                            {"content": response_content}
+                        )
+                        if extracted_sql:
+                            sql_content = extracted_sql
+                            sql_explanation = extracted_output or response_content
+                except Exception as e:
+                    logger.warning(f"Failed to extract SQL from action history: {e}")
+                    # Continue with fallback extraction from response content
+                    if not sql_content:
+                        response_content = result.response if hasattr(result, "response") and result.response else ""
+                        try:
+                            extracted_sql, extracted_output = self._extract_sql_and_output_from_response(
+                                {"content": response_content}
+                            )
+                            if extracted_sql:
+                                sql_content = extracted_sql
+                                sql_explanation = extracted_output or response_content
+                        except Exception as e2:
+                            logger.warning(f"Failed to extract SQL from response content: {e2}")
 
             # If we found SQL content, create and store the SQL context
             if sql_content:
@@ -193,8 +213,8 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     logger.warning(f"result.sql: {result.sql}")
                 if hasattr(result, "response"):
                     logger.warning(f"result.response length: {len(result.response) if result.response else 0}")
-                if self.action_history_manager:
-                    logger.warning(f"action_history_manager has {len(self.action_history_manager.get_actions())} actions")
+                if action_history_manager:
+                    logger.warning(f"action_history_manager has {len(action_history_manager.get_actions())} actions")
 
             return {"success": True, "message": "Updated chat context"}
         except Exception as e:

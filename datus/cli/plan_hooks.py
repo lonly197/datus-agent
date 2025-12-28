@@ -28,17 +28,20 @@ DEFAULT_PLAN_EXECUTOR_KEYWORD_MAP = {
             # Database tools
             "search_table": [
                 "search for table", "搜索表结构", "查找数据库表", "find table in database",
-                "search table schema", "查找表信息", "find database tables", "搜索数据库表"
+                "search table schema", "查找表信息", "find database tables", "搜索数据库表",
+                "探索数据库中的表结构", "找到试驾表和线索表", "确认表名", "表结构", "字段名"
             ],
             "describe_table": [
                 "describe table", "检查表结构", "inspect table schema", "查看表结构",
         "examine table structure", "分析表结构", "describe table structure",
-        "检查表定义", "查看表模式", "analyze table structure", "分析表元数据"
+        "检查表定义", "查看表模式", "analyze table structure", "分析表元数据",
+        "表定义", "表模式", "表元数据", "表字段"
             ],
             "execute_sql": [
                 "execute sql query", "执行sql查询", "run sql statement", "执行sql语句",
         "run database query", "执行数据库查询", "execute the sql", "运行sql代码",
-        "execute sql", "执行sql", "run the query", "执行查询"
+        "execute sql", "执行sql", "run the query", "执行查询",
+        "运行sql", "执行sql语句", "查询执行"
             ],
             "read_query": [
                 "run query", "执行查询", "execute database query", "运行数据库查询",
@@ -323,7 +326,7 @@ class PlanModeHooks(AgentHooks):
         return None
 
     def _match_exact_keywords(self, text: str) -> Optional[str]:
-        """Exact keyword phrase matching with word boundaries."""
+        """Exact keyword phrase matching with word boundaries and flexible matching."""
         if not text:
             return None
 
@@ -331,10 +334,19 @@ class PlanModeHooks(AgentHooks):
         # Use word boundaries to ensure exact phrase matching
         for tool_name, keywords in self.keyword_map.items():
             for keyword in keywords:
-                if keyword and f" {keyword.lower()} " in f" {t} ":
+                if not keyword:
+                    continue
+
+                keyword_lower = keyword.lower()
+                # Original exact phrase matching
+                if f" {keyword_lower} " in f" {t} ":
                     return tool_name
                 # Also check for phrase at start/end of text
-                if keyword and (t.startswith(keyword.lower()) or t.endswith(keyword.lower())):
+                if t.startswith(keyword_lower) or t.endswith(keyword_lower):
+                    return tool_name
+                # Flexible matching for Chinese text - check if any word in keyword appears
+                keyword_words = keyword_lower.split()
+                if len(keyword_words) > 1 and any(word in t for word in keyword_words):
                     return tool_name
 
         return None
@@ -1675,10 +1687,16 @@ Respond with only the tool name, nothing else."""
                     except Exception as e:
                         logger.debug(f"Failed to emit completion note for todo {item.id}: {e}")
 
-                # Mark completed
+                # Mark completed only if we actually executed something or reached a terminal state
                 try:
-                    plan_tool._update_todo_status(item.id, "completed")
-                    await self._emit_plan_update_event(item.id, "completed")
+                    if executed_any:
+                        plan_tool._update_todo_status(item.id, "completed")
+                        await self._emit_plan_update_event(item.id, "completed")
+                    else:
+                        # Mark as failed if no tool was executed (fallback didn't work)
+                        plan_tool._update_todo_status(item.id, "failed")
+                        await self._emit_plan_update_event(item.id, "failed")
+                        logger.warning(f"Server executor: no tool executed for todo {item.id}, marking as failed")
                 except Exception as e:
                     logger.error(f"Server executor failed to set completed for {item.id}: {e}")
                     try:
@@ -1731,6 +1749,12 @@ Respond with only the tool name, nothing else."""
             if not todo_list:
                 return
 
+            # For completed status, verify this is actually completed (not prematurely marked)
+            if status == "completed" and todo_id:
+                if not self._is_actually_completed(todo_id):
+                    logger.debug(f"Skipping premature completion event for todo {todo_id}")
+                    return
+
             # Create plan_update action
             plan_update_id = f"plan_update_{uuid.uuid4().hex[:8]}"
             plan_update_action = ActionHistory(
@@ -1758,6 +1782,39 @@ Respond with only the tool name, nothing else."""
 
         except Exception as e:
             logger.error(f"Failed to emit plan_update event: {e}")
+
+    def _is_actually_completed(self, todo_id: str) -> bool:
+        """
+        Check if a todo is actually completed by verifying action history.
+
+        Args:
+            todo_id: The todo ID to check
+
+        Returns:
+            bool: True if the todo has been successfully executed
+        """
+        try:
+            if not self.action_history_manager:
+                return False
+
+            # Check if there's a successful tool execution for this todo_id
+            for action in reversed(self.action_history_manager.get_actions()):
+                if action.role in ("tool", ActionRole.TOOL):
+                    # Check input for todo_id
+                    if action.input and isinstance(action.input, dict):
+                        input_todo_id = action.input.get("todo_id") or action.input.get("todoId")
+                        if input_todo_id == todo_id and action.status == ActionStatus.SUCCESS:
+                            return True
+
+                    # Check output for completion markers
+                    if action.output and isinstance(action.output, dict):
+                        if action.output.get("success") and action.status == ActionStatus.SUCCESS:
+                            return True
+
+            return False
+        except Exception as e:
+            logger.debug(f"Error checking completion status for todo {todo_id}: {e}")
+            return False
 
     def _is_pending_update(self, context) -> bool:
         """
