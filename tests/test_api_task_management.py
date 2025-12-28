@@ -66,6 +66,7 @@ class TestTaskManagement:
         running_task = await service.get_running_task("cancel_test")
         assert running_task.status == "running"
         assert not task.cancelled()
+        assert not task.done()
 
         # Cancel the task
         task.cancel()
@@ -76,11 +77,22 @@ class TestTaskManagement:
         except asyncio.CancelledError:
             pass
 
-        # Verify task was cancelled
+        # Verify task was cancelled and is done
         assert task.cancelled()
+        assert task.done()
+
+        # Verify the task is still registered but marked as cancelled
+        # (Note: the service doesn't automatically update status on cancellation)
+        running_task_after = await service.get_running_task("cancel_test")
+        assert running_task_after is not None
+        assert running_task_after.task is task
 
         # Clean up registry
         await service.unregister_running_task("cancel_test")
+
+        # Verify task is no longer registered
+        running_task_final = await service.get_running_task("cancel_test")
+        assert running_task_final is None
 
     def test_running_task_dataclass(self):
         """Test RunningTask dataclass."""

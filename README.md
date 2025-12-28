@@ -76,6 +76,8 @@ Datus Agent is configured via `agent.yml`. Key configurations include:
 - **Databases**: Set up connections to Snowflake, StarRocks, SQLite, DuckDB, etc.
 - **Workflows**: Define custom execution plans and node configurations
 - **Plan Executor**: Configure `plan_executor` settings to control how plan-mode tool matching and execution works
+  - `keyword_tool_map`: Custom mapping of keywords to tools for plan execution
+  - `enable_fallback`: Whether to enable fallback tool execution when no keyword matches
 
 See [Configuration Documentation](docs/configuration/) for complete setup instructions.
 

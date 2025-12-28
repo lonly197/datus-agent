@@ -71,6 +71,10 @@ class TodoList(BaseModel):
         """Get all completed items"""
         return [item for item in self.items if item.status == TodoStatus.COMPLETED]
 
+    def get_in_progress_items(self) -> List[TodoItem]:
+        """Get all items currently in progress"""
+        return [item for item in self.items if item.status == TodoStatus.IN_PROGRESS]
+
 
 class SessionTodoStorage:
     """In-memory storage for todo lists to avoid conflicts with agents library session"""
@@ -187,13 +191,29 @@ class PlanTool:
             if not content:
                 continue
 
+            # Validate metadata
+            if not isinstance(requires_tool, bool):
+                requires_tool = bool(requires_tool)
+            if not isinstance(requires_llm_reasoning, bool):
+                requires_llm_reasoning = bool(requires_llm_reasoning)
+            if reasoning_type is not None and not isinstance(reasoning_type, str):
+                reasoning_type = str(reasoning_type)
+            if tool_calls is not None and not isinstance(tool_calls, list):
+                logger.warning(f"Invalid tool_calls format for todo '{content}': {tool_calls}")
+                tool_calls = None
+
+            # Validate reasoning_type if requires_llm_reasoning is True
+            if requires_llm_reasoning and reasoning_type is None:
+                logger.warning(f"Todo '{content}' requires LLM reasoning but no reasoning_type specified")
+                reasoning_type = "general"
+
             if status == "completed":
                 # Create completed item - should only be for actually executed steps
                 new_item = TodoItem(
                     content=content,
                     status=TodoStatus.COMPLETED,
-                    requires_tool=bool(requires_tool),
-                    requires_llm_reasoning=bool(requires_llm_reasoning),
+                    requires_tool=requires_tool,
+                    requires_llm_reasoning=requires_llm_reasoning,
                     reasoning_type=reasoning_type,
                     tool_calls=tool_calls
                 )
@@ -204,8 +224,8 @@ class PlanTool:
                 # allow all metadata propagation when creating pending item
                 item = TodoItem(
                     content=content,
-                    requires_tool=bool(requires_tool),
-                    requires_llm_reasoning=bool(requires_llm_reasoning),
+                    requires_tool=requires_tool,
+                    requires_llm_reasoning=requires_llm_reasoning,
                     reasoning_type=reasoning_type,
                     tool_calls=tool_calls
                 )

@@ -117,8 +117,8 @@ class ExecuteSQLNode(Node):
                         # Attempt best-effort cancellation/cleanup
                         try:
                             db_connector.close()
-                        except Exception:
-                            pass
+                        except (AttributeError, ConnectionError, Exception) as cleanup_error:
+                            logger.warning(f"Failed to close database connection during timeout cleanup: {cleanup_error}")
                         return ExecuteSQLResult(
                             success=False,
                             error=f"Query timed out after {timeout} seconds",

@@ -218,8 +218,22 @@ class AgentConfig:
         self.db_type = ""
 
         # Plan executor configuration (keyword map and fallback toggle)
-        self.plan_executor_keyword_map = kwargs.get("plan_executor", {}).get("keyword_tool_map", None)
-        self.plan_executor_enable_fallback = kwargs.get("plan_executor", {}).get("enable_fallback", True)
+        plan_executor_config = kwargs.get("plan_executor", {})
+        self.plan_executor_keyword_map = plan_executor_config.get("keyword_tool_map", None)
+        self.plan_executor_enable_fallback = plan_executor_config.get("enable_fallback", True)
+
+        # Validate plan executor configuration
+        if self.plan_executor_keyword_map is not None:
+            if not isinstance(self.plan_executor_keyword_map, dict):
+                raise ValueError("plan_executor.keyword_tool_map must be a dictionary")
+            for tool_name, keywords in self.plan_executor_keyword_map.items():
+                if not isinstance(keywords, list):
+                    raise ValueError(f"plan_executor.keyword_tool_map.{tool_name} must be a list of keywords")
+                if not keywords:
+                    raise ValueError(f"plan_executor.keyword_tool_map.{tool_name} cannot be empty")
+
+        if not isinstance(self.plan_executor_enable_fallback, bool):
+            raise ValueError("plan_executor.enable_fallback must be a boolean")
 
         # Benchmark paths are now fixed at {agent.home}/benchmark/{name}
         # Supported benchmarks: bird_dev, spider2, semantic_layer

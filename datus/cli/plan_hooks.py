@@ -5,32 +5,33 @@
 """Plan mode hooks implementation for intercepting agent execution flow."""
 
 import asyncio
+import hashlib
+import json
+import re
+import statistics
 import time
+import uuid
+from collections import defaultdict, deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-import re
-import json
-import statistics
-from collections import defaultdict, deque
 
 from agents import SQLiteSession
 from agents.lifecycle import AgentHooks
 from rich.console import Console
+
+from datus.api.models import (
+    ChatEvent,
+    DeepResearchEventType,
+    SqlExecutionErrorEvent,
+    SqlExecutionProgressEvent,
+    SqlExecutionResultEvent,
+    SqlExecutionStartEvent,
+)
 from datus.cli.blocking_input_manager import blocking_input_manager
 from datus.cli.execution_state import execution_controller
-from datus.utils.loggings import get_logger
-import json
-import uuid
-from datus.schemas.action_history import ActionRole, ActionStatus, ActionHistory
+from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.schemas.node_models import SQLContext
-from datus.api.models import (
-    SqlExecutionStartEvent, SqlExecutionProgressEvent,
-    SqlExecutionResultEvent, SqlExecutionErrorEvent,
-    ChatEvent, DeepResearchEventType
-)
-from typing import Dict, List, Optional, Tuple
-import hashlib
-import json
+from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
@@ -1230,7 +1231,6 @@ Provide your reasoning and any recommendations. If this requires tool calls, you
                     # Look for JSON-like tool call suggestions in response
                     json_match = re.search(r'\{.*?"tool_calls".*?\}', response.content, re.DOTALL)
                     if json_match:
-                        import json
                         tool_calls_data = json.loads(json_match.group(0))
                         if "tool_calls" in tool_calls_data:
                             reasoning_result["tool_calls"] = tool_calls_data["tool_calls"]
@@ -4168,8 +4168,6 @@ TOOL:"""
             bool: True if this is a pending status update
         """
         try:
-            import json
-
             if hasattr(context, "tool_arguments"):
                 if context.tool_arguments:
                     tool_args = json.loads(context.tool_arguments)
