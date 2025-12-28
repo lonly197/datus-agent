@@ -7,7 +7,7 @@ Simplified plan tools - merged from multiple files into single module
 """
 
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from agents import SQLiteSession, Tool
