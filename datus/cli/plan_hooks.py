@@ -266,31 +266,46 @@ class PlanModeHooks(AgentHooks):
 
     def _match_tool_for_todo(self, text: str) -> Optional[str]:
         """
-        Hybrid tool matching with three-tier approach:
-        1. Exact keyword phrase matching (fast and reliable)
-        2. LLM reasoning fallback (intelligent but slower)
-        3. Intelligent inference (last resort)
+        Advanced hybrid tool matching with intelligent intent recognition:
+        1. Task intent classification and semantic understanding
+        2. Context-aware keyword matching with priority scoring
+        3. LLM reasoning fallback with enhanced prompts
+        4. Intelligent task-to-tool mapping
         """
         if not text:
             return None
 
-        # Tier 1: Exact keyword phrase matching (word boundaries)
-        tool = self._match_exact_keywords(text)
-        if tool:
-            logger.debug(f"Matched tool '{tool}' via exact keyword matching")
-            return tool
+        cleaned_text = self._preprocess_todo_content(text)
 
-        # Tier 2: LLM reasoning fallback (if model available)
-        if self.model:
-            tool = self._llm_reasoning_fallback(text)
+        # Tier 1: Task Intent Classification (most intelligent)
+        intent_result = self._classify_task_intent(cleaned_text)
+        if intent_result and intent_result['confidence'] > 0.8:
+            logger.debug(f"Matched tool '{intent_result['tool']}' via intent classification (confidence: {intent_result['confidence']:.2f})")
+            return intent_result['tool']
+
+        # Tier 2: Enhanced Context-Aware Keyword Matching
+        context_match = self._match_keywords_with_context(cleaned_text)
+        if context_match and context_match['confidence'] > 0.7:
+            logger.debug(f"Matched tool '{context_match['tool']}' via context-aware matching (confidence: {context_match['confidence']:.2f})")
+            return context_match['tool']
+
+        # Tier 3: Semantic Understanding for Chinese Tasks
+        semantic_match = self._semantic_chinese_matching(cleaned_text)
+        if semantic_match:
+            logger.debug(f"Matched tool '{semantic_match['tool']}' via semantic understanding (confidence: {semantic_match['confidence']:.2f})")
+            return semantic_match['tool']
+
+        # Tier 4: LLM reasoning fallback (if model available and high uncertainty)
+        if self.model and (not intent_result or intent_result['confidence'] < 0.6):
+            tool = self._enhanced_llm_reasoning(cleaned_text)
             if tool:
-                logger.debug(f"Matched tool '{tool}' via LLM reasoning")
+                logger.debug(f"Matched tool '{tool}' via enhanced LLM reasoning")
                 return tool
 
-        # Tier 3: Intelligent inference (pattern-based)
-        tool = self._intelligent_inference(text)
+        # Tier 5: Intelligent inference (last resort with improved logic)
+        tool = self._enhanced_intelligent_inference(cleaned_text)
         if tool:
-            logger.debug(f"Matched tool '{tool}' via intelligent inference")
+            logger.debug(f"Matched tool '{tool}' via enhanced intelligent inference")
             return tool
 
         logger.debug(f"No tool matched for text: '{text}'")
@@ -2055,6 +2070,688 @@ Respond with only the tool name, nothing else."""
             return False
 
         return True
+
+    def _classify_task_intent(self, text: str) -> Optional[Dict[str, Any]]:
+        """
+        Classify the intent of a task and map it to the most appropriate tool.
+
+        Returns:
+            Dict with 'tool', 'confidence', and 'reason' keys, or None if no match
+        """
+        if not text:
+            return None
+
+        text_lower = text.lower()
+
+        # Comprehensive Task Type Patterns with associated tools and confidence scores
+        task_patterns = {
+            # Database Schema Exploration
+            "explore_schema": {
+                "patterns": [
+                    r"探索.*表结构", r"查看.*表结构", r"检查.*表结构", r"分析.*表结构",
+                    r"找到.*表", r"查找.*表", r"发现.*表", r"搜索.*表",
+                    r"explore.*table.*structure", r"find.*tables", r"search.*tables",
+                    r"确认.*表名", r"表.*字段", r"字段.*信息", r"table.*columns",
+                    r"数据库.*结构", r"schema.*information", r"table.*list"
+                ],
+                "tool": "search_table",
+                "confidence": 0.95,
+                "reason": "Database table exploration task",
+                "priority": 1
+            },
+
+            # Specific Table Description
+            "describe_specific_table": {
+                "patterns": [
+                    r"描述.*表.*[\w_]+", r"检查.*表.*[\w_]+.*定义", r"查看.*表.*[\w_]+.*模式",
+                    r"分析.*表.*[\w_]+.*元数据", r"describe.*table.*[\w_]+",
+                    r"inspect.*table.*[\w_]+.*schema", r"examine.*table.*[\w_]+.*structure",
+                    r"表.*[\w_]+.*详细.*信息", r"表.*[\w_]+.*结构.*详情"
+                ],
+                "tool": "describe_table",
+                "confidence": 0.92,
+                "reason": "Specific table description and metadata analysis",
+                "priority": 1
+            },
+
+            # General Table Description
+            "describe_table_general": {
+                "patterns": [
+                    r"描述.*表", r"检查.*表.*定义", r"查看.*表.*模式", r"分析.*表.*元数据",
+                    r"describe.*table", r"inspect.*table.*schema", r"examine.*table.*structure",
+                    r"表.*详细.*信息", r"表.*结构.*详情", r"table.*metadata"
+                ],
+                "tool": "describe_table",
+                "confidence": 0.85,
+                "reason": "General table description and metadata analysis",
+                "priority": 2
+            },
+
+            # SQL Query Execution
+            "execute_sql": {
+                "patterns": [
+                    r"执行.*查询", r"运行.*sql", r"运行.*查询", r"执行.*语句",
+                    r"execute.*query", r"run.*sql", r"execute.*statement",
+                    r"查询.*结果", r"获取.*数据", r"fetch.*data", r"运行.*select"
+                ],
+                "tool": "execute_sql",
+                "confidence": 0.90,
+                "reason": "SQL execution and data retrieval",
+                "priority": 1
+            },
+
+            # SQL Query Reading/Analysis
+            "read_sql": {
+                "patterns": [
+                    r"读取.*查询", r"分析.*sql", r"查看.*查询.*结果", r"检查.*sql",
+                    r"read.*query", r"analyze.*sql", r"examine.*query.*results"
+                ],
+                "tool": "read_query",
+                "confidence": 0.80,
+                "reason": "SQL query reading and analysis",
+                "priority": 2
+            },
+
+            # Business Metrics Analysis
+            "analyze_metrics": {
+                "patterns": [
+                    r"分析.*指标", r"查找.*指标", r"查看.*指标", r"搜索.*指标",
+                    r"analyze.*metrics", r"find.*metrics", r"search.*metrics",
+                    r"kpi.*分析", r"performance.*metrics", r"转化率.*分析",
+                    r"收入.*分析", r"销售额.*分析", r"用户.*分析"
+                ],
+                "tool": "search_metrics",
+                "confidence": 0.88,
+                "reason": "Business metrics analysis",
+                "priority": 1
+            },
+
+            # Reference SQL Search
+            "search_reference_sql": {
+                "patterns": [
+                    r"查找.*参考.*sql", r"搜索.*sql.*模板", r"找到.*sql.*例子",
+                    r"find.*reference.*sql", r"search.*sql.*patterns", r"look.*sql.*examples",
+                    r"参考.*查询", r"sql.*样例", r"查询.*模板"
+                ],
+                "tool": "search_reference_sql",
+                "confidence": 0.85,
+                "reason": "Reference SQL examples search",
+                "priority": 2
+            },
+
+            # File Writing Operations
+            "write_file": {
+                "patterns": [
+                    r"写入.*文件", r"保存.*文件", r"创建.*文件", r"生成.*文件",
+                    r"write.*file", r"save.*file", r"create.*file", r"generate.*file",
+                    r"文件.*写入", r"保存.*到.*文件"
+                ],
+                "tool": "write_file",
+                "confidence": 0.82,
+                "reason": "File writing operations",
+                "priority": 1
+            },
+
+            # File Reading Operations
+            "read_file": {
+                "patterns": [
+                    r"读取.*文件", r"加载.*文件", r"打开.*文件", r"查看.*文件",
+                    r"read.*file", r"load.*file", r"open.*file", r"view.*file",
+                    r"文件.*读取", r"加载.*文件.*内容"
+                ],
+                "tool": "read_file",
+                "confidence": 0.80,
+                "reason": "File reading operations",
+                "priority": 1
+            },
+
+            # Domain/Layer Exploration
+            "explore_domains": {
+                "patterns": [
+                    r"查看.*领域", r"浏览.*层级", r"探索.*业务.*分类",
+                    r"view.*domains", r"browse.*layers", r"explore.*business.*taxonomy",
+                    r"领域.*结构", r"业务.*层级", r"数据.*分层"
+                ],
+                "tool": "list_domain_layers_tree",
+                "confidence": 0.78,
+                "reason": "Domain and layer exploration",
+                "priority": 2
+            },
+
+            # Time/Temporal Analysis
+            "temporal_analysis": {
+                "patterns": [
+                    r"解析.*日期", r"分析.*时间", r"处理.*时间.*范围",
+                    r"parse.*date", r"analyze.*temporal", r"process.*time.*range",
+                    r"日期.*表达式", r"时间.*段", r"时间.*分析"
+                ],
+                "tool": "parse_temporal_expressions",
+                "confidence": 0.75,
+                "reason": "Temporal expression parsing",
+                "priority": 2
+            },
+
+            # Current Date/Time Retrieval
+            "get_current_time": {
+                "patterns": [
+                    r"获取.*当前.*日期", r"今天.*日期", r"现在.*时间",
+                    r"get.*current.*date", r"today.*date", r"current.*time",
+                    r"当前.*时间", r"今日.*日期"
+                ],
+                "tool": "get_current_date",
+                "confidence": 0.95,
+                "reason": "Current date/time retrieval",
+                "priority": 1
+            }
+        }
+
+        # Check each task type with priority ordering
+        matches = []
+        for task_type, config in task_patterns.items():
+            for pattern in config["patterns"]:
+                import re
+                if re.search(pattern, text_lower, re.IGNORECASE):
+                    matches.append({
+                        "tool": config["tool"],
+                        "confidence": config["confidence"],
+                        "reason": config["reason"],
+                        "task_type": task_type,
+                        "priority": config["priority"]
+                    })
+                    break  # Only add each task type once
+
+        # Return the highest priority match (lowest priority number)
+        if matches:
+            best_match = min(matches, key=lambda x: (x["priority"], -x["confidence"]))
+            return best_match
+
+        return None
+
+    def _match_keywords_with_context(self, text: str) -> Optional[Dict[str, Any]]:
+        """
+        Enhanced keyword matching that considers context and intent.
+
+        Returns:
+            Dict with 'tool', 'confidence', and 'context' keys
+        """
+        if not text:
+            return None
+
+        text_lower = text.lower()
+        best_match = None
+        best_score = 0
+
+        # Analyze context clues
+        context_indicators = {
+            "database_focus": sum(1 for word in ["表", "table", "database", "schema", "字段", "column"] if word in text_lower),
+            "sql_focus": sum(1 for word in ["sql", "query", "select", "执行", "运行"] if word in text_lower),
+            "metrics_focus": sum(1 for word in ["指标", "metrics", "kpi", "转化率", "收入"] if word in text_lower),
+            "file_focus": sum(1 for word in ["文件", "file", "保存", "读取"] if word in text_lower),
+        }
+
+        # Primary context
+        primary_context = max(context_indicators.items(), key=lambda x: x[1])
+        primary_context_type = primary_context[0] if primary_context[1] > 0 else None
+
+        # Enhanced keyword matching with context awareness
+        context_aware_mappings = {
+            "database_focus": {
+                "search_table": ["探索", "查找", "找到", "搜索", "explore", "find", "search"],
+                "describe_table": ["描述", "检查", "查看", "分析", "describe", "inspect", "examine"]
+            },
+            "sql_focus": {
+                "execute_sql": ["执行", "运行", "查询", "execute", "run", "query"],
+                "read_query": ["读取", "获取", "read", "fetch"]
+            },
+            "metrics_focus": {
+                "search_metrics": ["指标", "metrics", "kpi", "分析", "analyze"]
+            },
+            "file_focus": {
+                "write_file": ["写入", "保存", "创建", "write", "save", "create"],
+                "read_file": ["读取", "加载", "read", "load"]
+            }
+        }
+
+        # Apply context-aware scoring
+        for tool_name, keywords in self.keyword_map.items():
+            score = 0
+
+            # Base keyword matching
+            for keyword in keywords:
+                if keyword.lower() in text_lower:
+                    score += 1
+
+            # Context boost
+            if primary_context_type and tool_name in context_aware_mappings.get(primary_context_type, {}):
+                context_keywords = context_aware_mappings[primary_context_type][tool_name]
+                for ctx_keyword in context_keywords:
+                    if ctx_keyword.lower() in text_lower:
+                        score += 2  # Context match gets higher weight
+
+            # Normalize score
+            if keywords:
+                normalized_score = score / len(keywords)
+                if normalized_score > best_score:
+                    best_score = normalized_score
+                    best_match = {
+                        "tool": tool_name,
+                        "confidence": min(0.95, normalized_score),
+                        "context": primary_context_type,
+                        "score": score
+                    }
+
+        return best_match if best_score > 0.3 else None
+
+    def _semantic_chinese_matching(self, text: str) -> Optional[Dict[str, Any]]:
+        """
+        Enhanced semantic understanding for Chinese task descriptions.
+        """
+        if not text:
+            return None
+
+        text_lower = text.lower()
+
+        # Advanced Chinese task pattern recognition with context
+        chinese_semantic_patterns = {
+            "search_table": {
+                "primary_verbs": ["探索", "查找", "找到", "搜索", "查看", "发现", "确认", "浏览"],
+                "secondary_verbs": ["了解", "获取", "收集", "整理"],
+                "nouns": ["表结构", "表", "字段", "数据库", "数据表", "表清单", "表列表"],
+                "context_indicators": ["有哪些表", "表都有什么", "数据库里有", "表结构是"],
+                "confidence": 0.88,
+                "priority": 1
+            },
+            "describe_table": {
+                "primary_verbs": ["描述", "检查", "分析", "查看", "检验", "了解"],
+                "secondary_verbs": ["解释", "说明", "展示", "显示"],
+                "nouns": ["表定义", "表模式", "表元数据", "表结构", "字段信息", "表详情"],
+                "context_indicators": ["表长什么样", "表的结构", "字段类型", "表定义是"],
+                "confidence": 0.85,
+                "priority": 1
+            },
+            "execute_sql": {
+                "primary_verbs": ["执行", "运行", "查询", "计算"],
+                "secondary_verbs": ["处理", "分析", "统计"],
+                "nouns": ["sql", "查询", "语句", "数据"],
+                "context_indicators": ["运行sql", "执行查询", "计算结果", "查询数据"],
+                "confidence": 0.90,
+                "priority": 1
+            },
+            "search_metrics": {
+                "primary_verbs": ["分析", "查看", "查找", "计算", "统计"],
+                "secondary_verbs": ["评估", "监控", "跟踪"],
+                "nouns": ["指标", "转化率", "收入", "销售额", "kpi", "绩效", "效率"],
+                "context_indicators": ["指标情况", "转化如何", "收入多少", "销售数据"],
+                "confidence": 0.86,
+                "priority": 1
+            },
+            "write_file": {
+                "primary_verbs": ["写入", "保存", "创建", "生成", "输出"],
+                "secondary_verbs": ["导出", "存储", "记录"],
+                "nouns": ["文件", "文档", "报告", "结果"],
+                "context_indicators": ["保存到文件", "生成报告", "导出结果", "写入文件"],
+                "confidence": 0.82,
+                "priority": 1
+            },
+            "read_file": {
+                "primary_verbs": ["读取", "加载", "打开", "查看"],
+                "secondary_verbs": ["导入", "获取", "获取"],
+                "nouns": ["文件", "文档", "内容", "数据"],
+                "context_indicators": ["读取文件", "查看内容", "加载数据", "打开文件"],
+                "confidence": 0.80,
+                "priority": 1
+            }
+        }
+
+        # Calculate semantic scores for each tool
+        candidates = []
+        for tool_name, pattern_config in chinese_semantic_patterns.items():
+            score = 0
+            reasons = []
+
+            # Primary verbs (higher weight)
+            primary_verb_matches = sum(1 for verb in pattern_config["primary_verbs"] if verb in text)
+            if primary_verb_matches > 0:
+                score += primary_verb_matches * 2
+                reasons.append(f"primary_verbs: {primary_verb_matches}")
+
+            # Secondary verbs
+            secondary_verb_matches = sum(1 for verb in pattern_config["secondary_verbs"] if verb in text)
+            if secondary_verb_matches > 0:
+                score += secondary_verb_matches * 1.5
+                reasons.append(f"secondary_verbs: {secondary_verb_matches}")
+
+            # Nouns
+            noun_matches = sum(1 for noun in pattern_config["nouns"] if noun in text)
+            if noun_matches > 0:
+                score += noun_matches * 1.8
+                reasons.append(f"nouns: {noun_matches}")
+
+            # Context indicators (highest weight)
+            context_matches = sum(1 for indicator in pattern_config["context_indicators"] if indicator in text_lower)
+            if context_matches > 0:
+                score += context_matches * 3
+                reasons.append(f"context: {context_matches}")
+
+            # Semantic phrase patterns
+            semantic_patterns = [
+                (r"把.*保存.*文件", "write_file"),
+                (r"从.*文件.*读取", "read_file"),
+                (r"执行.*sql.*查询", "execute_sql"),
+                (r"分析.*指标.*数据", "search_metrics"),
+                (r"查看.*表.*结构", "describe_table"),
+                (r"探索.*数据库.*表", "search_table"),
+            ]
+
+            for pattern, expected_tool in semantic_patterns:
+                import re
+                if expected_tool == tool_name and re.search(pattern, text_lower):
+                    score += 4
+                    reasons.append(f"semantic_pattern: {pattern}")
+
+            # Calculate confidence based on score and priority
+            if score > 0:
+                # Normalize confidence based on maximum possible score
+                max_possible_score = (len(pattern_config["primary_verbs"]) * 2 +
+                                    len(pattern_config["secondary_verbs"]) * 1.5 +
+                                    len(pattern_config["nouns"]) * 1.8 +
+                                    len(pattern_config["context_indicators"]) * 3 + 4)
+
+                confidence = min(pattern_config["confidence"],
+                               (score / max_possible_score) * pattern_config["confidence"])
+
+                if confidence > 0.65:  # Minimum threshold
+                    candidates.append({
+                        "tool": tool_name,
+                        "confidence": confidence,
+                        "score": score,
+                        "priority": pattern_config["priority"],
+                        "reasons": reasons,
+                        "semantic_analysis": True
+                    })
+
+        # Return the best candidate
+        if candidates:
+            best_candidate = max(candidates, key=lambda x: (x["score"], -x["priority"]))
+            return {
+                "tool": best_candidate["tool"],
+                "confidence": best_candidate["confidence"],
+                "reason": f"Chinese semantic analysis: {'; '.join(best_candidate['reasons'])}",
+                "score": best_candidate["score"],
+                "semantic_analysis": True
+            }
+
+        return None
+
+    def _enhanced_llm_reasoning(self, text: str) -> Optional[str]:
+        """
+        Enhanced LLM reasoning with comprehensive tool knowledge and context.
+        """
+        if not self.model or not text:
+            return None
+
+        try:
+            # Comprehensive tool descriptions with use cases
+            tool_knowledge = {
+                "search_table": {
+                    "description": "Search for database tables and their schemas",
+                    "use_cases": ["explore database structure", "find tables by name", "discover available tables"],
+                    "examples": ["find all tables related to customers", "search for sales tables"]
+                },
+                "describe_table": {
+                    "description": "Get detailed schema information for a specific table",
+                    "use_cases": ["examine table structure", "check column definitions", "understand table metadata"],
+                    "examples": ["describe the customer table", "show me the structure of orders table"]
+                },
+                "execute_sql": {
+                    "description": "Execute SQL queries and return results",
+                    "use_cases": ["run data queries", "perform calculations", "retrieve specific data"],
+                    "examples": ["run this SQL query", "execute the analysis query"]
+                },
+                "read_query": {
+                    "description": "Execute read-only SQL queries for data retrieval",
+                    "use_cases": ["fetch data", "analyze datasets", "perform read operations"],
+                    "examples": ["get customer data", "retrieve sales records"]
+                },
+                "search_metrics": {
+                    "description": "Search for business metrics and KPIs",
+                    "use_cases": ["find performance indicators", "locate business metrics", "analyze KPIs"],
+                    "examples": ["find conversion rate metrics", "search for sales KPIs"]
+                },
+                "search_reference_sql": {
+                    "description": "Find example SQL queries and patterns",
+                    "use_cases": ["find similar queries", "get SQL examples", "learn query patterns"],
+                    "examples": ["find SQL examples for joins", "search for aggregation queries"]
+                },
+                "write_file": {
+                    "description": "Write content to files",
+                    "use_cases": ["save results", "create reports", "export data"],
+                    "examples": ["save results to file", "create a report"]
+                },
+                "read_file": {
+                    "description": "Read content from files",
+                    "use_cases": ["load data", "import content", "read documents"],
+                    "examples": ["read the configuration file", "load the data file"]
+                },
+                "list_directory": {
+                    "description": "List files and directories",
+                    "use_cases": ["explore file system", "find files", "browse directories"],
+                    "examples": ["list files in directory", "show me the contents"]
+                },
+                "list_domain_layers_tree": {
+                    "description": "Explore business domain structure and data layers",
+                    "use_cases": ["understand data organization", "explore business domains", "view data hierarchy"],
+                    "examples": ["show business domains", "explore data layers"]
+                },
+                "parse_temporal_expressions": {
+                    "description": "Parse and understand date/time expressions",
+                    "use_cases": ["analyze time periods", "parse date ranges", "understand temporal data"],
+                    "examples": ["parse this date expression", "analyze time periods"]
+                },
+                "get_current_date": {
+                    "description": "Get the current date and time",
+                    "use_cases": ["get today's date", "current timestamp", "now time"],
+                    "examples": ["what is today's date", "current time"]
+                },
+                "check_semantic_model_exists": {
+                    "description": "Check if semantic models are available",
+                    "use_cases": ["verify model availability", "find semantic definitions"],
+                    "examples": ["check semantic model", "find available models"]
+                },
+                "check_metric_exists": {
+                    "description": "Verify if specific metrics exist",
+                    "use_cases": ["validate metric availability", "check metric definitions"],
+                    "examples": ["does this metric exist", "check metric availability"]
+                },
+                "generate_sql_summary_id": {
+                    "description": "Generate identifiers for SQL queries",
+                    "use_cases": ["create query IDs", "generate summary identifiers"],
+                    "examples": ["generate SQL summary ID"]
+                },
+                "todo_write": {
+                    "description": "Create and manage task lists (todos)",
+                    "use_cases": ["create task plans", "manage workflows", "organize tasks"],
+                    "examples": ["create a task list", "plan the work"]
+                },
+                "todo_update": {
+                    "description": "Update task status in todo lists",
+                    "use_cases": ["mark tasks complete", "update progress", "change task status"],
+                    "examples": ["mark task as done", "update task status"]
+                },
+                "todo_read": {
+                    "description": "Read and display task lists",
+                    "use_cases": ["view current tasks", "check progress", "review plans"],
+                    "examples": ["show my tasks", "check task status"]
+                },
+                "report": {
+                    "description": "Generate comprehensive reports",
+                    "use_cases": ["create final reports", "summarize results", "produce documentation"],
+                    "examples": ["generate final report", "create summary report"]
+                }
+            }
+
+            # Analyze task context
+            task_context = self._analyze_task_context(text)
+
+            # Build detailed prompt
+            tool_list = []
+            for tool_name, knowledge in tool_knowledge.items():
+                examples = ", ".join(knowledge["examples"][:2])  # Limit examples
+                tool_list.append(f"- {tool_name}: {knowledge['description']} (e.g., {examples})")
+
+            prompt = f"""You are an expert at selecting the right tool for database and data analysis tasks.
+
+TASK TO ANALYZE: "{text}"
+
+TASK CONTEXT ANALYSIS:
+- Primary focus: {task_context.get('primary_focus', 'unknown')}
+- Action type: {task_context.get('action_type', 'unknown')}
+- Data type: {task_context.get('data_type', 'unknown')}
+- Expected output: {task_context.get('expected_output', 'unknown')}
+
+AVAILABLE TOOLS:
+{chr(10).join(tool_list)}
+
+INSTRUCTIONS:
+1. Analyze the task intent and requirements
+2. Consider what type of operation is needed (explore, describe, execute, analyze, create, read)
+3. Match the task to the most appropriate tool based on its capabilities
+4. Choose the tool that will most directly accomplish the task goal
+
+Respond with ONLY the exact tool name (one word, lowercase with underscores if needed).
+Do not include any explanation or additional text.
+
+TOOL:"""
+
+            # Use async call if available
+            if hasattr(self.model, 'generate_async'):
+                response = asyncio.run(self.model.generate_async(prompt, max_tokens=15, temperature=0.1))
+            else:
+                response = self.model.generate(prompt, max_tokens=15, temperature=0.1)
+
+            if response and hasattr(response, 'content'):
+                tool_name = response.content.strip().lower()
+                # Clean up response (remove extra text if any)
+                tool_name = tool_name.split()[0] if tool_name.split() else tool_name
+                tool_name = tool_name.strip('.:')
+
+                # Validate response
+                available_tools = set(self.keyword_map.keys())
+                if tool_name in available_tools:
+                    return tool_name
+                else:
+                    logger.debug(f"LLM suggested invalid tool '{tool_name}', available: {available_tools}")
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Enhanced LLM reasoning failed: {e}")
+            return None
+
+    def _analyze_task_context(self, text: str) -> Dict[str, str]:
+        """
+        Analyze task context to provide better LLM reasoning.
+        """
+        text_lower = text.lower()
+
+        # Determine primary focus
+        if any(word in text_lower for word in ["表", "table", "database", "schema"]):
+            primary_focus = "database"
+        elif any(word in text_lower for word in ["指标", "metrics", "kpi", "转化率"]):
+            primary_focus = "metrics"
+        elif any(word in text_lower for word in ["文件", "file", "document"]):
+            primary_focus = "files"
+        elif any(word in text_lower for word in ["sql", "query", "select"]):
+            primary_focus = "queries"
+        elif any(word in text_lower for word in ["时间", "日期", "date", "time"]):
+            primary_focus = "temporal"
+        else:
+            primary_focus = "general"
+
+        # Determine action type
+        if any(word in text_lower for word in ["探索", "查找", "找到", "搜索", "explore", "find", "search"]):
+            action_type = "explore"
+        elif any(word in text_lower for word in ["描述", "检查", "查看", "describe", "inspect", "examine"]):
+            action_type = "describe"
+        elif any(word in text_lower for word in ["执行", "运行", "execute", "run"]):
+            action_type = "execute"
+        elif any(word in text_lower for word in ["创建", "生成", "写入", "create", "generate", "write"]):
+            action_type = "create"
+        elif any(word in text_lower for word in ["读取", "加载", "read", "load"]):
+            action_type = "read"
+        else:
+            action_type = "analyze"
+
+        # Determine data type
+        if "sql" in text_lower:
+            data_type = "sql_queries"
+        elif any(word in text_lower for word in ["json", "xml", "text"]):
+            data_type = "structured_data"
+        elif any(word in text_lower for word in ["指标", "metrics", "kpi"]):
+            data_type = "business_metrics"
+        elif any(word in text_lower for word in ["表", "table", "schema"]):
+            data_type = "database_schema"
+        else:
+            data_type = "general_data"
+
+        # Determine expected output
+        if any(word in text_lower for word in ["报告", "report", "summary"]):
+            expected_output = "report"
+        elif any(word in text_lower for word in ["结果", "数据", "results", "data"]):
+            expected_output = "data"
+        elif any(word in text_lower for word in ["结构", "信息", "structure", "information"]):
+            expected_output = "information"
+        else:
+            expected_output = "results"
+
+        return {
+            "primary_focus": primary_focus,
+            "action_type": action_type,
+            "data_type": data_type,
+            "expected_output": expected_output
+        }
+
+    def _enhanced_intelligent_inference(self, text: str) -> Optional[str]:
+        """
+        Enhanced intelligent inference as final fallback.
+        """
+        if not text:
+            return None
+
+        text_lower = text.lower()
+
+        # Priority-based inference rules
+        inference_rules = [
+            # High priority: Database exploration
+            (lambda t: any(word in t for word in ["探索", "查找", "找到", "搜索", "explore", "find", "search"]) and
+                      any(word in t for word in ["表", "table", "database", "schema"]),
+             "search_table", 0.8),
+
+            # High priority: Table description
+            (lambda t: any(word in t for word in ["描述", "检查", "分析", "describe", "inspect", "analyze"]) and
+                      any(word in t for word in ["表", "table", "schema", "structure"]),
+             "describe_table", 0.75),
+
+            # Medium priority: SQL execution
+            (lambda t: any(word in t for word in ["执行", "运行", "execute", "run"]) and
+                      any(word in t for word in ["sql", "查询", "query"]),
+             "execute_sql", 0.7),
+
+            # Medium priority: Metrics
+            (lambda t: any(word in t for word in ["指标", "metrics", "kpi", "转化率"]),
+             "search_metrics", 0.7),
+
+            # Low priority: File operations
+            (lambda t: any(word in t for word in ["文件", "写入", "保存", "读取", "file", "write", "save", "read"]),
+             "write_file", 0.6),
+        ]
+
+        for condition, tool, confidence in inference_rules:
+            if condition(text_lower):
+                logger.debug(f"Inferred tool '{tool}' with confidence {confidence}")
+                return tool
+
+        return None
 
     def _is_actually_completed(self, todo_id: str) -> bool:
         """
