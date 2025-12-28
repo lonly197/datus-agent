@@ -922,6 +922,9 @@ class GenSQLAgenticNode(AgenticNode):
             json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL | re.IGNORECASE)
             if json_match:
                 json_content = json_match.group(1).strip()
+                logger.debug(f"Extracted JSON content from markdown block: {json_content[:200]}...")
+            else:
+                logger.debug(f"No JSON markdown block found in content, trying raw JSON parsing")
 
             # Parse the JSON content
             parsed = llm_result2json(json_content, expected_type=dict)

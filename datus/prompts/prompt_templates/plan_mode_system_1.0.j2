@@ -130,14 +130,16 @@ Once all sub-queries are completed:
 2. Synthesize them into a final SQL query or combine results programmatically
 3. Present the final answer with clear explanation of how sub-results were combined
 
-When providing the final SQL query, use the following JSON format:
+IMPORTANT: After completing all analysis, you MUST output ONLY the following JSON format with your final SQL query:
 
 ```json
 {
-  "sql": "your final SQL query here",
-  "explanation": "brief explanation of the query and how results were combined"
+  "sql": "SELECT * FROM your_final_query_here",
+  "explanation": "Brief explanation of the query and how results were combined"
 }
 ```
+
+Do NOT include any other text, analysis, or explanation outside of this JSON block. The JSON block must be the final output.
 
 {{ execution_prompt }}
 {% endif %}

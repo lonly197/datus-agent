@@ -188,6 +188,13 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 logger.info(f"Added SQL context to workflow. Total contexts: {len(workflow.context.sql_contexts)}")
             else:
                 logger.warning("No SQL content found in chat node result or action history")
+                # Debug: log what we have available
+                if hasattr(result, "sql"):
+                    logger.warning(f"result.sql: {result.sql}")
+                if hasattr(result, "response"):
+                    logger.warning(f"result.response length: {len(result.response) if result.response else 0}")
+                if self.action_history_manager:
+                    logger.warning(f"action_history_manager has {len(self.action_history_manager.get_actions())} actions")
 
             return {"success": True, "message": "Updated chat context"}
         except Exception as e:
@@ -251,6 +258,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Yields:
             ActionHistory: Progress updates during execution
         """
+        # Store action_history_manager for access in update_context
+        self.action_history_manager = action_history_manager
+
         if not action_history_manager:
             action_history_manager = ActionHistoryManager()
 
