@@ -315,6 +315,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
             auto_mode = getattr(user_input, "auto_execute_plan", False)
             logger.info(f"Plan mode auto_mode: {auto_mode} (from input)")
 
+            # Check for auto-injected knowledge from workflow task
+            auto_injected_knowledge = getattr(workflow.task, '_auto_injected_knowledge', None) if workflow else None
+
             self.plan_hooks = PlanModeHooks(
                 console=console,
                 session=session,
@@ -323,6 +326,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 agent_config=self.agent_config,
                 emit_queue=emit_queue,
                 model=self.model,  # Pass model for LLM reasoning fallback
+                auto_injected_knowledge=auto_injected_knowledge,
             )
 
         # Create initial action

@@ -12,6 +12,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.schemas.agent_models import SubAgentConfig
 from datus.storage.metric.store import SemanticMetricsRAG
 from datus.storage.reference_sql.store import ReferenceSqlRAG
+from datus.storage.ext_knowledge.store import ExtKnowledgeStore
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.loggings import get_logger
 
@@ -20,6 +21,7 @@ logger = get_logger(__name__)
 _NAME = "context_search_tools"
 _NAME_METRICS = "context_search_tools.search_metrics"
 _NAME_SQL = "context_search_tools.search_reference_sql"
+_NAME_EXT_KNOWLEDGE = "context_search_tools.search_external_knowledge"
 
 
 class ContextSearchTools:
@@ -28,12 +30,14 @@ class ContextSearchTools:
         self.sub_agent_name = sub_agent_name
         self.metric_rag = SemanticMetricsRAG(agent_config, sub_agent_name)
         self.reference_sql_store = ReferenceSqlRAG(agent_config, sub_agent_name)
+        self.ext_knowledge_store = ExtKnowledgeStore(agent_config.rag_storage_path())
         if sub_agent_name:
             self.sub_agent_config = SubAgentConfig.model_validate(self.agent_config.sub_agent_config(sub_agent_name))
         else:
             self.sub_agent_config = None
         self.has_metrics = self.metric_rag.get_metrics_size() > 0
         self.has_reference_sql = self.reference_sql_store.get_reference_sql_size() > 0
+        self.has_ext_knowledge = self.ext_knowledge_store.table_size() > 0
 
     def _show_metrics(self):
         return self.has_metrics and (
@@ -49,6 +53,13 @@ class ContextSearchTools:
             or _NAME_SQL in self.sub_agent_config.tool_list
         )
 
+    def _show_ext_knowledge(self):
+        return self.has_ext_knowledge and (
+            not self.sub_agent_config
+            or _NAME in self.sub_agent_config.tool_list
+            or _NAME_EXT_KNOWLEDGE in self.sub_agent_config.tool_list
+        )
+
     def available_tools(self) -> List[Tool]:
         tools = []
         if self.has_metrics:
@@ -59,11 +70,16 @@ class ContextSearchTools:
             if not self.has_metrics:
                 tools.append(trans_to_function_tool(self.list_domain_layers_tree))
             tools.append(trans_to_function_tool(self.search_reference_sql))
+
+        if self.has_ext_knowledge:
+            if not self.has_metrics and not self.has_reference_sql:
+                tools.append(trans_to_function_tool(self.list_domain_layers_tree))
+            tools.append(trans_to_function_tool(self.search_external_knowledge))
         return tools
 
     def list_domain_layers_tree(self) -> FuncToolResult:
         """
-        Aggregate the available domain-layer taxonomy across metrics and reference SQL.
+        Aggregate the available domain-layer taxonomy across metrics, reference SQL, and external knowledge.
 
         The response has the structure:
         {
@@ -71,7 +87,8 @@ class ContextSearchTools:
                 "<layer1>": {
                     "<layer2>": {
                         "metrics_size": <int, optional>,
-                        "sql_size": <int, optional>
+                        "sql_size": <int, optional>,
+                        "ext_knowledge_size": <int, optional>
                     },
                     ...
                 },
@@ -89,6 +106,9 @@ class ContextSearchTools:
 
             for sql_item in self._collect_sql_entries():
                 ContextSearchTools._fill_in_domain_layer_tree(domain_tree, sql_item, "sql_size")
+
+            for ext_knowledge_item in self._collect_ext_knowledge_entries():
+                ContextSearchTools._fill_in_domain_layer_tree(domain_tree, ext_knowledge_item, "ext_knowledge_size")
 
             serializable_tree = {
                 domain: {
@@ -134,6 +154,15 @@ class ContextSearchTools:
             )
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("Failed to collect SQL taxonomy: %s", exc)
+            return []
+
+    def _collect_ext_knowledge_entries(self) -> Sequence[Dict[str, Any]]:
+        if not self._show_ext_knowledge():
+            return []
+        try:
+            return self.ext_knowledge_store.search_all_knowledge()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("Failed to collect external knowledge taxonomy: %s", exc)
             return []
 
     def search_metrics(
@@ -202,4 +231,48 @@ class ContextSearchTools:
             return FuncToolResult(success=1, error=None, result=result)
         except Exception as e:
             logger.error(f"Failed to search reference SQL for `{query_text}`: {e}")
+            return FuncToolResult(success=0, error=str(e))
+
+    def search_external_knowledge(
+        self, query_text: str, domain: str = "", layer1: str = "", layer2: str = "", top_n: int = 5
+    ) -> FuncToolResult:
+        """
+        Search for relevant external knowledge using natural language queries.
+
+        Args:
+            query_text: Natural language description of the knowledge needed (e.g., "SQL review rules", "partitioning best practices").
+            domain: Business domain filter derived from list_domain_layers_tree.
+            layer1: First-layer subject filter derived from list_domain_layers_tree.
+            layer2: Second-layer subject filter derived from list_domain_layers_tree.
+            top_n: Maximum number of results to return (default 5).
+
+        Returns:
+            FuncToolResult with list of matching knowledge entries containing terminology, explanation, domain, layer1, layer2.
+        """
+        try:
+            search_results = self.ext_knowledge_store.search_knowledge(
+                query_text=query_text,
+                domain=domain,
+                layer1=layer1,
+                layer2=layer2,
+                top_n=top_n
+            )
+
+            # Convert pyarrow table to list of dicts
+            results = []
+            if len(search_results) > 0:
+                for result in search_results:
+                    results.append({
+                        "terminology": result.get("terminology", ""),
+                        "explanation": result.get("explanation", ""),
+                        "domain": result.get("domain", ""),
+                        "layer1": result.get("layer1", ""),
+                        "layer2": result.get("layer2", ""),
+                        "created_at": result.get("created_at", "")
+                    })
+
+            logger.debug(f"Found {len(results)} external knowledge entries for query: {query_text}")
+            return FuncToolResult(success=1, error=None, result=results)
+        except Exception as e:
+            logger.error(f"Failed to search external knowledge for '{query_text}': {str(e)}")
             return FuncToolResult(success=0, error=str(e))

@@ -12,6 +12,7 @@ from datus.schemas.base import BaseInput
 from datus.schemas.node_models import TableSchema, TableValue
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput, SchemaLinkingResult
 from datus.storage.ext_knowledge.store import ExtKnowledgeStore
+from datus.tools.func_tool.context_search import ContextSearchTools
 from datus.tools.lineage_graph_tools.schema_lineage import SchemaLineageTool
 from datus.utils.loggings import get_logger
 
@@ -192,32 +193,35 @@ class SchemaLinkingNode(Node):
             Formatted string of relevant knowledge entries, empty string if no results or error
         """
         try:
-            # Initialize ExtKnowledgeStore
-            storage_path = self.agent_config.rag_storage_path()
-            ext_knowledge_store = ExtKnowledgeStore(storage_path)
+            # Use ContextSearchTools for external knowledge search (preferred over direct store access)
+            context_search_tools = ContextSearchTools(self.agent_config)
 
-            # Check if ext_knowledge table exists
-            if ext_knowledge_store.table_size() == 0:
-                logger.debug("External knowledge store is empty, skipping search")
+            # Check if external knowledge is available
+            if not context_search_tools.has_ext_knowledge:
+                logger.debug("External knowledge store is empty or not available, skipping search")
                 return ""
 
-            # Execute semantic search
-            search_results = ext_knowledge_store.search_knowledge(
+            # Execute search using ContextSearchTools
+            search_result = context_search_tools.search_external_knowledge(
                 query_text=user_query, domain=domain, layer1=layer1, layer2=layer2, top_n=5
             )
 
             # Format search results
-            if search_results:
+            if search_result.success and search_result.result:
                 knowledge_items = []
-                for result in search_results:
-                    knowledge_items.append(f"- {result['terminology']}: {result['explanation']}")
+                for result in search_result.result:
+                    terminology = result.get('terminology', '')
+                    explanation = result.get('explanation', '')
+                    if terminology and explanation:
+                        knowledge_items.append(f"- {terminology}: {explanation}")
 
-                formatted_knowledge = "\n".join(knowledge_items)
-                logger.info(f"Found {len(search_results)} relevant knowledge entries")
-                return formatted_knowledge
-            else:
-                logger.debug("No relevant external knowledge found")
-                return ""
+                if knowledge_items:
+                    formatted_knowledge = "\n".join(knowledge_items)
+                    logger.info(f"Found {len(knowledge_items)} relevant knowledge entries")
+                    return formatted_knowledge
+
+            logger.debug("No relevant external knowledge found")
+            return ""
 
         except Exception as e:
             logger.warning(f"Failed to search external knowledge: {str(e)}")

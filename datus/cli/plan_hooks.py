@@ -919,7 +919,7 @@ class UserCancelledException(Exception):
 class PlanModeHooks(AgentHooks):
     """Plan Mode hooks for workflow management"""
 
-    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False, action_history_manager=None, agent_config=None, emit_queue: Optional[asyncio.Queue] = None, model=None):
+    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False, action_history_manager=None, agent_config=None, emit_queue: Optional[asyncio.Queue] = None, model=None, auto_injected_knowledge: Optional[List[str]] = None):
         self.console = console
         self.session = session
         self.auto_mode = auto_mode
@@ -956,6 +956,8 @@ class PlanModeHooks(AgentHooks):
 
         # Initialize monitoring system
         self.monitor = ExecutionMonitor()
+        # Store auto-injected knowledge for user confirmation
+        self.auto_injected_knowledge = auto_injected_knowledge or []
         try:
             if agent_config and hasattr(agent_config, "plan_executor_enable_fallback"):
                 self.enable_fallback = bool(agent_config.plan_executor_enable_fallback)
@@ -1440,6 +1442,24 @@ Respond with only the tool name, nothing else."""
         execution_controller.stop_live_display()
         await asyncio.sleep(0.3)
 
+        # Surface auto-injected knowledge for user confirmation if not in auto mode
+        if self.auto_injected_knowledge and not self.auto_mode:
+            self.console.print("[bold yellow]Auto-detected Knowledge:[/]")
+            self.console.print("[dim]The following knowledge was automatically detected and will be used:[/]")
+            for i, knowledge in enumerate(self.auto_injected_knowledge, 1):
+                self.console.print(f"  {i}. {knowledge}")
+            self.console.print()
+
+            # Ask for user confirmation
+            try:
+                confirmed = await self._get_user_confirmation_for_knowledge()
+                if not confirmed:
+                    self.console.print("[yellow]Knowledge injection cancelled by user.[/]")
+                    return
+            except Exception as e:
+                logger.warning(f"Failed to get knowledge confirmation: {e}")
+                # Continue with plan generation if confirmation fails
+
         self.console.print("[bold green]Plan Generated Successfully![/]")
         self.console.print("[bold cyan]Execution Plan:[/]")
 
@@ -1569,6 +1589,51 @@ Respond with only the tool name, nothing else."""
                     await self._get_user_confirmation()
         except (KeyboardInterrupt, EOFError):
             self.console.print("\n[yellow]Replan cancelled[/]")
+
+    async def _get_user_confirmation_for_knowledge(self) -> bool:
+        """Get user confirmation for auto-injected knowledge."""
+        import asyncio
+        import sys
+
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            self.console.print("\n[bold cyan]AUTO-DETECTED KNOWLEDGE CONFIRMATION:[/]")
+            self.console.print("The system automatically detected relevant knowledge for your task.")
+            self.console.print("This knowledge will be used to generate better SQL/results.")
+            self.console.print("")
+            self.console.print("  y. Accept and continue with plan generation")
+            self.console.print("  n. Reject auto-detected knowledge (plan will proceed without it)")
+            self.console.print("")
+
+            # Pause execution while getting user input
+            async with execution_controller.pause_execution():
+                await asyncio.sleep(0.2)
+
+                def get_user_input():
+                    return blocking_input_manager.get_blocking_input(
+                        lambda: input("Accept auto-detected knowledge? (y/n) [y]: ").strip().lower() or "y"
+                    )
+
+                choice = await execution_controller.request_user_input(get_user_input)
+
+                if choice in ["y", "yes", ""]:
+                    self.console.print("[green]Accepted auto-detected knowledge[/]")
+                    return True
+                elif choice in ["n", "no"]:
+                    self.console.print("[yellow]Rejected auto-detected knowledge[/]")
+                    return False
+                else:
+                    self.console.print("[yellow]Invalid choice, defaulting to accept[/]")
+                    return True
+
+        except (KeyboardInterrupt, EOFError):
+            self.console.print("\n[yellow]Knowledge confirmation cancelled, proceeding with acceptance[/]")
+            return True
+        except Exception as e:
+            logger.warning(f"Knowledge confirmation failed: {e}, proceeding with acceptance")
+            return True
 
     async def _handle_execution_step(self, _tool_name: str):
         import asyncio

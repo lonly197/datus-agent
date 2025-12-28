@@ -278,7 +278,7 @@ class DatusAPIService:
 
         return self.agents[namespace]
 
-    def _create_sql_task(self, request: RunWorkflowRequest, task_id: str, agent: Agent) -> SqlTask:
+    async def _create_sql_task(self, request: RunWorkflowRequest, task_id: str, agent: Agent) -> SqlTask:
         """Create SQL task from request parameters."""
         # Load default metric_meta (will return default values if not configured)
         metric_meta = agent.global_config.current_metric_meta("default")
@@ -296,6 +296,74 @@ class DatusAPIService:
             layer2 = request.layer2
         if request.ext_knowledge is not None:
             external_knowledge = request.ext_knowledge
+
+        # Auto-inject external knowledge in plan_mode when not explicitly provided
+        if (request.plan_mode and request.ext_knowledge is None and
+            getattr(agent.global_config, 'plan_mode_auto_inject_ext_knowledge', True)):
+
+            try:
+                # Import here to avoid circular imports
+                from datus.agent.intent_detection import detect_sql_intent
+                from datus.storage.ext_knowledge.store import ExtKnowledgeStore
+
+                # Get model for LLM fallback (use target model from config)
+                model = None
+                try:
+                    model = agent.global_config.get_model()
+                except Exception as e:
+                    logger.warning(f"Could not get model for intent detection: {e}")
+
+                # Detect SQL intent
+                intent_result = await detect_sql_intent(
+                    text=request.task,
+                    model=model,
+                    keyword_threshold=getattr(agent.global_config, 'intent_detector_keyword_threshold', 1),
+                    llm_confidence_threshold=getattr(agent.global_config, 'intent_detector_llm_confidence_threshold', 0.7)
+                )
+
+                # If SQL-related intent detected, search for relevant external knowledge
+                if intent_result.intent in ['sql_generation', 'sql_review', 'sql_related']:
+                    try:
+                        ext_knowledge_store = ExtKnowledgeStore(agent.global_config.rag_storage_path())
+
+                        # Check if store has knowledge
+                        if ext_knowledge_store.table_size() > 0:
+                            search_results = ext_knowledge_store.search_knowledge(
+                                query_text=request.task,
+                                domain=domain or "",
+                                layer1=layer1 or "",
+                                layer2=layer2 or "",
+                                top_n=5
+                            )
+
+                            # Build knowledge string from results
+                            if len(search_results) > 0:
+                                knowledge_items = []
+                                for result in search_results:
+                                    terminology = result.get('terminology', '')
+                                    explanation = result.get('explanation', '')
+                                    if terminology and explanation:
+                                        knowledge_items.append(f"- {terminology}: {explanation}")
+
+                                if knowledge_items:
+                                    auto_injected_knowledge = "\n".join(knowledge_items)
+                                    if external_knowledge:
+                                        external_knowledge = f"{external_knowledge}\n\nAuto-detected relevant knowledge:\n{auto_injected_knowledge}"
+                                    else:
+                                        external_knowledge = f"Auto-detected relevant knowledge:\n{auto_injected_knowledge}"
+
+                                    logger.info(f"Auto-injected {len(knowledge_items)} knowledge items for task: {request.task[:50]}...")
+
+                                    # Add metadata to indicate auto-injection occurred
+                                    if not hasattr(request, '_auto_injected_knowledge'):
+                                        request._auto_injected_knowledge = []
+                                    request._auto_injected_knowledge.extend(knowledge_items)
+
+                    except Exception as e:
+                        logger.warning(f"Failed to auto-inject external knowledge: {e}")
+
+            except Exception as e:
+                logger.warning(f"Intent detection failed: {e}")
 
         return SqlTask(
             id=task_id,
@@ -349,7 +417,7 @@ class DatusAPIService:
             agent = self.get_agent(request.namespace)
 
             # Create SQL task
-            sql_task = self._create_sql_task(request, task_id, agent)
+            sql_task = await self._create_sql_task(request, task_id, agent)
 
             # Execute workflow synchronously using isolated runner
             runner = agent.create_workflow_runner()
@@ -433,7 +501,7 @@ class DatusAPIService:
             agent = self.get_agent(request.namespace)
 
             # Create SQL task
-            sql_task = self._create_sql_task(request, task_id, agent)
+            sql_task = await self._create_sql_task(request, task_id, agent)
 
             # Create action history manager for tracking
             action_history_manager = ActionHistoryManager()
@@ -490,7 +558,7 @@ class DatusAPIService:
 
             # Create SQL task with appropriate workflow based on plan mode
             workflow_name = "chat_agentic_plan" if request.plan_mode else "chat_agentic"
-            sql_task = self._create_sql_task(
+            sql_task = await self._create_sql_task(
                 RunWorkflowRequest(
                     workflow=workflow_name,
                     namespace=request.namespace,
