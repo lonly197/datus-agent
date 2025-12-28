@@ -521,7 +521,7 @@ class GenSQLAgenticNode(AgenticNode):
                 from datus.cli.plan_hooks import PlanModeHooks
 
                 auto_mode = getattr(user_input, "auto_execute_plan", False)
-                self.plan_hooks = PlanModeHooks(console=Console(), session=session, auto_mode=auto_mode)
+                self.plan_hooks = PlanModeHooks(console=Console(), session=session, auto_mode=auto_mode, model=self.model)
                 logger.info(f"Plan mode activated (auto_mode={auto_mode})")
 
             system_instruction = self._get_system_prompt(conversation_summary, user_input.prompt_version)

@@ -34,10 +34,12 @@ class UserCancelledException(Exception):
 class PlanModeHooks(AgentHooks):
     """Plan Mode hooks for workflow management"""
 
-    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False, action_history_manager=None, agent_config=None, emit_queue: Optional[asyncio.Queue] = None):
+    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False, action_history_manager=None, agent_config=None, emit_queue: Optional[asyncio.Queue] = None, model=None):
         self.console = console
         self.session = session
         self.auto_mode = auto_mode
+        # Optional model for LLM reasoning fallback
+        self.model = model
         from datus.tools.func_tool.plan_tools import SessionTodoStorage
 
         self.todo_storage = SessionTodoStorage(session)
@@ -54,11 +56,97 @@ class PlanModeHooks(AgentHooks):
         self.emit_queue = emit_queue
         # load keyword->tool mapping from agent_config if provided, otherwise use default
         self.keyword_map: Dict[str, List[str]] = {}
+        # Comprehensive keyword mapping with exact phrase matching
         default_map: Dict[str, List[str]] = {
-            "search_table": ["search for", "搜索表", "查找表", "find table", "search table", "find tables"],
-            "inspect_schema": ["describe table", "检查表结构", "inspect schema", "table structure", "schema info"],
-            "execute_sql": ["execute sql", "执行sql", "执行 sql", "run sql", "执行sql语句", "run the sql"],
-            "report": ["generate report", "生成报告", "write report", "write", "生成html", "生成最终报告"],
+            # Database tools
+            "search_table": [
+                "search for table", "搜索表结构", "查找数据库表", "find table in database",
+                "search table schema", "查找表信息", "find database tables", "搜索数据库表"
+            ],
+            "describe_table": [
+                "describe table", "检查表结构", "inspect table schema", "查看表结构",
+                "show table columns", "表字段信息", "examine table structure", "分析表结构"
+            ],
+            "execute_sql": [
+                "execute sql query", "执行sql查询", "run sql statement", "执行sql语句",
+                "run database query", "执行数据库查询", "execute the sql", "运行sql代码"
+            ],
+            "read_query": [
+                "run query", "执行查询", "execute database query", "运行数据库查询",
+                "perform sql execution", "执行sql执行"
+            ],
+
+            # Metrics and reference SQL tools
+            "search_metrics": [
+                "search metrics", "查找指标", "find business metrics", "搜索业务指标",
+                "look for kpis", "查找kpi", "search performance metrics", "查找绩效指标"
+            ],
+            "search_reference_sql": [
+                "search sql examples", "查找参考sql", "find reference sql", "搜索sql模板",
+                "look for sql patterns", "查找sql模式", "search similar sql", "查找相似sql"
+            ],
+            "list_domain_layers_tree": [
+                "list domains", "查看领域层级", "show domain structure", "显示业务分类",
+                "explore domain layers", "浏览领域层级", "view business taxonomy", "查看业务分类法"
+            ],
+
+            # Semantic model tools
+            "check_semantic_model_exists": [
+                "check semantic model", "检查语义模型", "verify semantic model", "验证语义模型",
+                "semantic model exists", "语义模型是否存在", "find semantic model", "查找语义模型"
+            ],
+            "check_metric_exists": [
+                "check metric exists", "检查指标是否存在", "verify metric availability", "验证指标可用性",
+                "metric exists", "指标是否存在", "find existing metric", "查找现有指标"
+            ],
+            "generate_sql_summary_id": [
+                "generate summary id", "生成摘要标识", "create sql summary", "创建sql摘要",
+                "generate sql id", "生成sql标识", "create summary identifier", "创建摘要标识符"
+            ],
+
+            # Time parsing tools
+            "parse_temporal_expressions": [
+                "parse date expressions", "解析日期表达式", "parse temporal expressions", "解析时间表达式",
+                "analyze date ranges", "分析日期范围", "parse time periods", "解析时间段"
+            ],
+            "get_current_date": [
+                "get current date", "获取当前日期", "current date", "今天日期",
+                "today's date", "今日日期", "get today date", "获取今天日期"
+            ],
+
+            # File system tools
+            "write_file": [
+                "write file", "写入文件", "save to file", "保存到文件",
+                "create file", "创建文件", "write content to file", "将内容写入文件"
+            ],
+            "read_file": [
+                "read file", "读取文件", "load file", "加载文件",
+                "open file", "打开文件", "read file content", "读取文件内容"
+            ],
+            "list_directory": [
+                "list directory", "列出目录", "show directory contents", "显示目录内容",
+                "list files", "列出文件", "directory listing", "目录列表"
+            ],
+
+            # Reporting tools
+            "report": [
+                "generate final report", "生成最终报告", "create comprehensive report", "创建综合报告",
+                "write final report", "编写最终报告", "produce report", "生成报告"
+            ],
+
+            # Plan management tools
+            "todo_write": [
+                "create plan", "创建计划", "write execution plan", "编写执行计划",
+                "generate todo list", "生成任务列表", "create task plan", "创建任务计划"
+            ],
+            "todo_update": [
+                "update task status", "更新任务状态", "mark task complete", "标记任务完成",
+                "update todo status", "更新待办状态", "change task state", "更改任务状态"
+            ],
+            "todo_read": [
+                "read plan", "查看计划", "show execution plan", "显示执行计划",
+                "check plan status", "检查计划状态", "view todo list", "查看任务列表"
+            ],
         }
         try:
             if agent_config and getattr(agent_config, "plan_executor_keyword_map", None):
@@ -77,16 +165,220 @@ class PlanModeHooks(AgentHooks):
             pass
 
     def _match_tool_for_todo(self, text: str) -> Optional[str]:
-        """Return tool name matched by keyword in text, or None."""
+        """
+        Hybrid tool matching with three-tier approach:
+        1. Exact keyword phrase matching (fast and reliable)
+        2. LLM reasoning fallback (intelligent but slower)
+        3. Intelligent inference (last resort)
+        """
         if not text:
             return None
+
+        # Tier 1: Exact keyword phrase matching (word boundaries)
+        tool = self._match_exact_keywords(text)
+        if tool:
+            logger.debug(f"Matched tool '{tool}' via exact keyword matching")
+            return tool
+
+        # Tier 2: LLM reasoning fallback (if model available)
+        if self.model:
+            tool = self._llm_reasoning_fallback(text)
+            if tool:
+                logger.debug(f"Matched tool '{tool}' via LLM reasoning")
+                return tool
+
+        # Tier 3: Intelligent inference (pattern-based)
+        tool = self._intelligent_inference(text)
+        if tool:
+            logger.debug(f"Matched tool '{tool}' via intelligent inference")
+            return tool
+
+        logger.debug(f"No tool matched for text: '{text}'")
+        return None
+
+    async def _match_tool_for_todo_async(self, text: str) -> Optional[str]:
+        """
+        Async version of tool matching that can use async LLM calls.
+        """
+        if not text:
+            return None
+
+        # Tier 1: Exact keyword phrase matching (word boundaries)
+        tool = self._match_exact_keywords(text)
+        if tool:
+            logger.debug(f"Matched tool '{tool}' via exact keyword matching")
+            return tool
+
+        # Tier 2: LLM reasoning fallback (if model available)
+        if self.model:
+            tool = await self._llm_reasoning_fallback_async(text)
+            if tool:
+                logger.debug(f"Matched tool '{tool}' via LLM reasoning")
+                return tool
+
+        # Tier 3: Intelligent inference (pattern-based)
+        tool = self._intelligent_inference(text)
+        if tool:
+            logger.debug(f"Matched tool '{tool}' via intelligent inference")
+            return tool
+
+        logger.debug(f"No tool matched for text: '{text}'")
+        return None
+
+    def _match_exact_keywords(self, text: str) -> Optional[str]:
+        """Exact keyword phrase matching with word boundaries."""
+        if not text:
+            return None
+
         t = text.lower()
-        # prefer first-match order from keyword_map iteration
+        # Use word boundaries to ensure exact phrase matching
         for tool_name, keywords in self.keyword_map.items():
-            for k in keywords:
-                if k and k in t:
-                    logger.debug(f"Matched tool '{tool_name}' for todo text via keyword '{k}'")
+            for keyword in keywords:
+                if keyword and f" {keyword.lower()} " in f" {t} ":
                     return tool_name
+                # Also check for phrase at start/end of text
+                if keyword and (t.startswith(keyword.lower()) or t.endswith(keyword.lower())):
+                    return tool_name
+
+        return None
+
+    def _llm_reasoning_fallback(self, text: str) -> Optional[str]:
+        """
+        Use LLM to intelligently determine the appropriate tool for a todo item.
+        This is called when exact keyword matching fails.
+        Note: Synchronous version for compatibility with existing sync code.
+        """
+        if not self.model or not text:
+            return None
+
+        try:
+            # Create a prompt for the LLM to reason about tool selection
+            available_tools = list(self.keyword_map.keys())
+
+            prompt = f"""Given the following todo item text, determine which tool from the available tools would be most appropriate to execute this task.
+
+Available tools:
+{chr(10).join(f"- {tool}: Used for tasks involving {tool.replace('_', ' ')}" for tool in available_tools)}
+
+Todo item: "{text}"
+
+Consider the intent and requirements of the todo item. Choose the single most appropriate tool from the list above. If no tool seems appropriate, respond with "none".
+
+Respond with only the tool name, nothing else."""
+
+            # Use a simple completion call
+            response = self.model.generate(prompt, max_tokens=50, temperature=0.1)
+
+            if response and hasattr(response, 'content'):
+                tool_name = response.content.strip().lower()
+                # Validate that the suggested tool exists
+                if tool_name in [t.lower() for t in available_tools]:
+                    # Find the exact case-sensitive tool name
+                    for available_tool in available_tools:
+                        if available_tool.lower() == tool_name:
+                            return available_tool
+                elif tool_name == "none":
+                    return None
+
+            logger.debug(f"LLM reasoning failed or returned invalid tool: {response}")
+            return None
+
+        except Exception as e:
+            logger.debug(f"LLM reasoning failed: {e}")
+            return None
+
+    async def _llm_reasoning_fallback_async(self, text: str) -> Optional[str]:
+        """
+        Async version of LLM reasoning fallback for future use.
+        """
+        if not self.model or not text:
+            return None
+
+        try:
+            # Create a prompt for the LLM to reason about tool selection
+            available_tools = list(self.keyword_map.keys())
+
+            prompt = f"""Given the following todo item text, determine which tool from the available tools would be most appropriate to execute this task.
+
+Available tools:
+{chr(10).join(f"- {tool}: Used for tasks involving {tool.replace('_', ' ')}" for tool in available_tools)}
+
+Todo item: "{text}"
+
+Consider the intent and requirements of the todo item. Choose the single most appropriate tool from the list above. If no tool seems appropriate, respond with "none".
+
+Respond with only the tool name, nothing else."""
+
+            # Use async generation if available
+            if hasattr(self.model, 'generate_async'):
+                response = await self.model.generate_async(prompt, max_tokens=50, temperature=0.1)
+            else:
+                # Fallback to sync method in a thread
+                import asyncio
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self.model.generate(prompt, max_tokens=50, temperature=0.1)
+                )
+
+            if response and hasattr(response, 'content'):
+                tool_name = response.content.strip().lower()
+                # Validate that the suggested tool exists
+                if tool_name in [t.lower() for t in available_tools]:
+                    # Find the exact case-sensitive tool name
+                    for available_tool in available_tools:
+                        if available_tool.lower() == tool_name:
+                            return available_tool
+                elif tool_name == "none":
+                    return None
+
+            logger.debug(f"LLM reasoning failed or returned invalid tool: {response}")
+            return None
+
+        except Exception as e:
+            logger.debug(f"LLM reasoning failed: {e}")
+            return None
+
+    def _intelligent_inference(self, text: str) -> Optional[str]:
+        """Intelligent pattern-based tool inference as last resort."""
+        if not text:
+            return None
+
+        t = text.lower()
+
+        # Database-related inference
+        db_keywords = ["table", "column", "database", "sql", "query", "schema", "字段", "表", "数据库"]
+        if any(keyword in t for keyword in db_keywords):
+            if "search" in t or "find" in t or "lookup" in t or "查找" in t:
+                return "search_table"
+            elif "describe" in t or "show" in t or "check" in t or "inspect" in t or "structure" in t or "columns" in t or "结构" in t or "字段" in t:
+                return "describe_table"
+            elif "execute" in t or "run" in t or "执行" in t:
+                return "execute_sql"
+
+        # Metrics-related inference
+        metric_keywords = ["metric", "kpi", "指标", "转化率", "收入", "销售额", "performance", "绩效"]
+        if any(keyword in t for keyword in metric_keywords):
+            return "search_metrics"
+
+        # Time-related inference
+        time_keywords = ["date", "time", "temporal", "日期", "时间", "昨天", "今天", "明天", "period", "期间"]
+        if any(keyword in t for keyword in time_keywords):
+            return "parse_temporal_expressions"
+
+        # File-related inference
+        file_keywords = ["file", "write", "save", "read", "create", "文件", "写入", "保存", "读取"]
+        if any(keyword in t for keyword in file_keywords):
+            if "write" in t or "save" in t or "create" in t or "写入" in t or "保存" in t:
+                return "write_file"
+            elif "read" in t or "load" in t or "读取" in t:
+                return "read_file"
+            elif "list" in t or "directory" in t or "列出" in t:
+                return "list_directory"
+
+        # Report-related inference
+        report_keywords = ["report", "summary", "final", "报告", "摘要", "最终"]
+        if any(keyword in t for keyword in report_keywords):
+            return "report"
+
         return None
         # Executor task handle
         self._executor_task = None

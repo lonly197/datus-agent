@@ -49,7 +49,7 @@ async def _run_executor_once(hooks: PlanModeHooks, todo_content: str, db_tool):
 def test_executor_fallback_and_skip_note_sync():
     console = Console()
     session = DummySession()
-    hooks = PlanModeHooks(console=console, session=session, auto_mode=True, action_history_manager=None, agent_config=None, emit_queue=asyncio.Queue())
+    hooks = PlanModeHooks(console=console, session=session, auto_mode=True, action_history_manager=None, agent_config=None, emit_queue=asyncio.Queue(), model=None)
 
     # Case 1: fallback should call DB when content does not match any keyword
     db_tool = DummyDBTool()

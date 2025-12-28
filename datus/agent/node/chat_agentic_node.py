@@ -221,6 +221,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 action_history_manager=action_history_manager,
                 agent_config=self.agent_config,
                 emit_queue=emit_queue,
+                model=self.model,  # Pass model for LLM reasoning fallback
             )
 
         # Create initial action
