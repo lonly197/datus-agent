@@ -36,6 +36,12 @@ class TodoItem(BaseModel):
     status: TodoStatus = Field(default=TodoStatus.PENDING, description="Status of the todo item")
     # Whether this todo requires calling an external tool. When False, executor will skip tool calls.
     requires_tool: bool = Field(default=True, description="Whether this todo requires a tool execution")
+    # Whether this todo requires LLM reasoning before tool execution
+    requires_llm_reasoning: bool = Field(default=False, description="Whether this todo requires LLM reasoning")
+    # Type of reasoning required (analysis, reflection, validation, synthesis)
+    reasoning_type: Optional[str] = Field(default=None, description="Type of LLM reasoning required")
+    # Optional explicit tool calls to execute after reasoning
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(default=None, description="Explicit tool calls to execute")
 
 
 class TodoList(BaseModel):
@@ -174,19 +180,35 @@ class PlanTool:
             content = todo_item.get("content", "").strip()
             status = todo_item.get("status", "pending").lower()
             requires_tool = todo_item.get("requires_tool", True)
+            requires_llm_reasoning = todo_item.get("requires_llm_reasoning", False)
+            reasoning_type = todo_item.get("reasoning_type")
+            tool_calls = todo_item.get("tool_calls")
 
             if not content:
                 continue
 
             if status == "completed":
                 # Create completed item - should only be for actually executed steps
-                new_item = TodoItem(content=content, status=TodoStatus.COMPLETED, requires_tool=bool(requires_tool))
+                new_item = TodoItem(
+                    content=content,
+                    status=TodoStatus.COMPLETED,
+                    requires_tool=bool(requires_tool),
+                    requires_llm_reasoning=bool(requires_llm_reasoning),
+                    reasoning_type=reasoning_type,
+                    tool_calls=tool_calls
+                )
                 todo_list.items.append(new_item)
                 logger.info(f"Keeping completed step: {content}")
             else:
                 # Create pending step - for steps that still need execution
-                # allow requires_tool propagation when creating pending item
-                item = TodoItem(content=content, requires_tool=bool(requires_tool))
+                # allow all metadata propagation when creating pending item
+                item = TodoItem(
+                    content=content,
+                    requires_tool=bool(requires_tool),
+                    requires_llm_reasoning=bool(requires_llm_reasoning),
+                    reasoning_type=reasoning_type,
+                    tool_calls=tool_calls
+                )
                 todo_list.items.append(item)
                 logger.info(f"Added pending step: {content}")
 

@@ -30,3 +30,57 @@ def test_todo_write_preserves_requires_tool():
     assert done_step is not None and done_step.status == TodoStatus.COMPLETED
 
 
+def test_todo_write_preserves_llm_reasoning_fields():
+    # Create PlanTool with dummy session
+    plan_tool = PlanTool(session=None)
+
+    # Prepare todos JSON with LLM reasoning fields
+    todos = [
+        {
+            "content": "Analyze the business requirements",
+            "status": "pending",
+            "requires_tool": False,
+            "requires_llm_reasoning": True,
+            "reasoning_type": "analysis"
+        },
+        {
+            "content": "Generate the SQL query",
+            "status": "pending",
+            "requires_tool": True,
+            "requires_llm_reasoning": False
+        },
+        {
+            "content": "Execute the query",
+            "status": "pending",
+            "requires_tool": True,
+            "tool_calls": [{"tool": "execute_sql", "arguments": {"query": "SELECT * FROM users"}}]
+        }
+    ]
+
+    result = plan_tool.todo_write(json.dumps(todos))
+    assert result is not None
+    assert "todo_list" in result.result
+
+    todo_list = plan_tool.storage.get_todo_list()
+    assert todo_list is not None
+
+    # Find items by content
+    analysis_item = next((t for t in todo_list.items if "Analyze" in t.content), None)
+    sql_item = next((t for t in todo_list.items if "Generate" in t.content), None)
+    execute_item = next((t for t in todo_list.items if "Execute" in t.content), None)
+
+    # Check LLM reasoning fields
+    assert analysis_item is not None
+    assert analysis_item.requires_llm_reasoning is True
+    assert analysis_item.reasoning_type == "analysis"
+
+    # Check normal tool execution
+    assert sql_item is not None
+    assert sql_item.requires_llm_reasoning is False
+    assert sql_item.requires_tool is True
+
+    # Check tool_calls field
+    assert execute_item is not None
+    assert execute_item.tool_calls == [{"tool": "execute_sql", "arguments": {"query": "SELECT * FROM users"}}]
+
+

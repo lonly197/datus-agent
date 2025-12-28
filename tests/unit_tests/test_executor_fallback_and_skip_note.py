@@ -65,3 +65,74 @@ def test_executor_fallback_and_skip_note_sync():
     assert True
 
 
+def test_llm_reasoning_execution():
+    """Test that LLM reasoning can be executed for todos requiring it."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    console = Console()
+    session = DummySession()
+
+    # Create a mock model
+    mock_model = AsyncMock()
+    mock_model.generate_async = AsyncMock(return_value=type('Response', (), {
+        'content': 'Based on my analysis, this task requires searching the database for user information.'
+    })())
+
+    hooks = PlanModeHooks(
+        console=console,
+        session=session,
+        auto_mode=False,
+        action_history_manager=None,
+        agent_config=None,
+        emit_queue=None,
+        model=mock_model
+    )
+
+    # Create a todo item requiring LLM reasoning
+    from datus.tools.func_tool.plan_tools import TodoItem
+    todo_item = TodoItem(
+        content="Analyze user data requirements",
+        requires_llm_reasoning=True,
+        reasoning_type="analysis"
+    )
+
+    # Test LLM reasoning execution
+    result = asyncio.run(hooks._execute_llm_reasoning(todo_item))
+
+    # Verify the result structure
+    assert result is not None
+    assert "reasoning_type" in result
+    assert "response" in result
+    assert "context_used" in result
+    assert result["reasoning_type"] == "analysis"
+    assert "analysis" in result["response"].lower()
+
+    # Verify the mock was called
+    mock_model.generate_async.assert_called_once()
+
+
+def test_fallback_candidates_prioritization():
+    """Test that fallback candidates are properly prioritized by confidence."""
+    console = Console()
+    session = DummySession()
+    hooks = PlanModeHooks(console=console, session=session, auto_mode=False, action_history_manager=None, agent_config=None, emit_queue=None, model=None)
+
+    # Test with content that should match multiple tools
+    candidates = hooks._determine_fallback_candidates("Execute SQL query on the user table")
+
+    # Should have multiple candidates with different confidence scores
+    assert len(candidates) >= 2
+
+    # First candidate should be execute_sql (highest confidence for SQL execution)
+    first_tool, first_score = candidates[0]
+    assert first_tool in ["execute_sql", "search_table"]
+    assert first_score > 0.5  # Should be reasonably confident
+
+    # Scores should be in descending order
+    for i in range(1, len(candidates)):
+        _, prev_score = candidates[i-1]
+        _, curr_score = candidates[i]
+        assert prev_score >= curr_score
+
+

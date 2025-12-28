@@ -75,6 +75,7 @@ Datus Agent is configured via `agent.yml`. Key configurations include:
 - **Models**: Configure LLM providers (OpenAI, Anthropic, Google, etc.)
 - **Databases**: Set up connections to Snowflake, StarRocks, SQLite, DuckDB, etc.
 - **Workflows**: Define custom execution plans and node configurations
+- **Plan Executor**: Configure `plan_executor` settings to control how plan-mode tool matching and execution works
 
 See [Configuration Documentation](docs/configuration/) for complete setup instructions.
 
