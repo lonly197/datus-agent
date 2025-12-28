@@ -55,10 +55,10 @@ class PlanModeHooks(AgentHooks):
         # load keyword->tool mapping from agent_config if provided, otherwise use default
         self.keyword_map: Dict[str, List[str]] = {}
         default_map: Dict[str, List[str]] = {
-            "search_table": ["search", "搜索", "表结构", "table", "tables", "columns", "column", "列", "字段", "schema"],
-            "inspect_schema": ["schema", "describe", "结构", "描述", "描述表"],
-            "execute_sql": ["execute sql", "执行sql", "执行 sql", "run sql", "执行sql语句", "执行"],
-            "report": ["generate report", "生成报告", "write report", "write", "生成html", "生成最终"],
+            "search_table": ["search for", "搜索表", "查找表", "find table", "search table", "find tables"],
+            "inspect_schema": ["describe table", "检查表结构", "inspect schema", "table structure", "schema info"],
+            "execute_sql": ["execute sql", "执行sql", "执行 sql", "run sql", "执行sql语句", "run the sql"],
+            "report": ["generate report", "生成报告", "write report", "write", "生成html", "生成最终报告"],
         }
         try:
             if agent_config and getattr(agent_config, "plan_executor_keyword_map", None):
@@ -750,11 +750,16 @@ class PlanModeHooks(AgentHooks):
                     except Exception as e:
                         logger.error(f"Server executor fs_tool.write_file failed for {item.id}: {e}")
 
-                # If nothing was mapped/executed, try fallback search_table if enabled and db_tool available
+                # If nothing was mapped/executed, try selective fallback search_table if enabled and clearly database-related
                 if not executed_any:
-                    if db_tool and self.enable_fallback:
+                    content_lower = (item.content or "").lower()
+                    # Only fallback for todos that clearly involve database/schema work
+                    db_related_keywords = ["table", "column", "schema", "database", "sql", "query", "数据", "表", "字段", "结构"]
+                    has_db_keywords = any(keyword in content_lower for keyword in db_related_keywords)
+
+                    if db_tool and self.enable_fallback and has_db_keywords:
                         try:
-                            logger.info(f"Server executor: fallback search_table for todo {item.id}")
+                            logger.info(f"Server executor: selective fallback search_table for todo {item.id} (database-related)")
                             res = db_tool.search_table(query_text=item.content, top_n=3)
                             result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
                             fallback_action = ActionHistory(
@@ -777,14 +782,15 @@ class PlanModeHooks(AgentHooks):
                         except Exception as e:
                             logger.debug(f"Server executor fallback search_table failed for {item.id}: {e}")
                     else:
-                        # no fallback available; emit short system note for transparency
+                        # no fallback available or not database-related; emit short system note for transparency
                         try:
+                            reason = "not database-related" if not has_db_keywords else "fallback disabled"
                             note_action = ActionHistory.create_action(
                                 role=ActionRole.SYSTEM,
                                 action_type="thinking",
-                                messages=f"No tool executed for todo {item.id}; marking completed",
+                                messages=f"No tool executed for todo {item.id} ({reason}); marking completed",
                                 input_data={"todo_id": item.id},
-                                output={"raw_output": "No tool matched and fallback disabled; step marked completed", "emit_chat": True},
+                                output={"raw_output": f"No tool matched ({reason}); step marked completed", "emit_chat": True},
                                 status=ActionStatus.SUCCESS,
                             )
                             if self.action_history_manager:
@@ -812,6 +818,29 @@ class PlanModeHooks(AgentHooks):
             logger.info("Server executor finished all pending todos")
         except Exception as e:
             logger.error(f"Unhandled server executor error: {e}")
+
+            # Generate ErrorEvent for server executor failures
+            try:
+                error_action = ActionHistory(
+                    action_id=f"server_executor_error_{uuid.uuid4().hex[:8]}",
+                    role=ActionRole.SYSTEM,
+                    messages=f"Server executor failed: {str(e)}",
+                    action_type="error",
+                    input={"source": "server_executor"},
+                    output={"error": str(e)},
+                    status=ActionStatus.FAILED,
+                    start_time=datetime.now(),
+                    end_time=datetime.now()
+                )
+                if self.action_history_manager:
+                    self.action_history_manager.add_action(error_action)
+                    if self.emit_queue is not None:
+                        try:
+                            self.emit_queue.put_nowait(error_action)
+                        except Exception as emit_e:
+                            logger.debug(f"Failed to emit server executor error event: {emit_e}")
+            except Exception as inner_e:
+                logger.error(f"Failed to create error event for server executor: {inner_e}")
 
     async def _emit_plan_update_event(self, todo_id: str = None, status: str = None):
         """

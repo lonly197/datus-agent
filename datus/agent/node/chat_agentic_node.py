@@ -513,6 +513,44 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 # Make result visible to Node.run_stream completeness checks
                 self.result = result
 
+                # Create ErrorEvent for streaming to frontend
+                error_action = ActionHistory.create_action(
+                    role=ActionRole.SYSTEM,
+                    action_type="error",
+                    messages=f"Execution failed: {str(e)}",
+                    input_data=user_input.model_dump(),
+                    output_data={"error": str(e)},
+                    status=ActionStatus.FAILED,
+                )
+
+                # Add error action to history and emit for streaming
+                if action_history_manager:
+                    action_history_manager.add_action(error_action)
+                    if self.emit_queue:
+                        try:
+                            await self.emit_queue.put(error_action)
+                        except Exception as emit_e:
+                            logger.debug(f"Failed to emit error event: {emit_e}")
+
+                # Create CompleteEvent even on error to signal task completion
+                complete_action = ActionHistory.create_action(
+                    role=ActionRole.SYSTEM,
+                    action_type="workflow_completion",
+                    messages="Task completed with error",
+                    input_data=user_input.model_dump(),
+                    output_data=result.model_dump(),
+                    status=ActionStatus.FAILED,
+                )
+
+                # Add complete action to history and emit for streaming
+                if action_history_manager:
+                    action_history_manager.add_action(complete_action)
+                    if self.emit_queue:
+                        try:
+                            await self.emit_queue.put(complete_action)
+                        except Exception as emit_e:
+                            logger.debug(f"Failed to emit complete event: {emit_e}")
+
                 # Update action with error
                 action_history_manager.update_current_action(
                     status=ActionStatus.FAILED,
