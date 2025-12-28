@@ -65,11 +65,13 @@ class PlanModeHooks(AgentHooks):
             ],
             "describe_table": [
                 "describe table", "检查表结构", "inspect table schema", "查看表结构",
-                "show table columns", "表字段信息", "examine table structure", "分析表结构"
+                "examine table structure", "分析表结构", "describe table structure",
+                "检查表定义", "查看表模式", "analyze table structure", "分析表元数据"
             ],
             "execute_sql": [
                 "execute sql query", "执行sql查询", "run sql statement", "执行sql语句",
-                "run database query", "执行数据库查询", "execute the sql", "运行sql代码"
+                "run database query", "执行数据库查询", "execute the sql", "运行sql代码",
+                "execute sql", "执行sql", "run the query", "执行查询"
             ],
             "read_query": [
                 "run query", "执行查询", "execute database query", "运行数据库查询",
@@ -131,7 +133,8 @@ class PlanModeHooks(AgentHooks):
             # Reporting tools
             "report": [
                 "generate final report", "生成最终报告", "create comprehensive report", "创建综合报告",
-                "write final report", "编写最终报告", "produce report", "生成报告"
+                "write final report", "编写最终报告", "produce report", "生成报告",
+                "生成最终html", "生成最终", "生成html", "生成报告文档"
             ],
 
             # Plan management tools
@@ -344,39 +347,32 @@ Respond with only the tool name, nothing else."""
 
         t = text.lower()
 
-        # Database-related inference
-        db_keywords = ["table", "column", "database", "sql", "query", "schema", "字段", "表", "数据库"]
-        if any(keyword in t for keyword in db_keywords):
-            if "search" in t or "find" in t or "lookup" in t or "查找" in t:
-                return "search_table"
-            elif "describe" in t or "show" in t or "check" in t or "inspect" in t or "structure" in t or "columns" in t or "结构" in t or "字段" in t:
-                return "describe_table"
-            elif "execute" in t or "run" in t or "执行" in t:
-                return "execute_sql"
+        # Database-related inference (more specific patterns)
+        if ("search" in t or "find" in t or "lookup" in t or "查找" in t) and ("table" in t or "database" in t or "表" in t or "数据库" in t):
+            return "search_table"
+        elif ("describe" in t and "table" in t) or ("表结构" in t) or ("table schema" in t) or ("表模式" in t) or ("table metadata" in t):
+            return "describe_table"
+        elif ("execute" in t and "sql" in t) or ("run" in t and "query" in t) or ("执行" in t and ("sql" in t or "查询" in t)):
+            return "execute_sql"
 
-        # Metrics-related inference
-        metric_keywords = ["metric", "kpi", "指标", "转化率", "收入", "销售额", "performance", "绩效"]
-        if any(keyword in t for keyword in metric_keywords):
+        # Metrics-related inference (require both metric and search intent)
+        if ("search" in t or "find" in t or "lookup" in t or "查找" in t) and any(keyword in t for keyword in ["metric", "kpi", "指标", "转化率", "收入", "销售额", "performance", "绩效"]):
             return "search_metrics"
 
-        # Time-related inference
-        time_keywords = ["date", "time", "temporal", "日期", "时间", "昨天", "今天", "明天", "period", "期间"]
-        if any(keyword in t for keyword in time_keywords):
+        # Time-related inference (require both time and parse/analyze intent)
+        if ("parse" in t or "analyze" in t or "解析" in t or "分析" in t) and any(keyword in t for keyword in ["date", "time", "temporal", "日期", "时间", "period", "期间"]):
             return "parse_temporal_expressions"
 
-        # File-related inference
-        file_keywords = ["file", "write", "save", "read", "create", "文件", "写入", "保存", "读取"]
-        if any(keyword in t for keyword in file_keywords):
-            if "write" in t or "save" in t or "create" in t or "写入" in t or "保存" in t:
-                return "write_file"
-            elif "read" in t or "load" in t or "读取" in t:
-                return "read_file"
-            elif "list" in t or "directory" in t or "列出" in t:
-                return "list_directory"
+        # File-related inference (more specific patterns)
+        if ("write" in t or "save" in t or "create" in t or "写入" in t or "保存" in t) and ("file" in t or "文件" in t):
+            return "write_file"
+        elif ("read" in t or "load" in t or "读取" in t) and ("file" in t or "文件" in t):
+            return "read_file"
+        elif ("list" in t or "directory" in t or "列出" in t) and ("directory" in t or "文件夹" in t):
+            return "list_directory"
 
-        # Report-related inference
-        report_keywords = ["report", "summary", "final", "报告", "摘要", "最终"]
-        if any(keyword in t for keyword in report_keywords):
+        # Report-related inference (require specific report generation intent)
+        if any(phrase in t for phrase in ["final report", "生成报告", "create report", "生成最终", "final summary", "最终报告", "generate report"]):
             return "report"
 
         return None
@@ -932,115 +928,34 @@ Respond with only the tool name, nothing else."""
                                             logger.debug(f"emit_queue put failed for complete_action_db: {e}")
                                 executed_any = True
                         elif matched_tool == "report" and fs_tool:
-                            # generate small report (handled further below in filesystem block)
+                            # generate report using filesystem tool
                             report_path = f"reports/{item.id}_report.html"
                             report_body = f"<html><body><h1>Report for {item.content}</h1><p>Generated by server executor.</p></body></html>"
                             res = fs_tool.write_file(path=report_path, content=report_body, file_type="report")
                             result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
-                            complete_action_fs = ActionHistory(
-                                action_id=f"{call_id}_write",
+                            complete_action_report = ActionHistory(
+                                action_id=f"{call_id}_report",
                                 role=ActionRole.TOOL,
-                                messages=f"Server executor: write_file for todo {item.id}",
-                                action_type="write_file",
-                                input={"function_name": "write_file", "arguments": json.dumps({"path": report_path, "todo_id": item.id})},
+                                messages=f"Server executor: report generation for todo {item.id}",
+                                action_type="report",
+                                input={"function_name": "report", "arguments": json.dumps({"path": report_path, "todo_id": item.id})},
                                 output=result_payload,
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
                             if self.action_history_manager:
-                                self.action_history_manager.add_action(complete_action_fs)
+                                self.action_history_manager.add_action(complete_action_report)
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(complete_action_fs)
+                                        self.emit_queue.put_nowait(complete_action_report)
                                     except Exception as e:
-                                        logger.debug(f"emit_queue put failed for complete_action_fs: {e}")
+                                        logger.debug(f"emit_queue put failed for complete_action_report: {e}")
                             executed_any = True
                     except Exception as e:
                         logger.error(f"Server executor matched_tool '{matched_tool}' failed for {item.id}: {e}")
 
-                # 2) Execute SQL if action history contains generated SQL and todo requests execution
-                if db_tool and ("execute sql" in content_lower or "执行sql" in content_lower or ("执行" in content_lower and "sql" in content_lower)):
-                    try:
-                        # Find latest SQL in action history
-                        sql_text = None
-                        if self.action_history_manager:
-                            for a in reversed(self.action_history_manager.get_actions()):
-                                if getattr(a, "role", "") == "assistant" or getattr(a, "role", "") == ActionRole.ASSISTANT:
-                                    out = getattr(a, "output", None)
-                                    if isinstance(out, dict) and out.get("sql"):
-                                        sql_text = out.get("sql")
-                                        break
-                                    # fallback: look into messages/content string for code block
-                                    content_field = out.get("content") if isinstance(out, dict) else None
-                                    if content_field and isinstance(content_field, str) and "```sql" in content_field:
-                                        # crude extraction
-                                        start = content_field.find("```sql")
-                                        end = content_field.find("```", start + 6)
-                                        if start != -1 and end != -1:
-                                            sql_text = content_field[start + 6 : end].strip()
-                                            break
+                # SQL execution logic has been moved to keyword-based matching above
 
-                        if sql_text:
-                            logger.info(f"Server executor: executing SQL for todo {item.id}")
-                            res = db_tool.read_query(sql=sql_text)
-                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
-                            complete_action_db = ActionHistory(
-                                action_id=f"{call_id}_exec",
-                                role=ActionRole.TOOL,
-                                messages=f"Server executor: db.read_query for todo {item.id}",
-                                action_type="read_query",
-                                input={"function_name": "read_query", "arguments": json.dumps({"sql": sql_text, "todo_id": item.id})},
-                                output=result_payload,
-                                status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
-                            )
-                            if self.action_history_manager:
-                                self.action_history_manager.add_action(complete_action_db)
-                                if self.emit_queue is not None:
-                                    try:
-                                        self.emit_queue.put_nowait(complete_action_db)
-                                    except Exception as e:
-                                        logger.debug(f"emit_queue put failed for complete_action_db: {e}")
-                            executed_any = True
-                    except Exception as e:
-                        logger.error(f"Server executor db_tool.read_query failed for {item.id}: {e}")
-
-                # 3) Generate final report file if filesystem tool available
-                if fs_tool and ("生成最终html" in content_lower or "生成最终" in content_lower or "生成html" in content_lower or "生成报告" in content_lower or "write" in content_lower):
-                    try:
-                        report_path = f"reports/{item.id}_report.html"
-                        # try to extract assistant content as report body
-                        report_body = f"<html><body><h1>Report for {item.content}</h1><p>Generated by server executor.</p></body></html>"
-                        # attempt to use last assistant content if available
-                        if self.action_history_manager:
-                            for a in reversed(self.action_history_manager.get_actions()):
-                                if getattr(a, "role", "") == "assistant" or getattr(a, "role", "") == ActionRole.ASSISTANT:
-                                    out = getattr(a, "output", None)
-                                    if isinstance(out, dict):
-                                        body = out.get("response") or out.get("content")
-                                        if body and isinstance(body, str):
-                                            report_body = body
-                                            break
-
-                        res = fs_tool.write_file(path=report_path, content=report_body, file_type="report")
-                        result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
-                        complete_action_fs = ActionHistory(
-                            action_id=f"{call_id}_write",
-                            role=ActionRole.TOOL,
-                            messages=f"Server executor: write_file for todo {item.id}",
-                            action_type="write_file",
-                            input={"function_name": "write_file", "arguments": json.dumps({"path": report_path, "todo_id": item.id})},
-                            output=result_payload,
-                            status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
-                        )
-                        if self.action_history_manager:
-                            self.action_history_manager.add_action(complete_action_fs)
-                            if self.emit_queue is not None:
-                                try:
-                                    self.emit_queue.put_nowait(complete_action_fs)
-                                except Exception as e:
-                                    logger.debug(f"emit_queue put failed for complete_action_fs: {e}")
-                        executed_any = True
-                    except Exception as e:
-                        logger.error(f"Server executor fs_tool.write_file failed for {item.id}: {e}")
+                # Report generation logic has been moved to keyword-based matching above
 
                 # If nothing was mapped/executed, try selective fallback search_table if enabled and clearly database-related
                 if not executed_any:
