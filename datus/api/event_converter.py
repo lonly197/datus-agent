@@ -540,7 +540,8 @@ class DeepResearchEventConverter:
             if isinstance(action.output, dict):
                 report_url = action.output.get("report_url", "")
                 report_data = action.output.get("html_content", "")
-                if report_url:
+                # Create ReportEvent if we have either url or data
+                if report_url or report_data:
                     # ReportEvent should use todo_id if related to a specific todo
                     report_plan_id = todo_id if todo_id else None
                     events.append(ReportEvent(

@@ -1194,14 +1194,14 @@ Respond with only the tool name, nothing else."""
                             executed_any = True
                         elif matched_tool == "describe_table" and db_tool:
                             # Describe table structure
-                            res = db_tool.describe_table(query_text=item.content)
+                            res = db_tool.describe_table(table_name=item.content)
                             result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
                             complete_action_db = ActionHistory(
                                 action_id=f"{call_id}_describe",
                                 role=ActionRole.TOOL,
                                 messages=f"Server executor: db.describe_table for todo {item.id}",
                                 action_type="describe_table",
-                                input={"function_name": "describe_table", "arguments": json.dumps({"query_text": item.content, "todo_id": item.id})},
+                                input={"function_name": "describe_table", "arguments": json.dumps({"table_name": item.content, "todo_id": item.id})},
                                 output=result_payload,
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
@@ -1619,14 +1619,14 @@ Respond with only the tool name, nothing else."""
 
                             elif tool_name == "describe_table" and db_tool:
                                 logger.info(f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})")
-                                res = db_tool.describe_table(query_text=item.content)
+                                res = db_tool.describe_table(table_name=item.content)
                                 result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
                                 fallback_action = ActionHistory(
                                     action_id=f"{call_id}_fallback_{tool_name}",
                                     role=ActionRole.TOOL,
                                     messages=f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})",
                                     action_type=tool_name,
-                                    input={"function_name": tool_name, "arguments": json.dumps({"query_text": item.content, "todo_id": item.id, "is_fallback": True})},
+                                    input={"function_name": tool_name, "arguments": json.dumps({"table_name": item.content, "todo_id": item.id, "is_fallback": True})},
                                     output=result_payload,
                                     status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                                 )

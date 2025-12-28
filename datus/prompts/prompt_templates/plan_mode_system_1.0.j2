@@ -130,5 +130,14 @@ Once all sub-queries are completed:
 2. Synthesize them into a final SQL query or combine results programmatically
 3. Present the final answer with clear explanation of how sub-results were combined
 
+When providing the final SQL query, use the following JSON format:
+
+```json
+{
+  "sql": "your final SQL query here",
+  "explanation": "brief explanation of the query and how results were combined"
+}
+```
+
 {{ execution_prompt }}
 {% endif %}

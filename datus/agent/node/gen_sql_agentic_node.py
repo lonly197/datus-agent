@@ -10,6 +10,7 @@ SQL generation with support for limited context, enhanced template variables,
 and flexible configuration through agent.yml.
 """
 
+import re
 from typing import Any, AsyncGenerator, Dict, Optional, Union
 
 from datus.agent.node.agentic_node import AgenticNode
@@ -916,8 +917,14 @@ class GenSQLAgenticNode(AgenticNode):
             if not isinstance(content, str) or not content.strip():
                 return None, None
 
+            # First, try to extract JSON from markdown code blocks (for plan mode)
+            json_content = content
+            json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL | re.IGNORECASE)
+            if json_match:
+                json_content = json_match.group(1).strip()
+
             # Parse the JSON content
-            parsed = llm_result2json(content, expected_type=dict)
+            parsed = llm_result2json(json_content, expected_type=dict)
 
             if parsed and isinstance(parsed, dict):
                 # Extract SQL

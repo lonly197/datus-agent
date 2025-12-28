@@ -138,22 +138,56 @@ class ChatAgenticNode(GenSQLAgenticNode):
         result = self.result
 
         try:
+            sql_content = None
+            sql_explanation = ""
+
+            # First, try to get SQL from result.sql (regular chat mode)
             if hasattr(result, "sql") and result.sql:
+                sql_content = result.sql
+                sql_explanation = result.response if hasattr(result, "response") else ""
+
+            # For plan mode or when result.sql is not available, try to extract from action history
+            if not sql_content and self.action_history_manager:
+                # Extract SQL directly from summary_report action if available (plan mode final result)
+                for stream_action in reversed(self.action_history_manager.get_actions()):
+                    if stream_action.action_type == "summary_report" and stream_action.output:
+                        if isinstance(stream_action.output, dict):
+                            sql_content = stream_action.output.get("sql")
+                            if sql_content:
+                                sql_explanation = stream_action.output.get("content", "") or stream_action.output.get("response", "")
+                                break
+
+                # Fallback: try to extract SQL from any action that might contain it
+                if not sql_content:
+                    response_content = result.response if hasattr(result, "response") and result.response else ""
+                    extracted_sql, extracted_output = self._extract_sql_and_output_from_response(
+                        {"content": response_content}
+                    )
+                    if extracted_sql:
+                        sql_content = extracted_sql
+                        sql_explanation = extracted_output or response_content
+
+            # If we found SQL content, create and store the SQL context
+            if sql_content:
+                logger.info(f"Found SQL content in chat node, creating SQL context: {sql_content[:100]}...")
                 from datus.schemas.node_models import SQLContext
 
                 # Extract SQL result from the response if available
                 sql_result = ""
-                if hasattr(result, "response") and result.response:
-                    # Try to extract SQL result from the response
-                    _, sql_result = self._extract_sql_and_output_from_response({"content": result.response})
+                if sql_explanation:
+                    # Try to extract SQL result from the explanation
+                    _, sql_result = self._extract_sql_and_output_from_response({"content": sql_explanation})
                     sql_result = sql_result or ""
 
                 new_record = SQLContext(
-                    sql_query=result.sql,
-                    explanation=result.response if hasattr(result, "response") else "",
+                    sql_query=sql_content,
+                    explanation=sql_explanation,
                     sql_return=sql_result,
                 )
                 workflow.context.sql_contexts.append(new_record)
+                logger.info(f"Added SQL context to workflow. Total contexts: {len(workflow.context.sql_contexts)}")
+            else:
+                logger.warning("No SQL content found in chat node result or action history")
 
             return {"success": True, "message": "Updated chat context"}
         except Exception as e:

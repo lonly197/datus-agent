@@ -188,8 +188,8 @@ class ReportEvent(BaseEvent):
     """Report generation event."""
 
     event: DeepResearchEventType = DeepResearchEventType.REPORT
-    url: str = Field(..., description="Report URL")
-    data: str = Field(..., description="Report HTML content")
+    url: Optional[str] = Field("", description="Report URL (optional)")
+    data: Optional[str] = Field("", description="Report HTML content (optional)")
 
 
 class ErrorEvent(BaseEvent):
