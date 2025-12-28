@@ -104,7 +104,7 @@ class SmartExecutionRouter:
             return await self._execute_hybrid_task(todo_item, context)
 
     async def _execute_llm_analysis(self, todo_item, context) -> Dict[str, Any]:
-        """Execute pure LLM analysis task."""
+        """Return instruction to execute LLM analysis task."""
         try:
             # Set up LLM reasoning parameters
             todo_item.requires_llm_reasoning = True
@@ -119,43 +119,15 @@ class SmartExecutionRouter:
                     "output_format": "structured_report"
                 }
 
-            # Create reasoning action
-            reasoning_action = ActionHistory.create_action(
-                role=ActionRole.ASSISTANT,
-                action_type="thinking",
-                messages=f"LLM analysis for task: {todo_item.content[:50]}...",
-                input_data={
-                    "todo_id": todo_item.id,
-                    "task_type": "llm_analysis",
-                    "reasoning_type": "analysis",
-                    "content": todo_item.content
-                },
-                output_data={
-                    "analysis_type": "llm_reasoning",
-                    "context": todo_item.analysis_context,
-                    "emit_chat": True
-                },
-                status=ActionStatus.SUCCESS,
-            )
-
-            # Store action if manager available
-            if self.action_history_manager:
-                self.action_history_manager.add_action(reasoning_action)
-                if self.emit_queue:
-                    try:
-                        await self.emit_queue.put(reasoning_action)
-                    except Exception as e:
-                        logger.debug(f"Failed to emit analysis action: {e}")
-
             return {
                 "success": True,
                 "execution_type": "llm_analysis",
-                "todo_item": todo_item,
-                "action": reasoning_action
+                "action": "execute_llm_reasoning",  # 返回执行指令
+                "todo_item": todo_item
             }
 
         except Exception as e:
-            logger.error(f"LLM analysis execution failed for todo {todo_item.id}: {e}")
+            logger.error(f"LLM analysis setup failed for todo {todo_item.id}: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -163,30 +135,26 @@ class SmartExecutionRouter:
             }
 
     async def _execute_tool_call(self, todo_item, context) -> Dict[str, Any]:
-        """Execute tool-based task using existing tool matching logic."""
-        # This will use the existing tool matching and execution logic
-        # The PlanModeHooks will handle this through the existing flow
+        """Return instruction to execute tool-based task."""
         return {
             "success": True,
             "execution_type": "tool_execution",
-            "message": "Delegated to tool execution flow"
+            "action": "execute_tool",  # 返回执行指令
+            "todo_item": todo_item
         }
 
     async def _execute_hybrid_task(self, todo_item, context) -> Dict[str, Any]:
-        """Execute hybrid task (may need both tools and analysis)."""
-        # For hybrid tasks, first try tool execution, then fall back to analysis
+        """Return instruction for hybrid task execution."""
         content_lower = todo_item.content.lower()
 
         # Check if this looks more like a tool task
         tool_indicators = ['执行', '运行', '查询', '搜索', '查找', 'execute', 'run', 'query', 'search']
         if any(indicator in content_lower for indicator in tool_indicators):
-            # Try tool execution first
-            tool_result = await self._execute_tool_call(todo_item, context)
-            if tool_result["success"]:
-                return tool_result
-
-        # Fall back to LLM analysis
-        return await self._execute_llm_analysis(todo_item, context)
+            # Prefer tool execution for hybrid tasks that look tool-oriented
+            return await self._execute_tool_call(todo_item, context)
+        else:
+            # Prefer LLM analysis for hybrid tasks that look analysis-oriented
+            return await self._execute_llm_analysis(todo_item, context)
 
 # Error handling types and configurations
 class ErrorType(str):
@@ -2505,13 +2473,31 @@ Respond with only the tool name, nothing else."""
                         })
 
                         if routing_result["success"]:
-                            executed_any = True
-                            # Mark as completed since LLM analysis was performed
-                            try:
-                                plan_tool._update_todo_status(item.id, "completed")
-                                await self._emit_plan_update_event(item.id, "completed")
-                            except Exception as e:
-                                logger.error(f"Failed to mark LLM analysis task as completed {item.id}: {e}")
+                            action = routing_result.get("action")
+
+                            # Execute the actual task based on action
+                            if action == "execute_llm_reasoning":
+                                # Execute LLM reasoning
+                                logger.info(f"Server executor: executing LLM reasoning for todo {item.id} (execution_router)")
+                                reasoning_result = await self._execute_llm_reasoning(item)
+                                if reasoning_result:
+                                    executed_any = True
+                                    # Mark as completed
+                                    try:
+                                        plan_tool._update_todo_status(item.id, "completed")
+                                        await self._emit_plan_update_event(item.id, "completed")
+                                    except Exception as e:
+                                        logger.error(f"Failed to mark LLM analysis task as completed {item.id}: {e}")
+                            elif action == "execute_tool":
+                                # Execute tool call through existing logic
+                                logger.info(f"Server executor: executing tool for todo {item.id} (execution_router)")
+                                # The existing tool matching logic will handle this below
+                                # We don't set executed_any here, let the tool matching logic handle it
+                                pass
+                            else:
+                                # Unknown action, mark as executed to avoid infinite loop
+                                executed_any = True
+                                logger.warning(f"Unknown action '{action}' for execution_router of todo {item.id}")
                         else:
                             logger.warning(f"LLM analysis routing failed for {item.id}: {routing_result.get('error', 'Unknown error')}")
                             # Fall through to regular tool execution
@@ -3363,7 +3349,7 @@ Respond with only the tool name, nothing else."""
                         })
 
                         if routing_result["success"]:
-                            executed_any = True
+                            action = routing_result.get("action")
 
                             # Emit routing decision note
                             try:
@@ -3371,7 +3357,7 @@ Respond with only the tool name, nothing else."""
                                     role=ActionRole.SYSTEM,
                                     action_type="thinking",
                                     messages=f"Smart routing: {routing_result['execution_type']} for task {item.id}",
-                                    input_data={"todo_id": item.id, "execution_type": routing_result["execution_type"]},
+                                    input_data={"todo_id": item.id, "execution_type": routing_result["execution_type"], "action": action},
                                     output={"raw_output": f"智能路由决策: {routing_result['execution_type']}", "emit_chat": True},
                                     status=ActionStatus.SUCCESS,
                                 )
@@ -3384,6 +3370,32 @@ Respond with only the tool name, nothing else."""
                                             pass
                             except Exception as e:
                                 logger.debug(f"Failed to emit routing note for todo {item.id}: {e}")
+
+                            # Execute the actual task based on action
+                            if action == "execute_llm_reasoning":
+                                # Execute LLM reasoning
+                                logger.info(f"Server executor: executing LLM reasoning for todo {item.id} (smart routing)")
+                                reasoning_result = await self._execute_llm_reasoning(item)
+                                if reasoning_result:
+                                    executed_any = True
+                                    # Mark as completed
+                                    try:
+                                        plan_tool._update_todo_status(item.id, "completed")
+                                        await self._emit_plan_update_event(item.id, "completed")
+                                    except Exception as e:
+                                        logger.error(f"Failed to mark LLM analysis task as completed {item.id}: {e}")
+
+                            elif action == "execute_tool":
+                                # Execute tool call through existing logic
+                                logger.info(f"Server executor: executing tool for todo {item.id} (smart routing)")
+                                # The existing tool matching logic will handle this below
+                                # We don't set executed_any here, let the tool matching logic handle it
+                                pass
+
+                            else:
+                                # Unknown action, mark as executed to avoid infinite loop
+                                executed_any = True
+                                logger.warning(f"Unknown action '{action}' for smart routing of todo {item.id}")
 
                         else:
                             logger.warning(f"Smart routing failed for task {item.id}: {routing_result}")
