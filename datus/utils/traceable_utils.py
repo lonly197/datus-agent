@@ -26,16 +26,37 @@ def create_openai_client(
     default_headers: Union[dict[str, str], None] = None,
     timeout: float = 300.0,  # 5-minute timeout for all requests
 ) -> Union[OpenAI, AsyncOpenAI]:
-    # Create client with timeout settings
+    # Create client with timeout settings and disable built-in retries
+    # We handle retries at the application level for better control
     client_kwargs = {
         "api_key": api_key,
         "base_url": base_url,
         "timeout": timeout,  # Set timeout for all requests
+        "max_retries": 0,  # Disable built-in retries, we handle retries at app level
     }
+
     if default_headers:
         client_kwargs["default_headers"] = default_headers
 
     client = cls(**client_kwargs)
+
+    # Additional check: try to disable retries on the underlying httpx client if possible
+    if hasattr(client, '_client'):
+        httpx_client = client._client
+        if hasattr(httpx_client, '_transport'):
+            transport = httpx_client._transport
+            if hasattr(transport, 'retries'):
+                transport.retries = 0
+                logger.debug("Disabled retries on httpx transport")
+        elif hasattr(httpx_client, '_pool'):
+            # For older httpx versions
+            pool = httpx_client._pool
+            if hasattr(pool, '_retries'):
+                pool._retries = 0
+                logger.debug("Disabled retries on httpx pool")
+
+    logger.debug(f"Created OpenAI client with max_retries=0 for {base_url}")
+    return client
     if not HAS_LANGSMITH:
         return client
     try:
