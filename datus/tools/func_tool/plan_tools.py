@@ -34,6 +34,8 @@ class TodoItem(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()), description="Unique identifier for the todo item")
     content: str = Field(..., description="Content/description of the todo item")
     status: TodoStatus = Field(default=TodoStatus.PENDING, description="Status of the todo item")
+    # Whether this todo requires calling an external tool. When False, executor will skip tool calls.
+    requires_tool: bool = Field(default=True, description="Whether this todo requires a tool execution")
 
 
 class TodoList(BaseModel):
@@ -171,18 +173,21 @@ class PlanTool:
         for todo_item in todos:
             content = todo_item.get("content", "").strip()
             status = todo_item.get("status", "pending").lower()
+            requires_tool = todo_item.get("requires_tool", True)
 
             if not content:
                 continue
 
             if status == "completed":
                 # Create completed item - should only be for actually executed steps
-                new_item = TodoItem(content=content, status=TodoStatus.COMPLETED)
+                new_item = TodoItem(content=content, status=TodoStatus.COMPLETED, requires_tool=bool(requires_tool))
                 todo_list.items.append(new_item)
                 logger.info(f"Keeping completed step: {content}")
             else:
                 # Create pending step - for steps that still need execution
-                todo_list.add_item(content)
+                # allow requires_tool propagation when creating pending item
+                item = TodoItem(content=content, requires_tool=bool(requires_tool))
+                todo_list.items.append(item)
                 logger.info(f"Added pending step: {content}")
 
         if self.storage.save_list(todo_list):

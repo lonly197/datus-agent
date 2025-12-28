@@ -73,6 +73,23 @@ Once the server is running, you can access:
   - `DELETE /workflows/tasks/{task_id}` - Cancel a running task
 - **Feedback Recording**: `POST /workflows/feedback`
 
+## Plan Executor configuration
+
+You can tune how the server-side plan executor maps todo text to tools and whether a fallback search is attempted. Add an optional `plan_executor` section in your `agent.yml`:
+
+```yaml
+plan_executor:
+  keyword_tool_map:
+    search_table: ["search", "搜索", "表结构", "table", "columns", "列", "字段", "schema"]
+    execute_sql: ["execute sql", "执行sql", "执行 sql", "run sql", "执行"]
+    report: ["generate report", "生成报告", "write report", "write"]
+  enable_fallback: true
+```
+
+Notes:
+- `keyword_tool_map` maps tool identifiers to a list of keywords. The executor performs a simple substring match (case-insensitive) against the todo content to pick which tool to call.
+- `enable_fallback` controls whether the executor will issue a safe `search_table` call when no mapping matches and a DB tool is available.
+
 ## Usage Examples
 
 ### Health Check

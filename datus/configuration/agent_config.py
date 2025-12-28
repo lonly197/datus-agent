@@ -217,6 +217,10 @@ class AgentConfig:
         self.default_query_timeout_seconds = int(kwargs.get("default_query_timeout_seconds", 60))
         self.db_type = ""
 
+        # Plan executor configuration (keyword map and fallback toggle)
+        self.plan_executor_keyword_map = kwargs.get("plan_executor", {}).get("keyword_tool_map", None)
+        self.plan_executor_enable_fallback = kwargs.get("plan_executor", {}).get("enable_fallback", True)
+
         # Benchmark paths are now fixed at {agent.home}/benchmark/{name}
         # Supported benchmarks: bird_dev, spider2, semantic_layer
         self._reflection_nodes = DEFAULT_REFLECTION_NODES

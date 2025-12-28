@@ -18,6 +18,7 @@ from datus.utils.loggings import get_logger
 import json
 import uuid
 from datus.schemas.action_history import ActionRole, ActionStatus, ActionHistory
+from typing import Dict, List, Optional
 
 logger = get_logger(__name__)
 
@@ -51,6 +52,42 @@ class PlanModeHooks(AgentHooks):
         self.agent_config = agent_config
         # Optional emit queue to stream ActionHistory produced by hooks back to node
         self.emit_queue = emit_queue
+        # load keyword->tool mapping from agent_config if provided, otherwise use default
+        self.keyword_map: Dict[str, List[str]] = {}
+        default_map: Dict[str, List[str]] = {
+            "search_table": ["search", "搜索", "表结构", "table", "tables", "columns", "column", "列", "字段", "schema"],
+            "inspect_schema": ["schema", "describe", "结构", "描述", "描述表"],
+            "execute_sql": ["execute sql", "执行sql", "执行 sql", "run sql", "执行sql语句", "执行"],
+            "report": ["generate report", "生成报告", "write report", "write", "生成html", "生成最终"],
+        }
+        try:
+            if agent_config and getattr(agent_config, "plan_executor_keyword_map", None):
+                # agent_config may provide mapping as dict
+                self.keyword_map = agent_config.plan_executor_keyword_map
+            else:
+                self.keyword_map = default_map
+        except Exception:
+            self.keyword_map = default_map
+        # fallback behavior enabled by default unless agent_config disables it
+        self.enable_fallback = True
+        try:
+            if agent_config and hasattr(agent_config, "plan_executor_enable_fallback"):
+                self.enable_fallback = bool(agent_config.plan_executor_enable_fallback)
+        except Exception:
+            pass
+
+    def _match_tool_for_todo(self, text: str) -> Optional[str]:
+        """Return tool name matched by keyword in text, or None."""
+        if not text:
+            return None
+        t = text.lower()
+        # prefer first-match order from keyword_map iteration
+        for tool_name, keywords in self.keyword_map.items():
+            for k in keywords:
+                if k and k in t:
+                    logger.debug(f"Matched tool '{tool_name}' for todo text via keyword '{k}'")
+                    return tool_name
+        return None
         # Executor task handle
         self._executor_task = None
 
@@ -510,33 +547,123 @@ class PlanModeHooks(AgentHooks):
                 content_lower = (item.content or "").lower()
                 executed_any = False
 
-                # 1) Search table semantics
-                if db_tool and ("search" in content_lower or "搜索" in content_lower or "表结构" in content_lower):
+                # Determine matched tool via keyword map
+                matched_tool = None
+                try:
+                    matched_tool = self._match_tool_for_todo(item.content or "")
+                except Exception as e:
+                    logger.debug(f"Keyword matching failed for todo {item.id}: {e}")
+
+                # If todo explicitly says requires_tool == False, skip execution
+                if getattr(item, "requires_tool", True) is False:
+                    logger.info(f"Server executor: todo {item.id} marked requires_tool=False, skipping tool execution")
+                    # Emit a short assistant/system note explaining skip
                     try:
-                        # call search_table with todo content as query_text
-                        logger.info(f"Server executor: calling db_tool.search_table for todo {item.id}")
-                        res = db_tool.search_table(query_text=item.content, top_n=5)
-                        # create action representing the db tool result
-                        result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
-                        complete_action_db = ActionHistory(
-                            action_id=f"{call_id}_db",
-                            role=ActionRole.TOOL,
-                            messages=f"Server executor: db.search_table for todo {item.id}",
-                            action_type="search_table",
-                            input={"function_name": "search_table", "arguments": json.dumps({"query_text": item.content, "top_n": 5, "todo_id": item.id})},
-                            output=result_payload,
-                            status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                        note_action = ActionHistory.create_action(
+                            role=ActionRole.SYSTEM,
+                            action_type="thinking",
+                            messages=f"Skipped tool execution for todo {item.id} (requires_tool=False)",
+                            input_data={"todo_id": item.id},
+                            output={"raw_output": "This step does not require external tool execution", "emit_chat": True},
+                            status=ActionStatus.SUCCESS,
                         )
                         if self.action_history_manager:
-                            self.action_history_manager.add_action(complete_action_db)
+                            self.action_history_manager.add_action(note_action)
                             if self.emit_queue is not None:
                                 try:
-                                    self.emit_queue.put_nowait(complete_action_db)
-                                except Exception as e:
-                                    logger.debug(f"emit_queue put failed for complete_action_db: {e}")
-                        executed_any = True
+                                    self.emit_queue.put_nowait(note_action)
+                                except Exception:
+                                    pass
                     except Exception as e:
-                        logger.error(f"Server executor db_tool.search_table failed for {item.id}: {e}")
+                        logger.debug(f"Failed to emit skip note for todo {item.id}: {e}")
+                    executed_any = True  # consider handled
+
+                # If a tool was matched, execute mapped action
+                if not executed_any and matched_tool:
+                    try:
+                        logger.info(f"Server executor: matched tool '{matched_tool}' for todo {item.id}")
+                        if matched_tool == "search_table" and db_tool:
+                            res = db_tool.search_table(query_text=item.content, top_n=5)
+                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                            complete_action_db = ActionHistory(
+                                action_id=f"{call_id}_db",
+                                role=ActionRole.TOOL,
+                                messages=f"Server executor: db.search_table for todo {item.id}",
+                                action_type="search_table",
+                                input={"function_name": "search_table", "arguments": json.dumps({"query_text": item.content, "top_n": 5, "todo_id": item.id})},
+                                output=result_payload,
+                                status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                            )
+                            if self.action_history_manager:
+                                self.action_history_manager.add_action(complete_action_db)
+                                if self.emit_queue is not None:
+                                    try:
+                                        self.emit_queue.put_nowait(complete_action_db)
+                                    except Exception as e:
+                                        logger.debug(f"emit_queue put failed for complete_action_db: {e}")
+                            executed_any = True
+                        elif matched_tool == "execute_sql" and db_tool:
+                            # attempt to find SQL in action history (existing logic)
+                            sql_text = None
+                            if self.action_history_manager:
+                                for a in reversed(self.action_history_manager.get_actions()):
+                                    if getattr(a, "role", "") == "assistant" or getattr(a, "role", "") == ActionRole.ASSISTANT:
+                                        out = getattr(a, "output", None)
+                                        if isinstance(out, dict) and out.get("sql"):
+                                            sql_text = out.get("sql")
+                                            break
+                                        content_field = out.get("content") if isinstance(out, dict) else None
+                                        if content_field and isinstance(content_field, str) and "```sql" in content_field:
+                                            start = content_field.find("```sql")
+                                            end = content_field.find("```", start + 6)
+                                            if start != -1 and end != -1:
+                                                sql_text = content_field[start + 6 : end].strip()
+                                                break
+                            if sql_text:
+                                res = db_tool.read_query(sql=sql_text)
+                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                complete_action_db = ActionHistory(
+                                    action_id=f"{call_id}_exec",
+                                    role=ActionRole.TOOL,
+                                    messages=f"Server executor: db.read_query for todo {item.id}",
+                                    action_type="read_query",
+                                    input={"function_name": "read_query", "arguments": json.dumps({"sql": sql_text, "todo_id": item.id})},
+                                    output=result_payload,
+                                    status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                )
+                                if self.action_history_manager:
+                                    self.action_history_manager.add_action(complete_action_db)
+                                    if self.emit_queue is not None:
+                                        try:
+                                            self.emit_queue.put_nowait(complete_action_db)
+                                        except Exception as e:
+                                            logger.debug(f"emit_queue put failed for complete_action_db: {e}")
+                                executed_any = True
+                        elif matched_tool == "report" and fs_tool:
+                            # generate small report
+                            report_path = f"reports/{item.id}_report.html"
+                            report_body = f\"<html><body><h1>Report for {item.content}</h1></body></html>\"
+                            res = fs_tool.write_file(path=report_path, content=report_body, file_type=\"report\")
+                            result_payload = res.model_dump() if hasattr(res, \"model_dump\") else dict(res) if isinstance(res, dict) else {\"result\": res}
+                            complete_action_fs = ActionHistory(
+                                action_id=f\"{call_id}_write\",
+                                role=ActionRole.TOOL,
+                                messages=f\"Server executor: write_file for todo {item.id}\",
+                                action_type=\"write_file\",
+                                input={\"function_name\": \"write_file\", \"arguments\": json.dumps({\"path\": report_path, \"todo_id\": item.id})},
+                                output=result_payload,
+                                status=ActionStatus.SUCCESS if getattr(res, \"success\", 1) else ActionStatus.FAILED,
+                            )
+                            if self.action_history_manager:
+                                self.action_history_manager.add_action(complete_action_fs)
+                                if self.emit_queue is not None:
+                                    try:
+                                        self.emit_queue.put_nowait(complete_action_fs)
+                                    except Exception as e:
+                                        logger.debug(f\"emit_queue put failed for complete_action_fs: {e}\")
+                            executed_any = True
+                    except Exception as e:
+                        logger.error(f\"Server executor matched_tool '{matched_tool}' failed for {item.id}: {e}\")
 
                 # 2) Execute SQL if action history contains generated SQL and todo requests execution
                 if db_tool and ("execute sql" in content_lower or "执行sql" in content_lower or ("执行" in content_lower and "sql" in content_lower)):
@@ -623,9 +750,52 @@ class PlanModeHooks(AgentHooks):
                     except Exception as e:
                         logger.error(f"Server executor fs_tool.write_file failed for {item.id}: {e}")
 
-                # If nothing was mapped/executed, just sleep briefly (no-op) — still mark completed below
+                # If nothing was mapped/executed, try fallback search_table if enabled and db_tool available
                 if not executed_any:
-                    await asyncio.sleep(0.1)
+                    if db_tool and self.enable_fallback:
+                        try:
+                            logger.info(f"Server executor: fallback search_table for todo {item.id}")
+                            res = db_tool.search_table(query_text=item.content, top_n=3)
+                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                            fallback_action = ActionHistory(
+                                action_id=f"{call_id}_fallback",
+                                role=ActionRole.TOOL,
+                                messages=f"Server executor: fallback db.search_table for todo {item.id}",
+                                action_type="search_table",
+                                input={"function_name": "search_table", "arguments": json.dumps({"query_text": item.content, "top_n": 3, "todo_id": item.id})},
+                                output=result_payload,
+                                status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                            )
+                            if self.action_history_manager:
+                                self.action_history_manager.add_action(fallback_action)
+                                if self.emit_queue is not None:
+                                    try:
+                                        self.emit_queue.put_nowait(fallback_action)
+                                    except Exception:
+                                        pass
+                            executed_any = True
+                        except Exception as e:
+                            logger.debug(f"Server executor fallback search_table failed for {item.id}: {e}")
+                    else:
+                        # no fallback available; emit short system note for transparency
+                        try:
+                            note_action = ActionHistory.create_action(
+                                role=ActionRole.SYSTEM,
+                                action_type="thinking",
+                                messages=f"No tool executed for todo {item.id}; marking completed",
+                                input_data={"todo_id": item.id},
+                                output={"raw_output": "No tool matched and fallback disabled; step marked completed", "emit_chat": True},
+                                status=ActionStatus.SUCCESS,
+                            )
+                            if self.action_history_manager:
+                                self.action_history_manager.add_action(note_action)
+                                if self.emit_queue is not None:
+                                    try:
+                                        self.emit_queue.put_nowait(note_action)
+                                    except Exception:
+                                        pass
+                        except Exception as e:
+                            logger.debug(f"Failed to emit system note for todo {item.id}: {e}")
 
                 # Mark completed
                 try:

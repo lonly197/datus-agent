@@ -6,6 +6,13 @@ agent:
   models:
     openai:
       type: openai
+  # Plan executor configuration (optional)
+  # plan_executor:
+  #   keyword_tool_map:
+  #     search_table: ["search", "搜索", "表结构", "table", "columns", "列", "字段", "schema"]
+  #     execute_sql: ["execute sql", "执行sql", "执行 sql", "run sql", "执行"]
+  #     report: ["generate report", "生成报告", "write report", "write"]
+  #   enable_fallback: true
       vendor: openai
       base_url: https://api.openai.com/v1
       api_key: ${OPENAI_API_KEY}
