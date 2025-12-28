@@ -316,7 +316,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             logger.info(f"Plan mode auto_mode: {auto_mode} (from input)")
 
             # Check for auto-injected knowledge from workflow task
-            auto_injected_knowledge = getattr(workflow.task, '_auto_injected_knowledge', None) if workflow else None
+            auto_injected_knowledge = getattr(self.workflow.task, '_auto_injected_knowledge', None) if self.workflow else None
 
             self.plan_hooks = PlanModeHooks(
                 console=console,
