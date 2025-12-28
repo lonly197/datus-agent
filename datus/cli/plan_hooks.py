@@ -3072,6 +3072,45 @@ Respond with only the tool name, nothing else."""
 
                 # Report generation logic has been moved to keyword-based matching above
 
+                # If nothing was mapped/executed, check if this is an analytical task that needs LLM reasoning
+                if not executed_any:
+                    content_lower = (item.content or "").lower()
+                    # Check if this is an analytical task that should use LLM reasoning instead of tools
+                    analytical_keywords = [
+                        "分析", "检查", "评估", "验证", "优化", "审查", "性能影响",
+                        "analyze", "check", "evaluate", "validate", "optimize", "review", "performance impact"
+                    ]
+                    is_analytical = any(keyword in content_lower for keyword in analytical_keywords)
+
+                    if is_analytical and not getattr(item, "requires_llm_reasoning", False):
+                        logger.info(f"Server executor: detected analytical task {item.id}, converting to LLM reasoning")
+                        # Dynamically set LLM reasoning for analytical tasks
+                        item.requires_llm_reasoning = True
+                        item.reasoning_type = "analysis"
+                        # Mark as not requiring tool execution
+                        item.requires_tool = False
+                        executed_any = True  # Prevent fallback execution
+
+                        # Emit a system note explaining the conversion
+                        try:
+                            conversion_note = ActionHistory.create_action(
+                                role=ActionRole.SYSTEM,
+                                action_type="thinking",
+                                messages=f"Converted analytical task {item.id} to LLM reasoning",
+                                input_data={"todo_id": item.id},
+                                output={"raw_output": f"分析任务已转换为LLM推理: {item.content[:50]}...", "emit_chat": True},
+                                status=ActionStatus.SUCCESS,
+                            )
+                            if self.action_history_manager:
+                                self.action_history_manager.add_action(conversion_note)
+                                if self.emit_queue is not None:
+                                    try:
+                                        self.emit_queue.put_nowait(conversion_note)
+                                    except Exception:
+                                        pass
+                        except Exception as e:
+                            logger.debug(f"Failed to emit conversion note for todo {item.id}: {e}")
+
                 # If nothing was mapped/executed, try prioritized fallback tools if enabled
                 if not executed_any and self.enable_fallback:
                     fallback_candidates = self._determine_fallback_candidates(item.content or "")
