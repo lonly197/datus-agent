@@ -160,6 +160,37 @@ class ChatAgenticNode(GenSQLAgenticNode):
             logger.error(f"Failed to update chat context: {e}")
             return {"success": False, "message": str(e)}
 
+    def _get_system_prompt(
+        self, conversation_summary: Optional[str] = None, prompt_version: Optional[str] = None
+    ) -> str:
+        """
+        Get the system prompt for this chat node, using plan_mode_system when plan mode is active.
+
+        Args:
+            conversation_summary: Optional summary from previous conversation compact
+            prompt_version: Optional prompt version to use, overrides agent config version
+
+        Returns:
+            System prompt string loaded from the appropriate template
+        """
+        # Check if plan mode is active by looking at workflow metadata or node state
+        is_plan_mode = getattr(self, 'plan_mode_active', False)
+
+        # Temporarily modify node_config to use plan_mode_system when in plan mode
+        if is_plan_mode:
+            original_system_prompt = self.node_config.get("system_prompt")
+            self.node_config["system_prompt"] = "plan_mode"
+            try:
+                return super()._get_system_prompt(conversation_summary, prompt_version)
+            finally:
+                # Restore original system prompt
+                if original_system_prompt is not None:
+                    self.node_config["system_prompt"] = original_system_prompt
+                else:
+                    self.node_config.pop("system_prompt", None)
+        else:
+            return super()._get_system_prompt(conversation_summary, prompt_version)
+
     @override
     def setup_tools(self):
         """Initialize all tools with default database connection."""
