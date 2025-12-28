@@ -1105,14 +1105,17 @@ Respond with only the tool name, nothing else."""
                     try:
                         logger.info(f"Server executor: matched tool '{matched_tool}' for todo {item.id} (fs_tool: {fs_tool is not None}, db_tool: {db_tool is not None})")
                         if matched_tool == "search_table" and db_tool:
-                            res = db_tool.search_table(query_text=item.content, top_n=5)
+                            tool_params = self._extract_tool_parameters(matched_tool, item.content or "")
+                            query_text = tool_params.get("query_text", item.content or "")
+                            top_n = tool_params.get("top_n", 5)
+                            res = db_tool.search_table(query_text=query_text, top_n=top_n)
                             result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
                             complete_action_db = ActionHistory(
                                 action_id=f"{call_id}_db",
                                 role=ActionRole.TOOL,
                                 messages=f"Server executor: db.search_table for todo {item.id}",
                                 action_type="search_table",
-                                input={"function_name": "search_table", "arguments": json.dumps({"query_text": item.content, "top_n": 5, "todo_id": item.id})},
+                                input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": top_n, "todo_id": item.id})},
                                 output=result_payload,
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
@@ -1206,17 +1209,37 @@ Respond with only the tool name, nothing else."""
                             executed_any = True
                         elif matched_tool == "describe_table" and db_tool:
                             # Describe table structure
-                            res = db_tool.describe_table(table_name=item.content)
-                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
-                            complete_action_db = ActionHistory(
-                                action_id=f"{call_id}_describe",
-                                role=ActionRole.TOOL,
-                                messages=f"Server executor: db.describe_table for todo {item.id}",
-                                action_type="describe_table",
-                                input={"function_name": "describe_table", "arguments": json.dumps({"table_name": item.content, "todo_id": item.id})},
-                                output=result_payload,
-                                status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
-                            )
+                            tool_params = self._extract_tool_parameters(matched_tool, item.content or "")
+                            table_name = tool_params.get("table_name")
+                            if table_name:
+                                res = db_tool.describe_table(table_name=table_name)
+                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                complete_action_db = ActionHistory(
+                                    action_id=f"{call_id}_describe",
+                                    role=ActionRole.TOOL,
+                                    messages=f"Server executor: db.describe_table for todo {item.id}",
+                                    action_type="describe_table",
+                                    input={"function_name": "describe_table", "arguments": json.dumps({"table_name": table_name, "todo_id": item.id})},
+                                    output=result_payload,
+                                    status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                )
+                                executed_any = True
+                            else:
+                                # If no table name found, this might be a search operation
+                                logger.info(f"No table name extracted for describe_table, falling back to search_table for todo {item.id}")
+                                query_text = tool_params.get("query_text", item.content or "")
+                                res = db_tool.search_table(query_text=query_text, top_n=5)
+                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                complete_action_db = ActionHistory(
+                                    action_id=f"{call_id}_search_fallback",
+                                    role=ActionRole.TOOL,
+                                    messages=f"Server executor: db.search_table (fallback from describe_table) for todo {item.id}",
+                                    action_type="search_table",
+                                    input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": 5, "todo_id": item.id})},
+                                    output=result_payload,
+                                    status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                )
+                                executed_any = True
                             if self.action_history_manager:
                                 self.action_history_manager.add_action(complete_action_db)
                                 if self.emit_queue is not None:
@@ -1264,14 +1287,16 @@ Respond with only the tool name, nothing else."""
                                 executed_any = True
                         elif matched_tool == "search_metrics" and db_tool:
                             # Search for business metrics
-                            res = db_tool.search_metrics(query_text=item.content)
+                            tool_params = self._extract_tool_parameters(matched_tool, item.content or "")
+                            query_text = tool_params.get("query_text", item.content or "")
+                            res = db_tool.search_metrics(query_text=query_text)
                             result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
                             complete_action_db = ActionHistory(
                                 action_id=f"{call_id}_metrics",
                                 role=ActionRole.TOOL,
                                 messages=f"Server executor: db.search_metrics for todo {item.id}",
                                 action_type="search_metrics",
-                                input={"function_name": "search_metrics", "arguments": json.dumps({"query_text": item.content, "todo_id": item.id})},
+                                input={"function_name": "search_metrics", "arguments": json.dumps({"query_text": query_text, "todo_id": item.id})},
                                 output=result_payload,
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
@@ -1285,14 +1310,16 @@ Respond with only the tool name, nothing else."""
                             executed_any = True
                         elif matched_tool == "search_reference_sql" and db_tool:
                             # Search for reference SQL examples
-                            res = db_tool.search_reference_sql(query_text=item.content)
+                            tool_params = self._extract_tool_parameters(matched_tool, item.content or "")
+                            query_text = tool_params.get("query_text", item.content or "")
+                            res = db_tool.search_reference_sql(query_text=query_text)
                             result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
                             complete_action_db = ActionHistory(
                                 action_id=f"{call_id}_refsql",
                                 role=ActionRole.TOOL,
                                 messages=f"Server executor: db.search_reference_sql for todo {item.id}",
                                 action_type="search_reference_sql",
-                                input={"function_name": "search_reference_sql", "arguments": json.dumps({"query_text": item.content, "todo_id": item.id})},
+                                input={"function_name": "search_reference_sql", "arguments": json.dumps({"query_text": query_text, "todo_id": item.id})},
                                 output=result_payload,
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
@@ -1619,14 +1646,17 @@ Respond with only the tool name, nothing else."""
                         try:
                             if tool_name == "search_table" and db_tool:
                                 logger.info(f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})")
-                                res = db_tool.search_table(query_text=item.content, top_n=3)
+                                tool_params = self._extract_tool_parameters(tool_name, item.content or "")
+                                query_text = tool_params.get("query_text", item.content or "")
+                                top_n = tool_params.get("top_n", 3)
+                                res = db_tool.search_table(query_text=query_text, top_n=top_n)
                                 result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
                                 fallback_action = ActionHistory(
                                         action_id=f"{call_id}_fallback_{tool_name}",
                                     role=ActionRole.TOOL,
                                         messages=f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})",
                                         action_type=tool_name,
-                                        input={"function_name": tool_name, "arguments": json.dumps({"query_text": item.content, "top_n": 3, "todo_id": item.id, "is_fallback": True})},
+                                        input={"function_name": tool_name, "arguments": json.dumps({"query_text": query_text, "top_n": top_n, "todo_id": item.id, "is_fallback": True})},
                                     output=result_payload,
                                     status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                                 )
@@ -1634,18 +1664,36 @@ Respond with only the tool name, nothing else."""
 
                             elif tool_name == "describe_table" and db_tool:
                                 logger.info(f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})")
-                                res = db_tool.describe_table(table_name=item.content)
-                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
-                                fallback_action = ActionHistory(
-                                    action_id=f"{call_id}_fallback_{tool_name}",
-                                    role=ActionRole.TOOL,
-                                    messages=f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})",
-                                    action_type=tool_name,
-                                    input={"function_name": tool_name, "arguments": json.dumps({"table_name": item.content, "todo_id": item.id, "is_fallback": True})},
-                                    output=result_payload,
-                                    status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
-                                )
-                                success = True
+                                tool_params = self._extract_tool_parameters(tool_name, item.content or "")
+                                table_name = tool_params.get("table_name")
+                                if table_name:
+                                    res = db_tool.describe_table(table_name=table_name)
+                                    result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                    fallback_action = ActionHistory(
+                                        action_id=f"{call_id}_fallback_{tool_name}",
+                                        role=ActionRole.TOOL,
+                                        messages=f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})",
+                                        action_type=tool_name,
+                                        input={"function_name": tool_name, "arguments": json.dumps({"table_name": table_name, "todo_id": item.id, "is_fallback": True})},
+                                        output=result_payload,
+                                        status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                    )
+                                    success = True
+                                else:
+                                    # Fallback to search if no table name found
+                                    query_text = tool_params.get("query_text", item.content or "")
+                                    res = db_tool.search_table(query_text=query_text, top_n=3)
+                                    result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                    fallback_action = ActionHistory(
+                                        action_id=f"{call_id}_fallback_search",
+                                        role=ActionRole.TOOL,
+                                        messages=f"Server executor: fallback search_table (from describe_table) for todo {item.id} (confidence: {confidence:.2f})",
+                                        action_type="search_table",
+                                        input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": 3, "todo_id": item.id, "is_fallback": True})},
+                                        output=result_payload,
+                                        status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                    )
+                                    success = True
 
                             # Add more tool fallbacks here as needed...
 
@@ -1782,6 +1830,231 @@ Respond with only the tool name, nothing else."""
 
         except Exception as e:
             logger.error(f"Failed to emit plan_update event: {e}")
+
+    def _extract_tool_parameters(self, tool_name: str, todo_content: str) -> Dict[str, Any]:
+        """
+        Extract appropriate parameters for a tool from todo content.
+
+        Args:
+            tool_name: Name of the tool to extract parameters for
+            todo_content: The todo content to parse
+
+        Returns:
+            Dict containing extracted parameters for the tool
+        """
+        if not todo_content:
+            return {}
+
+        # Clean and preprocess todo content
+        cleaned_content = self._preprocess_todo_content(todo_content)
+
+        try:
+            params = {}
+            if tool_name == "describe_table":
+                params = self._extract_describe_table_params(cleaned_content)
+            elif tool_name == "search_table":
+                params = self._extract_search_table_params(cleaned_content)
+            elif tool_name == "read_query":
+                params = self._extract_read_query_params(cleaned_content)
+            elif tool_name == "execute_sql":
+                params = self._extract_execute_sql_params(cleaned_content)
+            elif tool_name == "write_file":
+                params = self._extract_write_file_params(cleaned_content)
+            elif tool_name == "read_file":
+                params = self._extract_read_file_params(cleaned_content)
+            else:
+                # For unknown tools, return basic parameters
+                params = {"query_text": cleaned_content}
+
+            # Validate and sanitize parameters
+            validated_params = self._validate_tool_parameters(tool_name, params)
+
+            logger.debug(f"Extracted parameters for {tool_name}: {validated_params}")
+            return validated_params
+
+        except Exception as e:
+            logger.debug(f"Failed to extract parameters for tool {tool_name}: {e}")
+            return {"query_text": cleaned_content}
+
+    def _preprocess_todo_content(self, content: str) -> str:
+        """
+        Preprocess todo content to improve parameter extraction.
+        """
+        if not content:
+            return ""
+
+        # Remove common prefixes that don't help with parameter extraction
+        prefixes_to_remove = [
+            "sub-question:",
+            "sub question:",
+            "任务：",
+            "任务:",
+            "问题：",
+            "问题:",
+            "| expected:",
+            "| 期望:",
+        ]
+
+        cleaned = content.lower()
+        for prefix in prefixes_to_remove:
+            if cleaned.startswith(prefix.lower()):
+                cleaned = cleaned[len(prefix):].strip()
+
+        # Remove extra whitespace
+        cleaned = ' '.join(cleaned.split())
+
+        return cleaned
+
+    def _validate_tool_parameters(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate and sanitize tool parameters.
+        """
+        if not params:
+            return params
+
+        validated = params.copy()
+
+        try:
+            if tool_name == "describe_table":
+                table_name = params.get("table_name")
+                if table_name and not self._is_valid_table_name(table_name):
+                    logger.warning(f"Invalid table name '{table_name}', falling back to search")
+                    validated = {"query_text": params.get("query_text", table_name)}
+                elif table_name:
+                    validated["table_name"] = table_name.strip()
+
+            elif tool_name in ["read_query", "execute_sql"]:
+                sql = params.get("sql", "")
+                if sql and len(sql) > 10000:  # Reasonable SQL length limit
+                    logger.warning(f"SQL query too long ({len(sql)} chars), truncating")
+                    validated["sql"] = sql[:10000] + "..."
+
+            elif tool_name == "search_table":
+                top_n = params.get("top_n", 5)
+                if isinstance(top_n, int) and (top_n < 1 or top_n > 20):
+                    validated["top_n"] = min(max(top_n, 1), 20)
+
+            elif tool_name == "write_file":
+                path = params.get("path", "")
+                if path:
+                    # Basic path validation
+                    import os
+                    if ".." in path or path.startswith("/"):
+                        logger.warning(f"Potentially unsafe file path: {path}")
+                        validated["path"] = f"output/safe_{hash(path) % 10000}.txt"
+
+        except Exception as e:
+            logger.debug(f"Parameter validation failed for {tool_name}: {e}")
+
+        return validated
+
+    def _extract_describe_table_params(self, todo_content: str) -> Dict[str, Any]:
+        """
+        Extract table name from todo content for describe_table tool.
+        """
+        import re
+
+        # Common patterns for table names in Chinese/English text
+        patterns = [
+            r'表\s*[\'\"]?(\w+)[\'\"]?',  # 表 'table_name' or 表 table_name
+            r'table\s*[\'\"]?(\w+)[\'\"]?',  # table 'table_name'
+            r'(\w+_table)',  # table_name
+            r'(\w+_fact_\w+)',  # fact tables like dwd_assign_dlr_clue_fact_di
+            r'(\w+_dim_\w+)',  # dimension tables
+            r'(\w+_dws_\w+)',  # summary tables
+            r'(\w+_ads_\w+)',  # application tables
+            r'(\w+_ods_\w+)',  # ods tables
+            r'(\w+_dwd_\w+)',  # dwd tables
+        ]
+
+        content_lower = todo_content.lower()
+
+        # First try to extract from known successful examples
+        # From the log, we know dwd_assign_dlr_clue_fact_di was found
+        if "线索表" in content_lower or "clue" in content_lower:
+            # Try to find table name from action history if available
+            if self.action_history_manager:
+                for action in reversed(self.action_history_manager.get_actions()):
+                    if (action.action_type == "search_table" and
+                        action.output and isinstance(action.output, dict)):
+                        result = action.output.get("result", {})
+                        if isinstance(result, dict):
+                            metadata = result.get("metadata", [])
+                            if metadata and isinstance(metadata, list) and len(metadata) > 0:
+                                # Use the first table found as candidate
+                                first_table = metadata[0].get("table_name", "")
+                                if first_table:
+                                    logger.debug(f"Using table name from search results: {first_table}")
+                                    return {"table_name": first_table}
+
+        # Try regex patterns
+        for pattern in patterns:
+            matches = re.findall(pattern, todo_content, re.IGNORECASE)
+            if matches:
+                # Clean the table name
+                table_name = matches[0].strip('\'"')
+                # Validate table name format (basic validation)
+                if self._is_valid_table_name(table_name):
+                    logger.debug(f"Extracted table name '{table_name}' from todo content")
+                    return {"table_name": table_name}
+
+        # Fallback: if no table name found, this might be a search operation
+        logger.debug(f"No table name found in todo content, falling back to search operation")
+        return {"query_text": todo_content}
+
+    def _extract_search_table_params(self, todo_content: str) -> Dict[str, Any]:
+        """Extract search parameters for search_table tool."""
+        return {"query_text": todo_content, "top_n": 5}
+
+    def _extract_read_query_params(self, todo_content: str) -> Dict[str, Any]:
+        """Extract SQL query for read_query tool."""
+        # Try to extract SQL from action history (previous SQL generation)
+        if self.action_history_manager:
+            for action in reversed(self.action_history_manager.get_actions()):
+                if (action.role in ("assistant", ActionRole.ASSISTANT) and
+                    action.output and isinstance(action.output, dict)):
+                    sql = action.output.get("sql")
+                    if sql:
+                        return {"sql": sql}
+
+        # Fallback to raw content (might contain SQL)
+        return {"sql": todo_content}
+
+    def _extract_execute_sql_params(self, todo_content: str) -> Dict[str, Any]:
+        """Extract SQL for execute_sql tool."""
+        return self._extract_read_query_params(todo_content)
+
+    def _extract_write_file_params(self, todo_content: str) -> Dict[str, Any]:
+        """Extract file write parameters."""
+        # Basic implementation - could be enhanced
+        return {
+            "path": f"output/{todo_content[:50].replace(' ', '_')}.txt",
+            "content": todo_content
+        }
+
+    def _extract_read_file_params(self, todo_content: str) -> Dict[str, Any]:
+        """Extract file read parameters."""
+        # Basic implementation - could be enhanced
+        return {"path": todo_content}
+
+    def _is_valid_table_name(self, table_name: str) -> bool:
+        """
+        Basic validation for table names.
+        """
+        if not table_name or len(table_name) > 100:
+            return False
+
+        # Check for basic SQL injection patterns (simple check)
+        dangerous_patterns = [';', '--', '/*', '*/', 'union', 'select', 'drop', 'delete', 'update', 'insert']
+        if any(pattern in table_name.lower() for pattern in dangerous_patterns):
+            return False
+
+        # Allow alphanumeric, underscore, and some special chars common in table names
+        import re
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+            return False
+
+        return True
 
     def _is_actually_completed(self, todo_id: str) -> bool:
         """
