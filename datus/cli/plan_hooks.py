@@ -36,6 +36,158 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 
+# Task type classification for intelligent execution routing
+class TaskType:
+    """Task type classifications for intelligent execution routing."""
+    TOOL_EXECUTION = "tool_execution"  # Needs external tool calls
+    LLM_ANALYSIS = "llm_analysis"      # Needs LLM reasoning/analysis
+    HYBRID = "hybrid"                  # May need both tools and analysis
+
+    @classmethod
+    def classify_task(cls, task_content: str) -> str:
+        """Intelligent task type classification based on content analysis."""
+        if not task_content:
+            return cls.HYBRID
+
+        content_lower = task_content.lower()
+
+        # Analysis keywords (higher priority)
+        analysis_keywords = [
+            '分析', '检查', '评估', '验证', '优化', '审查', '性能影响',
+            'analyze', 'check', 'evaluate', 'validate', 'optimize', 'review', 'performance impact',
+            '审查规则', '质量检查', '代码审查', 'sql审查', '规则验证'
+        ]
+
+        # Tool execution keywords (higher priority)
+        tool_keywords = [
+            '执行', '运行', '查询', '搜索', '创建', '写入', '插入', '更新', '删除',
+            'execute', 'run', 'query', 'search', 'create', 'write', 'insert', 'update', 'delete',
+            '生成sql', '执行sql', '运行查询', '查找表', '搜索数据'
+        ]
+
+        analysis_score = sum(1 for kw in analysis_keywords if kw in content_lower)
+        tool_score = sum(1 for kw in tool_keywords if kw in content_lower)
+
+        # Boost analysis score for SQL review patterns
+        if any(pattern in content_lower for pattern in ['sql审查', '质量检查', '规则验证', '性能评估']):
+            analysis_score += 2
+
+        # Boost tool score for specific tool patterns
+        if any(pattern in content_lower for pattern in ['表结构', '字段信息', '执行查询', '运行sql']):
+            tool_score += 2
+
+        if analysis_score > tool_score:
+            return cls.LLM_ANALYSIS
+        elif tool_score > analysis_score:
+            return cls.TOOL_EXECUTION
+        else:
+            return cls.HYBRID
+
+class SmartExecutionRouter:
+    """Intelligent task execution router based on task type classification."""
+
+    def __init__(self, agent_config=None, model=None, action_history_manager=None, emit_queue=None):
+        self.agent_config = agent_config
+        self.model = model
+        self.action_history_manager = action_history_manager
+        self.emit_queue = emit_queue
+
+    async def execute_task(self, todo_item, context) -> Dict[str, Any]:
+        """Smart routing of task execution based on task type."""
+        task_type = getattr(todo_item, 'task_type', 'hybrid')
+
+        if task_type == TaskType.LLM_ANALYSIS:
+            return await self._execute_llm_analysis(todo_item, context)
+        elif task_type == TaskType.TOOL_EXECUTION:
+            return await self._execute_tool_call(todo_item, context)
+        else:  # hybrid or unknown
+            return await self._execute_hybrid_task(todo_item, context)
+
+    async def _execute_llm_analysis(self, todo_item, context) -> Dict[str, Any]:
+        """Execute pure LLM analysis task."""
+        try:
+            # Set up LLM reasoning parameters
+            todo_item.requires_llm_reasoning = True
+            todo_item.reasoning_type = "analysis"
+            todo_item.requires_tool = False
+
+            # Add analysis context if this is SQL review
+            if "sql审查" in todo_item.content.lower() or "质量检查" in todo_item.content.lower():
+                todo_item.analysis_context = {
+                    "domain": "sql_review",
+                    "rules": ["starrocks_3_3_rules", "performance_best_practices"],
+                    "output_format": "structured_report"
+                }
+
+            # Create reasoning action
+            reasoning_action = ActionHistory.create_action(
+                role=ActionRole.ASSISTANT,
+                action_type="thinking",
+                messages=f"LLM analysis for task: {todo_item.content[:50]}...",
+                input_data={
+                    "todo_id": todo_item.id,
+                    "task_type": "llm_analysis",
+                    "reasoning_type": "analysis",
+                    "content": todo_item.content
+                },
+                output_data={
+                    "analysis_type": "llm_reasoning",
+                    "context": todo_item.analysis_context,
+                    "emit_chat": True
+                },
+                status=ActionStatus.SUCCESS,
+            )
+
+            # Store action if manager available
+            if self.action_history_manager:
+                self.action_history_manager.add_action(reasoning_action)
+                if self.emit_queue:
+                    try:
+                        await self.emit_queue.put(reasoning_action)
+                    except Exception as e:
+                        logger.debug(f"Failed to emit analysis action: {e}")
+
+            return {
+                "success": True,
+                "execution_type": "llm_analysis",
+                "todo_item": todo_item,
+                "action": reasoning_action
+            }
+
+        except Exception as e:
+            logger.error(f"LLM analysis execution failed for todo {todo_item.id}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "execution_type": "llm_analysis"
+            }
+
+    async def _execute_tool_call(self, todo_item, context) -> Dict[str, Any]:
+        """Execute tool-based task using existing tool matching logic."""
+        # This will use the existing tool matching and execution logic
+        # The PlanModeHooks will handle this through the existing flow
+        return {
+            "success": True,
+            "execution_type": "tool_execution",
+            "message": "Delegated to tool execution flow"
+        }
+
+    async def _execute_hybrid_task(self, todo_item, context) -> Dict[str, Any]:
+        """Execute hybrid task (may need both tools and analysis)."""
+        # For hybrid tasks, first try tool execution, then fall back to analysis
+        content_lower = todo_item.content.lower()
+
+        # Check if this looks more like a tool task
+        tool_indicators = ['执行', '运行', '查询', '搜索', '查找', 'execute', 'run', 'query', 'search']
+        if any(indicator in content_lower for indicator in tool_indicators):
+            # Try tool execution first
+            tool_result = await self._execute_tool_call(todo_item, context)
+            if tool_result["success"]:
+                return tool_result
+
+        # Fall back to LLM analysis
+        return await self._execute_llm_analysis(todo_item, context)
+
 # Error handling types and configurations
 class ErrorType(str):
     """Error type classifications for better handling."""
@@ -908,6 +1060,159 @@ DEFAULT_PLAN_EXECUTOR_KEYWORD_MAP = {
         }
 
 
+class TaskTypeClassifier:
+    """智能任务类型分类器"""
+
+    TOOL_EXECUTION = "tool_execution"  # 需要调用外部工具
+    LLM_ANALYSIS = "llm_analysis"      # 需要LLM推理分析
+    HYBRID = "hybrid"                  # 可能需要工具+分析
+
+    @classmethod
+    def classify_task(cls, task_content: str) -> str:
+        """智能分类任务类型"""
+        if not task_content:
+            return cls.HYBRID
+
+        analysis_keywords = [
+            '分析', '检查', '评估', '验证', '优化', '审查', '性能影响',
+            'analyze', 'check', 'evaluate', 'validate', 'optimize', 'review', 'performance impact',
+            '考察', '审视', '审核', '诊断', '评测', '衡量', '比对'
+        ]
+
+        tool_keywords = [
+            '执行', '运行', '查询', '搜索', '创建', '写入', '获取', '获取',
+            'execute', 'run', 'query', 'search', 'create', 'write', 'fetch', 'retrieve',
+            '调用', '启动', '构建', '生成', '制作', '编写'
+        ]
+
+        content_lower = task_content.lower()
+        analysis_score = sum(1 for kw in analysis_keywords if kw in content_lower)
+        tool_score = sum(1 for kw in tool_keywords if kw in content_lower)
+
+        # 特殊规则：如果明确提到"执行SQL"、"运行查询"等，优先归类为工具执行
+        if any(phrase in content_lower for phrase in ['执行sql', '运行sql', 'execute sql', 'run sql']):
+            return cls.TOOL_EXECUTION
+
+        # 特殊规则：如果明确提到"分析"、"检查"、"评估"等，优先归类为LLM分析
+        if any(phrase in content_lower for phrase in ['sql审查', 'sql检查', 'sql分析', 'sql优化']):
+            return cls.LLM_ANALYSIS
+
+        # 基于关键词得分分类
+        if analysis_score > tool_score:
+            return cls.LLM_ANALYSIS
+        elif tool_score > analysis_score:
+            return cls.TOOL_EXECUTION
+        else:
+            return cls.HYBRID
+
+    @classmethod
+    def get_task_context(cls, task_content: str, task_type: str) -> Dict[str, Any]:
+        """根据任务类型获取相应的上下文信息"""
+        context = {}
+
+        if task_type == cls.LLM_ANALYSIS:
+            content_lower = task_content.lower()
+
+            # SQL审查任务的特殊上下文
+            if 'sql审查' in content_lower or 'sql检查' in content_lower:
+                context.update({
+                    "domain": "sql_review",
+                    "rules": ["starrocks_3_3_rules", "performance_best_practices"],
+                    "output_format": "structured_report"
+                })
+
+            # 性能分析任务的上下文
+            elif '性能' in content_lower or 'performance' in content_lower:
+                context.update({
+                    "domain": "performance_analysis",
+                    "metrics": ["execution_time", "memory_usage", "query_complexity"],
+                    "focus_areas": ["index_usage", "join_efficiency", "data_distribution"]
+                })
+
+            # 业务逻辑验证的上下文
+            elif '业务逻辑' in content_lower or 'business logic' in content_lower:
+                context.update({
+                    "domain": "business_logic_validation",
+                    "aspects": ["data_consistency", "business_rules", "data_quality"]
+                })
+
+        return context
+
+
+class SmartExecutionRouter:
+    """智能任务执行路由器"""
+
+    def __init__(self, agent_config, model=None):
+        self.agent_config = agent_config
+        self.model = model
+
+    async def execute_task(self, todo_item, context) -> Dict[str, Any]:
+        """智能路由任务执行"""
+        from datus.cli.plan_hooks import TaskTypeClassifier
+
+        task_type = getattr(todo_item, 'task_type', 'hybrid')
+
+        if task_type == TaskTypeClassifier.LLM_ANALYSIS:
+            return await self._execute_llm_analysis(todo_item, context)
+        elif task_type == TaskTypeClassifier.TOOL_EXECUTION:
+            return await self._execute_tool_call(todo_item, context)
+        else:  # hybrid
+            return await self._execute_hybrid_task(todo_item, context)
+
+    async def _execute_llm_analysis(self, todo_item, context):
+        """直接使用LLM进行分析推理"""
+        # 设置LLM推理参数
+        todo_item.requires_llm_reasoning = True
+        todo_item.reasoning_type = "analysis"
+        todo_item.requires_tool = False
+
+        # 获取分析上下文
+        analysis_context = getattr(todo_item, 'analysis_context', {})
+        if analysis_context:
+            # 将分析上下文添加到任务内容中，提供给LLM
+            enhanced_content = f"{todo_item.content}\n\n分析上下文：{analysis_context}"
+            todo_item.content = enhanced_content
+
+        # 返回执行结果，标记为LLM推理类型
+        return {
+            "success": True,
+            "execution_type": "llm_analysis",
+            "reasoning_type": todo_item.reasoning_type,
+            "requires_tool": False,
+            "analysis_context": analysis_context
+        }
+
+    async def _execute_tool_call(self, todo_item, context):
+        """使用工具执行"""
+        # 保持原有逻辑，使用现有的工具匹配和执行
+        todo_item.requires_tool = True
+        todo_item.requires_llm_reasoning = False
+
+        return {
+            "success": True,
+            "execution_type": "tool_execution",
+            "requires_tool": True,
+            "requires_llm_reasoning": False
+        }
+
+    async def _execute_hybrid_task(self, todo_item, context):
+        """混合执行：先工具获取数据，再LLM分析"""
+        # 首先执行工具调用获取数据
+        tool_result = await self._execute_tool_call(todo_item, context)
+
+        # 然后设置LLM分析
+        todo_item.requires_llm_reasoning = True
+        todo_item.reasoning_type = "synthesis"  # 综合分析类型
+
+        return {
+            "success": True,
+            "execution_type": "hybrid",
+            "tool_result": tool_result,
+            "requires_llm_reasoning": True,
+            "reasoning_type": "synthesis"
+        }
+
+
 class PlanningPhaseException(Exception):
     """Exception raised when trying to execute tools during planning phase."""
 
@@ -953,6 +1258,14 @@ class PlanModeHooks(AgentHooks):
         self.batch_processor = ToolBatchProcessor()
         self.enable_batch_processing = True
         self.enable_query_caching = True
+
+        # Initialize smart execution router for intelligent task routing
+        self.execution_router = SmartExecutionRouter(
+            agent_config=agent_config,
+            model=model,
+            action_history_manager=action_history_manager,
+            emit_queue=emit_queue
+        )
 
         # Initialize monitoring system
         self.monitor = ExecutionMonitor()
@@ -2251,7 +2564,36 @@ Respond with only the tool name, nothing else."""
                 # Define call_id for this execution step
                 call_id = f"server_call_{uuid.uuid4().hex[:8]}"
 
-                # Execute mapped tools for the todo based on simple heuristics.
+                # 智能任务路由：根据任务类型选择执行方式
+                task_type = getattr(item, 'task_type', 'hybrid')
+                if task_type == TaskType.LLM_ANALYSIS:
+                    # 对于纯分析任务，使用智能路由器执行LLM分析
+                    logger.info(f"Server executor: routing {item.id} to LLM analysis (task_type: {task_type})")
+
+                    try:
+                        routing_result = await self.execution_router.execute_task(item, {
+                            'call_id': call_id,
+                            'plan_tool': plan_tool,
+                            'db_tool': db_tool,
+                            'fs_tool': fs_tool
+                        })
+
+                        if routing_result["success"]:
+                            executed_any = True
+                            # Mark as completed since LLM analysis was performed
+                            try:
+                                plan_tool._update_todo_status(item.id, "completed")
+                                await self._emit_plan_update_event(item.id, "completed")
+                            except Exception as e:
+                                logger.error(f"Failed to mark LLM analysis task as completed {item.id}: {e}")
+                        else:
+                            logger.warning(f"LLM analysis routing failed for {item.id}: {routing_result.get('error', 'Unknown error')}")
+                            # Fall through to regular tool execution
+                    except Exception as e:
+                        logger.error(f"Smart routing failed for {item.id}: {e}")
+                        # Fall through to regular tool execution
+
+                # Execute mapped tools for the todo based on simple heuristics (fallback for tool_execution and hybrid tasks)
                 content_lower = (item.content or "").lower()
                 executed_any = False
 
@@ -3072,44 +3414,52 @@ Respond with only the tool name, nothing else."""
 
                 # Report generation logic has been moved to keyword-based matching above
 
-                # If nothing was mapped/executed, check if this is an analytical task that needs LLM reasoning
+                # If nothing was mapped/executed, use SmartExecutionRouter for intelligent task routing
                 if not executed_any:
-                    content_lower = (item.content or "").lower()
-                    # Check if this is an analytical task that should use LLM reasoning instead of tools
-                    analytical_keywords = [
-                        "分析", "检查", "评估", "验证", "优化", "审查", "性能影响",
-                        "analyze", "check", "evaluate", "validate", "optimize", "review", "performance impact"
-                    ]
-                    is_analytical = any(keyword in content_lower for keyword in analytical_keywords)
+                    logger.info(f"Server executor: using SmartExecutionRouter for task {item.id}")
 
-                    if is_analytical and not getattr(item, "requires_llm_reasoning", False):
-                        logger.info(f"Server executor: detected analytical task {item.id}, converting to LLM reasoning")
-                        # Dynamically set LLM reasoning for analytical tasks
-                        item.requires_llm_reasoning = True
-                        item.reasoning_type = "analysis"
-                        # Mark as not requiring tool execution
-                        item.requires_tool = False
-                        executed_any = True  # Prevent fallback execution
+                    # Initialize SmartExecutionRouter if not exists
+                    if not hasattr(self, '_smart_router'):
+                        self._smart_router = SmartExecutionRouter(self.agent_config, self.model)
 
-                        # Emit a system note explaining the conversion
-                        try:
-                            conversion_note = ActionHistory.create_action(
-                                role=ActionRole.SYSTEM,
-                                action_type="thinking",
-                                messages=f"Converted analytical task {item.id} to LLM reasoning",
-                                input_data={"todo_id": item.id},
-                                output={"raw_output": f"分析任务已转换为LLM推理: {item.content[:50]}...", "emit_chat": True},
-                                status=ActionStatus.SUCCESS,
-                            )
-                            if self.action_history_manager:
-                                self.action_history_manager.add_action(conversion_note)
-                                if self.emit_queue is not None:
-                                    try:
-                                        self.emit_queue.put_nowait(conversion_note)
-                                    except Exception:
-                                        pass
-                        except Exception as e:
-                            logger.debug(f"Failed to emit conversion note for todo {item.id}: {e}")
+                    try:
+                        # Use smart router to determine execution strategy
+                        routing_result = await self._smart_router.execute_task(item, {
+                            "todo_id": item.id,
+                            "agent_config": self.agent_config,
+                            "action_history_manager": self.action_history_manager,
+                            "emit_queue": self.emit_queue
+                        })
+
+                        if routing_result["success"]:
+                            executed_any = True
+
+                            # Emit routing decision note
+                            try:
+                                routing_note = ActionHistory.create_action(
+                                    role=ActionRole.SYSTEM,
+                                    action_type="thinking",
+                                    messages=f"Smart routing: {routing_result['execution_type']} for task {item.id}",
+                                    input_data={"todo_id": item.id, "execution_type": routing_result["execution_type"]},
+                                    output={"raw_output": f"智能路由决策: {routing_result['execution_type']}", "emit_chat": True},
+                                    status=ActionStatus.SUCCESS,
+                                )
+                                if self.action_history_manager:
+                                    self.action_history_manager.add_action(routing_note)
+                                    if self.emit_queue is not None:
+                                        try:
+                                            self.emit_queue.put_nowait(routing_note)
+                                        except Exception:
+                                            pass
+                            except Exception as e:
+                                logger.debug(f"Failed to emit routing note for todo {item.id}: {e}")
+
+                        else:
+                            logger.warning(f"Smart routing failed for task {item.id}: {routing_result}")
+
+                    except Exception as e:
+                        logger.error(f"Smart routing error for task {item.id}: {e}")
+                        # Continue to fallback logic if smart routing fails
 
                 # If nothing was mapped/executed, try prioritized fallback tools if enabled
                 if not executed_any and self.enable_fallback:

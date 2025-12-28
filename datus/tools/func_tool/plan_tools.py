@@ -42,6 +42,12 @@ class TodoItem(BaseModel):
     reasoning_type: Optional[str] = Field(default=None, description="Type of LLM reasoning required")
     # Optional explicit tool calls to execute after reasoning
     tool_calls: Optional[List[Dict[str, Any]]] = Field(default=None, description="Explicit tool calls to execute")
+    # Task type classification for intelligent execution routing
+    task_type: str = Field(default="hybrid", description="Task type: tool_execution/llm_analysis/hybrid")
+    execution_strategy: str = Field(default="auto", description="Execution strategy")
+    # Additional context for specific task types
+    analysis_context: Optional[Dict[str, Any]] = Field(None, description="Analysis task context information")
+    requires_external_data: bool = Field(default=False, description="Whether task needs external data")
 
 
 class TodoList(BaseModel):
@@ -191,6 +197,32 @@ class PlanTool:
             if not content:
                 continue
 
+            # 智能任务类型分类（如果未明确指定）
+            task_type = todo_item.get("task_type", "auto")
+            if task_type == "auto":
+                # 导入TaskTypeClassifier进行自动分类
+                from datus.cli.plan_hooks import TaskTypeClassifier
+                task_type = TaskTypeClassifier.classify_task(content)
+
+                # 根据任务类型设置默认的requires_tool和requires_llm_reasoning
+                if task_type == TaskTypeClassifier.LLM_ANALYSIS:
+                    if requires_tool is True:  # 如果用户没有明确指定，才自动设置
+                        requires_tool = False
+                    if requires_llm_reasoning is False:  # 如果用户没有明确指定，才自动设置
+                        requires_llm_reasoning = True
+                        reasoning_type = reasoning_type or "analysis"
+                elif task_type == TaskTypeClassifier.TOOL_EXECUTION:
+                    if requires_tool is not False:  # 如果用户没有明确指定为False，才自动设置
+                        requires_tool = True
+                    if requires_llm_reasoning is True and reasoning_type is None:
+                        reasoning_type = "tool_preparation"
+
+            # 获取任务上下文
+            analysis_context = None
+            if task_type == TaskTypeClassifier.LLM_ANALYSIS:
+                from datus.cli.plan_hooks import TaskTypeClassifier as TTC
+                analysis_context = TTC.get_task_context(content, task_type)
+
             # Validate metadata
             if not isinstance(requires_tool, bool):
                 requires_tool = bool(requires_tool)
@@ -215,7 +247,9 @@ class PlanTool:
                     requires_tool=requires_tool,
                     requires_llm_reasoning=requires_llm_reasoning,
                     reasoning_type=reasoning_type,
-                    tool_calls=tool_calls
+                    tool_calls=tool_calls,
+                    task_type=task_type,
+                    analysis_context=analysis_context
                 )
                 todo_list.items.append(new_item)
                 logger.info(f"Keeping completed step: {content}")
@@ -227,7 +261,9 @@ class PlanTool:
                     requires_tool=requires_tool,
                     requires_llm_reasoning=requires_llm_reasoning,
                     reasoning_type=reasoning_type,
-                    tool_calls=tool_calls
+                    tool_calls=tool_calls,
+                    task_type=task_type,
+                    analysis_context=analysis_context
                 )
                 todo_list.items.append(item)
                 logger.info(f"Added pending step: {content}")
