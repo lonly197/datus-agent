@@ -488,10 +488,11 @@ class DatusAPIService:
             # Get agent for the namespace
             agent = self.get_agent(request.namespace)
 
-            # Create SQL task with plan mode enabled
+            # Create SQL task with appropriate workflow based on plan mode
+            workflow_name = "chat_agentic_plan" if request.plan_mode else "chat_agentic"
             sql_task = self._create_sql_task(
                 RunWorkflowRequest(
-                    workflow="chat_agentic",
+                    workflow=workflow_name,
                     namespace=request.namespace,
                     catalog_name=request.catalog_name,
                     database_name=request.database_name,
@@ -540,13 +541,24 @@ class DatusAPIService:
             raise
         except Exception as e:
             logger.error(f"Chat research error for task {task_id}: {e}")
+
+            # Enhance error message with user-friendly suggestions
+            error_message, suggestions = self._enhance_error_message(str(e))
+
             error_event = ErrorEvent(
                 id=f"error_{int(time.time() * 1000)}",
                 timestamp=int(time.time() * 1000),
                 event=DeepResearchEventType.ERROR,
-                error=str(e)
+                error=error_message
             )
-            yield f"data: {error_event.model_dump_json()}\n\n"
+
+            # Add suggestions as additional data if available
+            if suggestions:
+                enhanced_error = error_event.model_dump()
+                enhanced_error["suggestions"] = suggestions
+                yield f"data: {json.dumps(enhanced_error)}\n\n"
+            else:
+                yield f"data: {error_event.model_dump_json()}\n\n"
 
             if self.task_store:
                 self.task_store.update_task(task_id, status="failed")
@@ -1118,5 +1130,74 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
         except Exception as e:
             logger.error(f"Task cancel error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    def _enhance_error_message(self, error_message: str) -> Tuple[str, List[str]]:
+        """
+        Enhance error messages with user-friendly descriptions and suggestions.
+
+        Args:
+            error_message: The original error message
+
+        Returns:
+            Tuple of (enhanced_message, suggestions_list)
+        """
+        error_lower = error_message.lower()
+        suggestions = []
+
+        # Database connection errors
+        if any(keyword in error_lower for keyword in ["connection", "connect", "network", "timeout"]):
+            enhanced_msg = "数据库连接出现问题"
+            suggestions = [
+                "检查数据库服务是否正在运行",
+                "确认网络连接是否正常",
+                "验证数据库连接配置",
+                "稍后重试操作"
+            ]
+
+        # Table/column not found errors
+        elif any(keyword in error_lower for keyword in ["table", "column", "relation", "does not exist"]):
+            enhanced_msg = "查询的表或列不存在"
+            suggestions = [
+                "检查表名和列名是否正确",
+                "确认数据库schema",
+                "使用搜索功能查找可用表"
+            ]
+
+        # Permission errors
+        elif any(keyword in error_lower for keyword in ["permission", "access", "denied", "privilege"]):
+            enhanced_msg = "数据库访问权限不足"
+            suggestions = [
+                "检查数据库用户权限",
+                "确认有查询相关表的权限",
+                "联系数据库管理员"
+            ]
+
+        # SQL syntax errors
+        elif any(keyword in error_lower for keyword in ["syntax", "invalid sql", "parse error"]):
+            enhanced_msg = "SQL语法错误"
+            suggestions = [
+                "检查SQL语句语法",
+                "确认引号和括号匹配",
+                "验证SQL语句结构"
+            ]
+
+        # Resource exhausted errors
+        elif any(keyword in error_lower for keyword in ["resource", "memory", "disk", "quota"]):
+            enhanced_msg = "系统资源不足"
+            suggestions = [
+                "减少查询的数据量",
+                "优化查询条件",
+                "分批处理大数据"
+            ]
+
+        else:
+            enhanced_msg = "执行过程中出现错误"
+            suggestions = [
+                "检查输入参数是否正确",
+                "确认系统配置",
+                "联系技术支持"
+            ]
+
+        return enhanced_msg, suggestions
 
     return app

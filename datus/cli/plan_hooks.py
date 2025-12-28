@@ -8,6 +8,10 @@ import asyncio
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+import re
+import json
+import statistics
+from collections import defaultdict, deque
 
 from agents import SQLiteSession
 from agents.lifecycle import AgentHooks
@@ -18,9 +22,789 @@ from datus.utils.loggings import get_logger
 import json
 import uuid
 from datus.schemas.action_history import ActionRole, ActionStatus, ActionHistory
-from typing import Dict, List, Optional
+from datus.schemas.node_models import SQLContext
+from datus.api.models import (
+    SqlExecutionStartEvent, SqlExecutionProgressEvent,
+    SqlExecutionResultEvent, SqlExecutionErrorEvent,
+    ChatEvent, DeepResearchEventType
+)
+from typing import Dict, List, Optional, Tuple
+import hashlib
+import json
 
 logger = get_logger(__name__)
+
+
+# Error handling types and configurations
+class ErrorType(str):
+    """Error type classifications for better handling."""
+    NETWORK = "network"
+    DATABASE_CONNECTION = "database_connection"
+    DATABASE_QUERY = "database_query"
+    TABLE_NOT_FOUND = "table_not_found"
+    COLUMN_NOT_FOUND = "column_not_found"
+    SYNTAX_ERROR = "syntax_error"
+    PERMISSION_DENIED = "permission_denied"
+    TIMEOUT = "timeout"
+    RESOURCE_EXHAUSTED = "resource_exhausted"
+    UNKNOWN = "unknown"
+
+
+class ErrorRecoveryStrategy:
+    """Error recovery strategies with retry and fallback options."""
+
+    def __init__(self, max_retries: int = 3, retry_delay: float = 1.0, backoff_factor: float = 2.0):
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.backoff_factor = backoff_factor
+
+    def should_retry(self, error_type: ErrorType, attempt_count: int) -> bool:
+        """Determine if an error should be retried based on type and attempt count."""
+        retryable_errors = {
+            ErrorType.NETWORK,
+            ErrorType.DATABASE_CONNECTION,
+            ErrorType.TIMEOUT,
+            ErrorType.RESOURCE_EXHAUSTED
+        }
+
+        return error_type in retryable_errors and attempt_count < self.max_retries
+
+    def get_retry_delay(self, attempt_count: int) -> float:
+        """Calculate retry delay with exponential backoff."""
+        return self.retry_delay * (self.backoff_factor ** (attempt_count - 1))
+
+
+class ErrorHandler:
+    """Comprehensive error handling and recovery system."""
+
+    def __init__(self):
+        self.recovery_strategy = ErrorRecoveryStrategy()
+        self.error_patterns = self._load_error_patterns()
+
+    def _load_error_patterns(self) -> Dict[str, Dict]:
+        """Load error pattern recognition rules."""
+        return {
+            # Database connection errors
+            r"connection.*failed|unable.*connect": {
+                "type": ErrorType.DATABASE_CONNECTION,
+                "suggestions": [
+                    "检查数据库连接配置",
+                    "确认数据库服务正在运行",
+                    "验证网络连接"
+                ]
+            },
+            # Table not found errors
+            r"table.*not.*found|relation.*does.*exist|doesn't exist": {
+                "type": ErrorType.TABLE_NOT_FOUND,
+                "suggestions": [
+                    "确认表名拼写正确",
+                    "检查数据库schema",
+                    "使用search_table工具查找可用表"
+                ]
+            },
+            # Column not found errors
+            r"column.*not.*found|field.*does.*exist": {
+                "type": ErrorType.COLUMN_NOT_FOUND,
+                "suggestions": [
+                    "检查列名拼写",
+                    "使用describe_table查看表结构",
+                    "确认字段是否存在于表中"
+                ]
+            },
+            # Syntax errors
+            r"syntax.*error|invalid.*sql": {
+                "type": ErrorType.SYNTAX_ERROR,
+                "suggestions": [
+                    "检查SQL语法",
+                    "确认引号和括号匹配",
+                    "验证SQL语句结构"
+                ]
+            },
+            # Permission errors
+            r"permission.*denied|access.*denied": {
+                "type": ErrorType.PERMISSION_DENIED,
+                "suggestions": [
+                    "检查数据库权限",
+                    "确认用户有查询权限",
+                    "联系数据库管理员"
+                ]
+            },
+            # Timeout errors
+            r"timeout|query.*timed.*out": {
+                "type": ErrorType.TIMEOUT,
+                "suggestions": [
+                    "简化查询条件",
+                    "添加适当的索引",
+                    "考虑分批处理大数据"
+                ]
+            }
+        }
+
+    def classify_error(self, error_message: str) -> Tuple[ErrorType, List[str]]:
+        """Classify error type and provide recovery suggestions."""
+        error_msg_lower = error_message.lower()
+
+        for pattern, info in self.error_patterns.items():
+            if re.search(pattern, error_msg_lower, re.IGNORECASE):
+                return info["type"], info["suggestions"]
+
+        return ErrorType.UNKNOWN, ["检查错误详情并联系技术支持"]
+
+    def handle_tool_error(self, tool_name: str, error: Exception, attempt_count: int = 1, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Handle tool execution errors with recovery strategies and auto-fix suggestions."""
+
+        error_message = str(error)
+        error_type, suggestions = self.classify_error(error_message)
+
+        result = {
+            "error_type": error_type,
+            "error_message": error_message,
+            "suggestions": suggestions,
+            "can_retry": self.recovery_strategy.should_retry(error_type, attempt_count),
+            "retry_delay": 0.0,
+            "auto_fix_available": False,
+            "auto_fix_suggestion": None
+        }
+
+        if result["can_retry"]:
+            result["retry_delay"] = self.recovery_strategy.get_retry_delay(attempt_count)
+            result["suggestions"].append(f"系统将在 {result['retry_delay']:.1f} 秒后自动重试")
+
+        # Add tool-specific recovery suggestions and auto-fix logic
+        context = context or {}
+
+        if tool_name == "describe_table":
+            result.update(self._handle_describe_table_error(error_type, error_message, context))
+        elif tool_name == "search_table":
+            result.update(self._handle_search_table_error(error_type, error_message, context))
+        elif tool_name == "execute_sql":
+            result.update(self._handle_execute_sql_error(error_type, error_message, context))
+
+        return result
+
+    def _handle_describe_table_error(self, error_type: ErrorType, error_message: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle describe_table specific errors."""
+        result = {}
+
+        if error_type == ErrorType.TABLE_NOT_FOUND:
+            result["fallback_tool"] = "search_table"
+            result["fallback_reason"] = "表不存在，建议使用search_table查找可用表"
+            result["auto_fix_available"] = True
+            result["auto_fix_suggestion"] = "自动切换到search_table工具查找相似表名"
+        elif error_type == ErrorType.PERMISSION_DENIED:
+            result["suggestions"].extend([
+                "检查是否对该表有DESCRIBE权限",
+                "尝试使用search_table获取基本表信息"
+            ])
+
+        return result
+
+    def _handle_search_table_error(self, error_type: ErrorType, error_message: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle search_table specific errors."""
+        result = {}
+
+        if error_type == ErrorType.DATABASE_CONNECTION:
+            result["suggestions"].extend([
+                "检查数据库连接字符串",
+                "确认数据库服务状态"
+            ])
+            result["auto_fix_available"] = True
+            result["auto_fix_suggestion"] = "简化搜索查询，使用基本关键词重试"
+        elif error_type == ErrorType.TIMEOUT:
+            result["suggestions"].extend([
+                "缩短搜索关键词",
+                "减少搜索结果数量"
+            ])
+            result["auto_fix_available"] = True
+            result["auto_fix_suggestion"] = "自动减少top_n参数并重试"
+
+        return result
+
+    def _handle_execute_sql_error(self, error_type: ErrorType, error_message: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle execute_sql specific errors with advanced auto-fix."""
+        result = {}
+
+        if error_type == ErrorType.SYNTAX_ERROR:
+            result["suggestions"].extend([
+                "检查SQL语法，特别是引号和分号",
+                "验证表名和列名是否正确"
+            ])
+            result["auto_fix_available"] = True
+            result["auto_fix_suggestion"] = "尝试自动修复常见语法错误"
+
+            # Try to auto-fix common SQL syntax errors
+            fixed_sql = self._auto_fix_sql_syntax(context.get("sql_query", ""), error_message)
+            if fixed_sql != context.get("sql_query"):
+                result["fixed_sql"] = fixed_sql
+
+        elif error_type == ErrorType.PERMISSION_DENIED:
+            result["suggestions"].extend([
+                "检查是否有执行该SQL的权限",
+                "确认用户角色和权限设置"
+            ])
+
+        elif error_type == ErrorType.TABLE_NOT_FOUND:
+            result["suggestions"].extend([
+                "检查SQL中引用的表名是否存在",
+                "使用search_table查找可用表名"
+            ])
+            result["auto_fix_available"] = True
+            result["auto_fix_suggestion"] = "查找相似的表名进行自动修正"
+
+        return result
+
+    def _auto_fix_sql_syntax(self, sql_query: str, error_message: str) -> str:
+        """Attempt to auto-fix common SQL syntax errors."""
+        if not sql_query:
+            return sql_query
+
+        fixed_sql = sql_query.strip()
+
+        # Fix missing semicolon for SELECT statements
+        if not fixed_sql.endswith(';') and fixed_sql.upper().strip().startswith('SELECT'):
+            fixed_sql += ';'
+
+        # Fix common quote issues
+        error_lower = error_message.lower()
+
+        # Handle unterminated quoted strings
+        if "unterminated quoted string" in error_lower or "quoted string not properly terminated" in error_lower:
+            # Try to find and fix unterminated quotes
+            single_quotes = fixed_sql.count("'")
+            double_quotes = fixed_sql.count('"')
+
+            if single_quotes % 2 != 0:
+                fixed_sql += "'"
+            elif double_quotes % 2 != 0:
+                fixed_sql += '"'
+
+        # Fix missing FROM clause (common in malformed queries)
+        if "from" not in fixed_sql.lower() and "select" in fixed_sql.lower():
+            # This is a very basic fix - in practice, would need more context
+            pass
+
+        return fixed_sql
+
+
+class ExecutionMonitor:
+    """Comprehensive monitoring system for plan mode execution."""
+
+    def __init__(self, max_history_size: int = 1000):
+        self.max_history_size = max_history_size
+
+        # Execution metrics
+        self.execution_history = deque(maxlen=max_history_size)
+        self.current_execution = None
+        self.start_time = None
+
+        # Performance counters
+        self.metrics = {
+            "total_executions": 0,
+            "successful_executions": 0,
+            "failed_executions": 0,
+            "total_todos_processed": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "batch_optimizations": 0,
+            "error_recoveries": 0,
+        }
+
+        # Tool-specific metrics
+        self.tool_metrics = defaultdict(lambda: {
+            "calls": 0,
+            "successes": 0,
+            "failures": 0,
+            "avg_execution_time": 0,
+            "total_execution_time": 0,
+            "errors": defaultdict(int)
+        })
+
+        # Real-time monitoring data
+        self.active_operations = {}
+        self.performance_trends = deque(maxlen=100)
+
+    def start_execution(self, execution_id: str, plan_id: Optional[str] = None, metadata: Optional[Dict] = None):
+        """Start monitoring a new execution."""
+        self.current_execution = {
+            "id": execution_id,
+            "plan_id": plan_id,
+            "start_time": time.time(),
+            "metadata": metadata or {},
+            "todos": [],
+            "tools_used": set(),
+            "events": [],
+            "metrics": {}
+        }
+        self.start_time = time.time()
+        logger.info(f"📊 Started monitoring execution {execution_id}")
+
+    def end_execution(self, status: str = "completed", error_message: Optional[str] = None):
+        """End the current execution monitoring."""
+        if not self.current_execution:
+            return
+
+        end_time = time.time()
+        duration = end_time - self.current_execution["start_time"]
+
+        self.current_execution.update({
+            "end_time": end_time,
+            "duration": duration,
+            "status": status,
+            "error_message": error_message,
+            "final_metrics": self._calculate_execution_metrics()
+        })
+
+        # Update global metrics
+        self.metrics["total_executions"] += 1
+        if status == "completed":
+            self.metrics["successful_executions"] += 1
+        else:
+            self.metrics["failed_executions"] += 1
+
+        self.metrics["total_todos_processed"] += len(self.current_execution["todos"])
+
+        # Store in history
+        self.execution_history.append(self.current_execution.copy())
+
+        # Update performance trends
+        self.performance_trends.append({
+            "timestamp": end_time,
+            "duration": duration,
+            "todos_count": len(self.current_execution["todos"]),
+            "tools_used": len(self.current_execution["tools_used"]),
+            "status": status
+        })
+
+        logger.info(f"📊 Ended monitoring execution {self.current_execution['id']}: {status} in {duration:.2f}s")
+        self.current_execution = None
+        self.start_time = None
+
+    def record_todo_start(self, todo_id: str, content: str):
+        """Record the start of a todo execution."""
+        if not self.current_execution:
+            return
+
+        todo_record = {
+            "id": todo_id,
+            "content": content,
+            "start_time": time.time(),
+            "status": "in_progress",
+            "tools_used": [],
+            "events": []
+        }
+        self.current_execution["todos"].append(todo_record)
+        self.active_operations[todo_id] = todo_record
+
+        logger.debug(f"📝 Started todo {todo_id}: {content[:50]}...")
+
+    def record_todo_end(self, todo_id: str, status: str = "completed", result: Optional[Any] = None, error: Optional[str] = None):
+        """Record the end of a todo execution."""
+        if not self.current_execution or todo_id not in self.active_operations:
+            return
+
+        end_time = time.time()
+        todo_record = self.active_operations[todo_id]
+        start_time = todo_record["start_time"]
+
+        todo_record.update({
+            "end_time": end_time,
+            "duration": end_time - start_time,
+            "status": status,
+            "result": result,
+            "error": error
+        })
+
+        del self.active_operations[todo_id]
+
+        logger.debug(f"📝 Ended todo {todo_id}: {status} in {todo_record['duration']:.2f}s")
+
+    def record_tool_call(self, tool_name: str, todo_id: str, params: Dict[str, Any], start_time: float):
+        """Record a tool call start."""
+        if not self.current_execution:
+            return
+
+        self.current_execution["tools_used"].add(tool_name)
+
+        # Find the todo record
+        for todo in self.current_execution["todos"]:
+            if todo["id"] == todo_id:
+                tool_call = {
+                    "tool_name": tool_name,
+                    "params": params,
+                    "start_time": start_time,
+                    "status": "in_progress"
+                }
+                todo["tools_used"].append(tool_call)
+                break
+
+        logger.debug(f"🔧 Started {tool_name} for todo {todo_id}")
+
+    def record_tool_result(self, tool_name: str, todo_id: str, success: bool, execution_time: float,
+                          result: Optional[Any] = None, error: Optional[str] = None):
+        """Record a tool call result."""
+        if not self.current_execution:
+            return
+
+        # Update tool metrics
+        tool_metric = self.tool_metrics[tool_name]
+        tool_metric["calls"] += 1
+        if success:
+            tool_metric["successes"] += 1
+        else:
+            tool_metric["failures"] += 1
+            if error:
+                tool_metric["errors"][error] += 1
+
+        tool_metric["total_execution_time"] += execution_time
+        tool_metric["avg_execution_time"] = tool_metric["total_execution_time"] / tool_metric["calls"]
+
+        # Update current execution record
+        for todo in self.current_execution["todos"]:
+            if todo["id"] == todo_id:
+                for tool_call in todo["tools_used"]:
+                    if tool_call["tool_name"] == tool_name and tool_call["status"] == "in_progress":
+                        tool_call.update({
+                            "end_time": time.time(),
+                            "execution_time": execution_time,
+                            "success": success,
+                            "result": result,
+                            "error": error,
+                            "status": "completed" if success else "failed"
+                        })
+                        break
+                break
+
+        status_icon = "✅" if success else "❌"
+        logger.debug(f"🔧 {status_icon} {tool_name} completed in {execution_time:.2f}ms for todo {todo_id}")
+
+    def record_cache_hit(self, tool_name: str, cache_key: str):
+        """Record a cache hit."""
+        self.metrics["cache_hits"] += 1
+        logger.debug(f"💾 Cache hit for {tool_name}: {cache_key}")
+
+    def record_batch_optimization(self, optimization_type: str, original_count: int, optimized_count: int):
+        """Record batch optimization."""
+        self.metrics["batch_optimizations"] += 1
+        savings = original_count - optimized_count
+        logger.info(f"⚡ Batch optimization ({optimization_type}): {original_count} → {optimized_count} (saved {savings} operations)")
+
+    def record_error_recovery(self, strategy: str, success: bool):
+        """Record error recovery attempt."""
+        if success:
+            self.metrics["error_recoveries"] += 1
+        logger.debug(f"🔄 Error recovery ({strategy}): {'✅' if success else '❌'}")
+
+    def _calculate_execution_metrics(self) -> Dict[str, Any]:
+        """Calculate metrics for the current execution."""
+        if not self.current_execution:
+            return {}
+
+        todos = self.current_execution["todos"]
+        total_todos = len(todos)
+        completed_todos = sum(1 for t in todos if t["status"] == "completed")
+        failed_todos = sum(1 for t in todos if t["status"] == "failed")
+
+        total_tools = sum(len(t.get("tools_used", [])) for t in todos)
+        total_execution_time = sum(t.get("duration", 0) for t in todos)
+
+        return {
+            "total_todos": total_todos,
+            "completed_todos": completed_todos,
+            "failed_todos": failed_todos,
+            "success_rate": completed_todos / total_todos if total_todos > 0 else 0,
+            "total_tools_called": total_tools,
+            "total_execution_time": total_execution_time,
+            "avg_todo_duration": total_execution_time / total_todos if total_todos > 0 else 0,
+            "tools_used": list(self.current_execution["tools_used"])
+        }
+
+    def get_monitoring_report(self) -> Dict[str, Any]:
+        """Generate a comprehensive monitoring report."""
+        cache_total = self.metrics["cache_hits"] + self.metrics["cache_misses"]
+        cache_hit_rate = self.metrics["cache_hits"] / cache_total if cache_total > 0 else 0
+
+        recent_executions = list(self.execution_history)[-10:]  # Last 10 executions
+
+        report = {
+            "summary": {
+                "total_executions": self.metrics["total_executions"],
+                "success_rate": self.metrics["successful_executions"] / self.metrics["total_executions"] if self.metrics["total_executions"] > 0 else 0,
+                "total_todos_processed": self.metrics["total_todos_processed"],
+                "cache_hit_rate": cache_hit_rate,
+                "batch_optimizations": self.metrics["batch_optimizations"],
+                "error_recoveries": self.metrics["error_recoveries"]
+            },
+            "current_status": {
+                "active_operations": len(self.active_operations),
+                "active_operation_details": list(self.active_operations.keys())
+            },
+            "tool_performance": dict(self.tool_metrics),
+            "recent_executions": recent_executions,
+            "performance_trends": list(self.performance_trends)[-20:]  # Last 20 data points
+        }
+
+        return report
+
+    def log_monitoring_report(self):
+        """Log a formatted monitoring report."""
+        report = self.get_monitoring_report()
+
+        logger.info("📊 === Plan Mode Monitoring Report ===")
+        logger.info(f"📈 Total Executions: {report['summary']['total_executions']}")
+        logger.info(".1%")
+        logger.info(f"📝 Total Todos Processed: {report['summary']['total_todos_processed']}")
+        logger.info(".1%")
+        logger.info(f"⚡ Batch Optimizations: {report['summary']['batch_optimizations']}")
+        logger.info(f"🔄 Error Recoveries: {report['summary']['error_recoveries']}")
+
+        # Log tool performance
+        logger.info("🔧 Tool Performance:")
+        for tool_name, metrics in report["tool_performance"].items():
+            if metrics["calls"] > 0:
+                success_rate = metrics["successes"] / metrics["calls"]
+                avg_time = metrics["avg_execution_time"]
+                logger.info(f"  {tool_name}: {metrics['calls']} calls, {success_rate:.1%} success, {avg_time:.2f}ms avg")
+
+        # Log active operations
+        if report["current_status"]["active_operations"] > 0:
+            logger.info(f"🏃 Active Operations: {report['current_status']['active_operations']}")
+            for op_id in report["current_status"]["active_operation_details"][:5]:  # Show first 5
+                logger.info(f"  - {op_id}")
+
+        logger.info("📊 === End Monitoring Report ===")
+
+    def export_monitoring_data(self, format: str = "json") -> str:
+        """Export monitoring data in the specified format."""
+        report = self.get_monitoring_report()
+
+        if format == "json":
+            return json.dumps(report, indent=2, default=str)
+        elif format == "text":
+            lines = ["Plan Mode Monitoring Report"]
+            lines.append("=" * 50)
+
+            summary = report["summary"]
+            lines.append(f"Total Executions: {summary['total_executions']}")
+            lines.append(".1%")
+            lines.append(f"Total Todos Processed: {summary['total_todos_processed']}")
+            lines.append(".1%")
+            lines.append(f"Batch Optimizations: {summary['batch_optimizations']}")
+            lines.append(f"Error Recoveries: {summary['error_recoveries']}")
+
+            lines.append("\nTool Performance:")
+            for tool_name, metrics in report["tool_performance"].items():
+                if metrics["calls"] > 0:
+                    success_rate = metrics["successes"] / metrics["calls"]
+                    avg_time = metrics["avg_execution_time"]
+                    lines.append(f"  {tool_name}: {metrics['calls']} calls, {success_rate:.1%} success, {avg_time:.2f}ms avg")
+
+            return "\n".join(lines)
+        else:
+            raise ValueError(f"Unsupported format: {format}")
+
+    def generate_performance_dashboard(self) -> str:
+        """Generate an ASCII-art performance dashboard."""
+        report = self.get_monitoring_report()
+
+        summary = report["summary"]
+        current = report["current_status"]
+
+        # Calculate some derived metrics
+        avg_execution_time = 0
+        total_executions = len(report["recent_executions"])
+        if total_executions > 0:
+            avg_execution_time = sum(ex.get("duration", 0) for ex in report["recent_executions"]) / total_executions
+
+        # Build dashboard
+        dashboard_lines = [
+            "╔══════════════════════════════════════════════════════════════════════════════╗",
+            "║                           📊 PLAN MODE PERFORMANCE DASHBOARD 📊              ║",
+            "╠══════════════════════════════════════════════════════════════════════════════╣",
+            f"║ Total Executions: {summary['total_executions']:<10} Success Rate: {summary['success_rate']:>7.1%}             ║",
+            f"║ Todos Processed:  {summary['total_todos_processed']:<10} Cache Hit Rate: {summary['cache_hit_rate']:>7.1%}             ║",
+            f"║ Batch Optimizations: {summary['batch_optimizations']:<6} Error Recoveries: {summary['error_recoveries']:<6}             ║",
+            f"║ Active Operations: {current['active_operations']:<8} Avg Execution Time: {avg_execution_time:>7.1f}s           ║",
+            "╠══════════════════════════════════════════════════════════════════════════════╣",
+            "║                              🔧 TOOL PERFORMANCE                              ║",
+            "╠══════════════════════════════════════════════════════════════════════════════╣",
+        ]
+
+        # Add tool performance
+        tool_perf = report["tool_performance"]
+        if tool_perf:
+            for tool_name, metrics in list(tool_perf.items())[:5]:  # Show top 5 tools
+                if metrics["calls"] > 0:
+                    success_rate = metrics["successes"] / metrics["calls"]
+                    avg_time = metrics["avg_execution_time"]
+                    dashboard_lines.append(
+                        f"║ {tool_name:<15} Calls: {metrics['calls']:<4} Success: {success_rate:>5.1%} Avg: {avg_time:>6.1f}ms ║"
+                    )
+        else:
+            dashboard_lines.append("║                              No tool data available                        ║")
+
+        dashboard_lines.extend([
+            "╠══════════════════════════════════════════════════════════════════════════════╣",
+            "║                             📈 RECENT PERFORMANCE TREND                      ║",
+            "╠══════════════════════════════════════════════════════════════════════════════╣",
+        ])
+
+        # Add performance trend (last 5 executions)
+        trends = report["performance_trends"][-5:]
+        if trends:
+            for i, trend in enumerate(trends):
+                duration = trend.get("duration", 0)
+                todos = trend.get("todos_count", 0)
+                status_icon = "✅" if trend.get("status") == "completed" else "❌"
+                dashboard_lines.append(
+                    f"║ Execution {i+1}: {status_icon} Duration: {duration:>5.1f}s Todos: {todos:<3}                         ║"
+                )
+        else:
+            dashboard_lines.append("║                              No recent executions                          ║")
+
+        dashboard_lines.extend([
+            "╚══════════════════════════════════════════════════════════════════════════════╝",
+            "",
+            "💡 Tips:",
+            f"   • Cache hit rate of {summary['cache_hit_rate']:.1%} indicates {'excellent' if summary['cache_hit_rate'] > 0.8 else 'good' if summary['cache_hit_rate'] > 0.5 else 'needs improvement'} caching performance",
+            f"   • {summary['batch_optimizations']} batch optimizations saved computational resources",
+            f"   • {summary['error_recoveries']} successful error recoveries improved reliability",
+            "",
+            "Use monitor.export_monitoring_data('json') for detailed JSON export"
+        ])
+
+        return "\n".join(dashboard_lines)
+
+
+class QueryCache:
+    """Intelligent query result caching system."""
+
+    def __init__(self, max_size: int = 100, ttl_seconds: int = 300):
+        self.cache = {}
+        self.max_size = max_size
+        self.ttl_seconds = ttl_seconds
+
+    def _get_cache_key(self, tool_name: str, **kwargs) -> str:
+        """Generate a deterministic cache key for the query."""
+        # Normalize kwargs by sorting keys and excluding non-deterministic parameters
+        cache_params = {k: v for k, v in kwargs.items() if k not in ['todo_id', 'call_id']}
+        sorted_params = json.dumps(cache_params, sort_keys=True)
+        key_content = f"{tool_name}:{sorted_params}"
+        return hashlib.md5(key_content.encode()).hexdigest()
+
+    def get(self, tool_name: str, **kwargs) -> Optional[Any]:
+        """Retrieve cached result if available and not expired."""
+        cache_key = self._get_cache_key(tool_name, **kwargs)
+
+        if cache_key in self.cache:
+            entry = self.cache[cache_key]
+            if time.time() - entry['timestamp'] < self.ttl_seconds:
+                logger.debug(f"Cache hit for {tool_name} with key {cache_key}")
+                return entry['result']
+
+            # Remove expired entry
+            del self.cache[cache_key]
+
+        return None
+
+    def set(self, tool_name: str, result: Any, **kwargs) -> None:
+        """Cache the result."""
+        cache_key = self._get_cache_key(tool_name, **kwargs)
+
+        # Implement LRU eviction if cache is full
+        if len(self.cache) >= self.max_size:
+            oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k]['timestamp'])
+            del self.cache[oldest_key]
+
+        self.cache[cache_key] = {
+            'result': result,
+            'timestamp': time.time()
+        }
+
+        logger.debug(f"Cached result for {tool_name} with key {cache_key}")
+
+
+class ToolBatchProcessor:
+    """Batch processor for similar tool calls to improve efficiency."""
+
+    def __init__(self):
+        self.batches = {}  # tool_name -> list of (todo_item, params)
+
+    def add_to_batch(self, tool_name: str, todo_item, params: Dict[str, Any]) -> None:
+        """Add a tool call to the batch."""
+        if tool_name not in self.batches:
+            self.batches[tool_name] = []
+
+        self.batches[tool_name].append((todo_item, params))
+
+    def get_batch_size(self, tool_name: str) -> int:
+        """Get the current batch size for a tool."""
+        return len(self.batches.get(tool_name, []))
+
+    def clear_batch(self, tool_name: str) -> List[Tuple]:
+        """Clear and return the batch for a tool."""
+        if tool_name in self.batches:
+            batch = self.batches[tool_name]
+            self.batches[tool_name] = []
+            return batch
+        return []
+
+    def optimize_search_table_batch(self, batch: List[Tuple]) -> List[Tuple]:
+        """Optimize search_table batch by consolidating similar queries."""
+        if not batch:
+            return batch
+
+        # Group by similar query patterns
+        query_groups = {}
+        for todo_item, params in batch:
+            query_text = params.get('query_text', '').lower().strip()
+
+            # Find the most specific query (longest common prefix)
+            found_group = False
+            for group_key in query_groups:
+                if query_text.startswith(group_key) or group_key.startswith(query_text):
+                    # Use the more specific query as group key
+                    new_key = max(group_key, query_text, key=len)
+                    if new_key != group_key:
+                        query_groups[new_key] = query_groups.pop(group_key)
+                    query_groups[new_key].append((todo_item, params))
+                    found_group = True
+                    break
+
+            if not found_group:
+                query_groups[query_text] = [(todo_item, params)]
+
+        # Consolidate groups: if we have multiple similar queries, keep only the most comprehensive one
+        optimized_batch = []
+        for group_key, items in query_groups.items():
+            if len(items) == 1:
+                optimized_batch.extend(items)
+            else:
+                # For multiple similar queries, use the one with highest top_n
+                best_item = max(items, key=lambda x: x[1].get('top_n', 5))
+                optimized_batch.append(best_item)
+                logger.info(f"Optimized search_table batch: consolidated {len(items)} similar queries into 1")
+
+        return optimized_batch
+
+    def optimize_describe_table_batch(self, batch: List[Tuple]) -> List[Tuple]:
+        """Optimize describe_table batch by removing duplicates."""
+        if not batch:
+            return batch
+
+        # Remove duplicate table names
+        seen_tables = set()
+        unique_batch = []
+
+        for todo_item, params in batch:
+            table_name = params.get('table_name', '').lower().strip()
+            if table_name and table_name not in seen_tables:
+                seen_tables.add(table_name)
+                unique_batch.append((todo_item, params))
+
+        if len(unique_batch) < len(batch):
+            logger.info(f"Optimized describe_table batch: removed {len(batch) - len(unique_batch)} duplicates")
+
+        return unique_batch
 
 
 # Default keyword mapping for plan executor - tool name to list of matching phrases
@@ -160,6 +944,17 @@ class PlanModeHooks(AgentHooks):
         self.keyword_map: Dict[str, List[str]] = self._load_keyword_map(agent_config)
         # fallback behavior enabled by default unless agent_config disables it
         self.enable_fallback = True
+        # Initialize error handler for robust error recovery
+        self.error_handler = ErrorHandler()
+
+        # Initialize performance optimization components
+        self.query_cache = QueryCache()
+        self.batch_processor = ToolBatchProcessor()
+        self.enable_batch_processing = True
+        self.enable_query_caching = True
+
+        # Initialize monitoring system
+        self.monitor = ExecutionMonitor()
         try:
             if agent_config and hasattr(agent_config, "plan_executor_enable_fallback"):
                 self.enable_fallback = bool(agent_config.plan_executor_enable_fallback)
@@ -974,18 +1769,374 @@ Respond with only the tool name, nothing else."""
             logger.debug(f"Error checking action history for todo execution: {e}")
             return False
 
+    async def _execute_tool_with_error_handling(self, tool_func, tool_name: str, *args, **kwargs) -> Tuple[Any, bool, Dict[str, Any]]:
+        """
+        Execute a tool function with comprehensive error handling, recovery, and auto-fix.
+
+        Args:
+            tool_func: The tool function to execute
+            tool_name: Name of the tool for error reporting
+            *args, **kwargs: Arguments to pass to the tool function
+
+        Returns:
+            Tuple of (result, success, error_info)
+        """
+        attempt_count = 0
+        max_attempts = 3
+        original_kwargs = kwargs.copy()  # Preserve original parameters for fallback
+
+        while attempt_count < max_attempts:
+            attempt_count += 1
+
+            try:
+                # Execute the tool
+                result = tool_func(*args, **kwargs)
+                return result, True, {}
+
+            except Exception as e:
+                logger.warning(f"Tool {tool_name} execution failed (attempt {attempt_count}/{max_attempts}): {str(e)}")
+
+                # Analyze the error with context
+                context = {"sql_query": kwargs.get("sql", kwargs.get("query_text", ""))}
+                error_info = self.error_handler.handle_tool_error(tool_name, e, attempt_count, context)
+
+                # Try auto-fix if available
+                if error_info.get("auto_fix_available", False) and attempt_count < max_attempts:
+                    fixed_params = self._apply_auto_fix(tool_name, error_info, kwargs)
+                    if fixed_params:
+                        logger.info(f"Applying auto-fix for {tool_name}: {error_info.get('auto_fix_suggestion', '')}")
+                        kwargs = fixed_params
+                        attempt_count -= 1  # Don't count auto-fix as a retry attempt
+                        continue
+
+                # Try fallback tool if suggested
+                if error_info.get("fallback_tool") and attempt_count < max_attempts:
+                    fallback_tool = error_info["fallback_tool"]
+                    logger.info(f"Attempting fallback from {tool_name} to {fallback_tool}")
+
+                    # Try to execute fallback tool
+                    try:
+                        fallback_result = await self._execute_fallback_tool(fallback_tool, original_kwargs, error_info)
+                        if fallback_result:
+                            # Record successful error recovery
+                            self.monitor.record_error_recovery(f"fallback_to_{fallback_tool}", True)
+                            return fallback_result[0], fallback_result[1], {
+                                **error_info,
+                                "fallback_used": True,
+                                "fallback_tool": fallback_tool
+                            }
+                        else:
+                            # Record failed error recovery
+                            self.monitor.record_error_recovery(f"fallback_to_{fallback_tool}", False)
+                    except Exception as fallback_e:
+                        logger.warning(f"Fallback tool {fallback_tool} also failed: {str(fallback_e)}")
+                        self.monitor.record_error_recovery(f"fallback_to_{fallback_tool}", False)
+
+                # Check if we should retry
+                if not error_info.get("can_retry", False) or attempt_count >= max_attempts:
+                    # No more retries or not retryable - return the error
+                    error_info["final_attempt"] = True
+                    return None, False, error_info
+
+                # Wait before retry
+                retry_delay = error_info.get("retry_delay", 1.0)
+                logger.info(f"Retrying {tool_name} in {retry_delay:.1f} seconds...")
+                await asyncio.sleep(retry_delay)
+
+        # Should not reach here, but just in case
+        return None, False, {"error_type": ErrorType.UNKNOWN, "error_message": "Maximum retries exceeded"}
+
+    def _apply_auto_fix(self, tool_name: str, error_info: Dict[str, Any], kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Apply automatic fixes based on error analysis."""
+        fixed_kwargs = kwargs.copy()
+
+        try:
+            if tool_name == "execute_sql" and "fixed_sql" in error_info:
+                fixed_kwargs["sql"] = error_info["fixed_sql"]
+                logger.info(f"Auto-fixed SQL syntax: {error_info['fixed_sql']}")
+                return fixed_kwargs
+
+            elif tool_name == "search_table" and error_info.get("auto_fix_suggestion") == "自动减少top_n参数并重试":
+                current_top_n = fixed_kwargs.get("top_n", 5)
+                if current_top_n > 1:
+                    fixed_kwargs["top_n"] = max(1, current_top_n // 2)
+                    logger.info(f"Auto-reduced top_n from {current_top_n} to {fixed_kwargs['top_n']}")
+                    return fixed_kwargs
+
+            elif tool_name == "search_table" and error_info.get("auto_fix_suggestion") == "简化搜索查询，使用基本关键词重试":
+                query_text = fixed_kwargs.get("query_text", "")
+                if len(query_text.split()) > 3:
+                    # Simplify by taking first few words
+                    simplified = " ".join(query_text.split()[:2])
+                    fixed_kwargs["query_text"] = simplified
+                    logger.info(f"Auto-simplified query from '{query_text}' to '{simplified}'")
+                    return fixed_kwargs
+
+        except Exception as e:
+            logger.warning(f"Failed to apply auto-fix: {e}")
+
+        return None
+
+    async def _execute_fallback_tool(self, fallback_tool_name: str, original_kwargs: Dict[str, Any], error_info: Dict[str, Any]) -> Optional[Tuple[Any, bool]]:
+        """Execute a fallback tool when the primary tool fails."""
+        try:
+            # Import tools here to avoid circular imports
+            from datus.tools.func_tool import db_tools
+
+            # Get database tool instance (this assumes we have access to it)
+            # In practice, this would need to be passed as a parameter
+            db_tool = getattr(self, '_db_tool', None)
+            if not db_tool:
+                return None
+
+            if fallback_tool_name == "search_table":
+                query_text = original_kwargs.get("table_name", original_kwargs.get("query_text", ""))
+                result = db_tool.search_table(query_text=query_text, top_n=3)
+                return (result, True)
+
+            elif fallback_tool_name == "describe_table":
+                # This would be unusual, but handle it
+                table_name = original_kwargs.get("query_text", "").split()[0] if original_kwargs.get("query_text") else ""
+                if table_name:
+                    result = db_tool.describe_table(table_name=table_name)
+                    return (result, True)
+
+        except Exception as e:
+            logger.warning(f"Fallback tool {fallback_tool_name} execution failed: {e}")
+
+        return None
+
+    async def _emit_status_message(self, message: str, plan_id: Optional[str] = None):
+        """Emit a user-friendly status message using Chat event."""
+        try:
+            if self.emit_queue is not None:
+                status_event = ChatEvent(
+                    id=f"status_{int(time.time() * 1000)}",
+                    planId=plan_id,
+                    timestamp=int(time.time() * 1000),
+                    event=DeepResearchEventType.Chat,
+                    content=message
+                )
+                await self.emit_queue.put(status_event)
+                logger.debug(f"Emitted status message: {message}")
+        except Exception as e:
+            logger.debug(f"Failed to emit status message: {e}")
+
+    async def _execute_batch_operations(self, db_tool, fs_tool, call_id: str) -> Dict[str, List[Dict]]:
+        """Execute batched tool operations for improved efficiency."""
+        batch_results = {}
+
+        # Process search_table batch
+        if self.batch_processor.get_batch_size("search_table") > 0:
+            search_batch = self.batch_processor.clear_batch("search_table")
+            optimized_batch = self.batch_processor.optimize_search_table_batch(search_batch)
+
+            # Record batch optimization
+            if len(optimized_batch) < len(search_batch):
+                self.monitor.record_batch_optimization("search_table_consolidation", len(search_batch), len(optimized_batch))
+
+            batch_results["search_table"] = await self._execute_search_table_batch(
+                optimized_batch, db_tool, call_id
+            )
+
+        # Process describe_table batch
+        if self.batch_processor.get_batch_size("describe_table") > 0:
+            describe_batch = self.batch_processor.clear_batch("describe_table")
+            optimized_batch = self.batch_processor.optimize_describe_table_batch(describe_batch)
+
+            # Record batch optimization
+            if len(optimized_batch) < len(describe_batch):
+                self.monitor.record_batch_optimization("describe_table_deduplication", len(describe_batch), len(optimized_batch))
+
+            batch_results["describe_table"] = await self._execute_describe_table_batch(
+                optimized_batch, db_tool, call_id
+            )
+
+        return batch_results
+
+    async def _execute_search_table_batch(self, batch: List[Tuple], db_tool, call_id: str) -> List[Dict]:
+        """Execute a batch of search_table operations."""
+        results = []
+
+        for todo_item, params in batch:
+            query_text = params.get("query_text", "")
+            top_n = params.get("top_n", 5)
+
+            # Check cache first
+            if self.enable_query_caching:
+                cached_result = self.query_cache.get("search_table", query_text=query_text, top_n=top_n)
+                if cached_result is not None:
+                    logger.info(f"Using cached result for search_table query: {query_text[:50]}...")
+                    # Record cache hit
+                    self.monitor.record_cache_hit("search_table", f"{query_text}_{top_n}")
+
+                    result_payload = cached_result.model_dump() if hasattr(cached_result, "model_dump") else dict(cached_result)
+                    complete_action_db = ActionHistory(
+                        action_id=f"{call_id}_cached_search",
+                        role=ActionRole.TOOL,
+                        messages=f"Server executor: db.search_table (cached) for todo {todo_item.id}",
+                        action_type="search_table",
+                        input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": top_n, "todo_id": todo_item.id})},
+                        output=result_payload,
+                        status=ActionStatus.SUCCESS,
+                    )
+
+                    if self.action_history_manager:
+                        self.action_history_manager.add_action(complete_action_db)
+                        if self.emit_queue is not None:
+                            try:
+                                self.emit_queue.put_nowait(complete_action_db)
+                            except Exception as e:
+                                logger.debug(f"emit_queue put failed: {e}")
+
+                    results.append({"todo_id": todo_item.id, "status": "completed", "cached": True})
+                    continue
+
+            # Execute with error handling
+            res, success, error_info = await self._execute_tool_with_error_handling(
+                db_tool.search_table, "search_table", query_text=query_text, top_n=top_n
+            )
+
+            if success:
+                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res)
+                status = ActionStatus.SUCCESS
+                messages = f"Server executor: db.search_table for todo {todo_item.id}"
+
+                # Cache successful results
+                if self.enable_query_caching:
+                    self.query_cache.set("search_table", res, query_text=query_text, top_n=top_n)
+            else:
+                result_payload = {
+                    "error": error_info.get("error_message", "Unknown error"),
+                    "suggestions": error_info.get("suggestions", []),
+                    "error_type": error_info.get("error_type", ErrorType.UNKNOWN)
+                }
+                status = ActionStatus.FAILED
+                messages = f"Server executor: db.search_table failed for todo {todo_item.id}: {error_info.get('error_message', 'Unknown error')}"
+
+            complete_action_db = ActionHistory(
+                action_id=f"{call_id}_search_{todo_item.id}",
+                role=ActionRole.TOOL,
+                messages=messages,
+                action_type="search_table",
+                input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": top_n, "todo_id": todo_item.id})},
+                output=result_payload,
+                status=status,
+            )
+
+            if self.action_history_manager:
+                self.action_history_manager.add_action(complete_action_db)
+                if self.emit_queue is not None:
+                    try:
+                        self.emit_queue.put_nowait(complete_action_db)
+                    except Exception as e:
+                        logger.debug(f"emit_queue put failed: {e}")
+
+            results.append({"todo_id": todo_item.id, "status": "completed" if success else "failed"})
+
+        return results
+
+    async def _execute_describe_table_batch(self, batch: List[Tuple], db_tool, call_id: str) -> List[Dict]:
+        """Execute a batch of describe_table operations."""
+        results = []
+
+        for todo_item, params in batch:
+            table_name = params.get("table_name", "")
+
+            # Check cache first
+            if self.enable_query_caching and table_name:
+                cached_result = self.query_cache.get("describe_table", table_name=table_name)
+                if cached_result is not None:
+                    logger.info(f"Using cached result for describe_table: {table_name}")
+                    # Record cache hit
+                    self.monitor.record_cache_hit("describe_table", table_name)
+
+                    result_payload = cached_result.model_dump() if hasattr(cached_result, "model_dump") else dict(cached_result)
+                    complete_action_db = ActionHistory(
+                        action_id=f"{call_id}_cached_describe",
+                        role=ActionRole.TOOL,
+                        messages=f"Server executor: db.describe_table (cached) for todo {todo_item.id}",
+                        action_type="describe_table",
+                        input={"function_name": "describe_table", "arguments": json.dumps({"table_name": table_name, "todo_id": todo_item.id})},
+                        output=result_payload,
+                        status=ActionStatus.SUCCESS,
+                    )
+
+                    if self.action_history_manager:
+                        self.action_history_manager.add_action(complete_action_db)
+                        if self.emit_queue is not None:
+                            try:
+                                self.emit_queue.put_nowait(complete_action_db)
+                            except Exception as e:
+                                logger.debug(f"emit_queue put failed: {e}")
+
+                    results.append({"todo_id": todo_item.id, "status": "completed", "cached": True})
+                    continue
+
+            # Execute with error handling
+            res, success, error_info = await self._execute_tool_with_error_handling(
+                db_tool.describe_table, "describe_table", table_name=table_name
+            )
+
+            if success:
+                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res)
+                status = ActionStatus.SUCCESS
+                messages = f"Server executor: db.describe_table for todo {todo_item.id}"
+
+                # Cache successful results
+                if self.enable_query_caching and table_name:
+                    self.query_cache.set("describe_table", res, table_name=table_name)
+            else:
+                result_payload = {
+                    "error": error_info.get("error_message", "Unknown error"),
+                    "suggestions": error_info.get("suggestions", []),
+                    "error_type": error_info.get("error_type", ErrorType.UNKNOWN)
+                }
+                status = ActionStatus.FAILED
+                messages = f"Server executor: db.describe_table failed for todo {todo_item.id}: {error_info.get('error_message', 'Unknown error')}"
+
+            complete_action_db = ActionHistory(
+                action_id=f"{call_id}_describe_{todo_item.id}",
+                role=ActionRole.TOOL,
+                messages=messages,
+                action_type="describe_table",
+                input={"function_name": "describe_table", "arguments": json.dumps({"table_name": table_name, "todo_id": todo_item.id})},
+                output=result_payload,
+                status=status,
+            )
+
+            if self.action_history_manager:
+                self.action_history_manager.add_action(complete_action_db)
+                if self.emit_queue is not None:
+                    try:
+                        self.emit_queue.put_nowait(complete_action_db)
+                    except Exception as e:
+                        logger.debug(f"emit_queue put failed: {e}")
+
+            results.append({"todo_id": todo_item.id, "status": "completed" if success else "failed"})
+
+        return results
+
     async def _run_server_executor(self):
         """
-        Server-side plan executor: sequentially execute pending todos when LLM did not drive tool calls.
+        Server-side plan executor with comprehensive monitoring: sequentially execute pending todos when LLM did not drive tool calls.
         This is a conservative scaffold: it marks todos in_progress -> executes minimal placeholder work ->
         marks completed and emits ActionHistory entries so the event_converter will stream proper events.
         """
         try:
+            # Start execution monitoring
+            execution_id = f"server_exec_{int(time.time() * 1000)}"
+            self.monitor.start_execution(execution_id, plan_id="server_batch", metadata={"executor": "server"})
+
+            # Send friendly status message about starting execution
+            await self._emit_status_message("🚀 **开始执行计划任务**\n\n正在分析待执行的任务并准备工具环境...", plan_id="server_batch")
+
             # Small delay to allow any in-flight LLM-driven tool calls to finish
             await asyncio.sleep(0.5)
             todo_list = self.todo_storage.get_todo_list()
             if not todo_list:
                 logger.info("Server executor: no todo list found, exiting")
+                self.monitor.end_execution("completed", "No todos to process")
                 return
 
             from datus.tools.func_tool.plan_tools import PlanTool
@@ -1123,16 +2274,40 @@ Respond with only the tool name, nothing else."""
                             tool_params = self._extract_tool_parameters(matched_tool, item.content or "")
                             query_text = tool_params.get("query_text", item.content or "")
                             top_n = tool_params.get("top_n", 5)
-                            res = db_tool.search_table(query_text=query_text, top_n=top_n)
-                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+
+                            # Send status message about starting search
+                            await self._emit_status_message(f"🔍 **正在搜索数据库表**\n\n查找包含关键词的表结构和信息...", getattr(self, 'plan_id', None))
+
+                            # Execute with error handling and recovery
+                            res, success, error_info = await self._execute_tool_with_error_handling(
+                                db_tool.search_table, "search_table", query_text=query_text, top_n=top_n
+                            )
+
+                            if success:
+                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                status = ActionStatus.SUCCESS
+                                messages = f"Server executor: db.search_table for todo {item.id}"
+
+                                # Send success status message
+                                await self._emit_status_message(f"✅ **搜索完成**\n\n找到 {len(result_payload.get('tables', []))} 个相关表", getattr(self, 'plan_id', None))
+                            else:
+                                # Handle error with user-friendly message
+                                result_payload = {
+                                    "error": error_info.get("error_message", "Unknown error"),
+                                    "suggestions": error_info.get("suggestions", []),
+                                    "error_type": error_info.get("error_type", ErrorType.UNKNOWN)
+                                }
+                                status = ActionStatus.FAILED
+                                messages = f"Server executor: db.search_table failed for todo {item.id}: {error_info.get('error_message', 'Unknown error')}"
+
                             complete_action_db = ActionHistory(
                                 action_id=f"{call_id}_db",
                                 role=ActionRole.TOOL,
-                                messages=f"Server executor: db.search_table for todo {item.id}",
+                                messages=messages,
                                 action_type="search_table",
                                 input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": top_n, "todo_id": item.id})},
                                 output=result_payload,
-                                status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                status=status,
                             )
                             if self.action_history_manager:
                                 self.action_history_manager.add_action(complete_action_db)
@@ -1160,8 +2335,137 @@ Respond with only the tool name, nothing else."""
                                                 sql_text = content_field[start + 6 : end].strip()
                                                 break
                             if sql_text:
-                                res = db_tool.read_query(sql=sql_text)
-                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                # Emit SQL execution start event
+                                sql_start_event = SqlExecutionStartEvent(
+                                    id=f"sql_start_{call_id}",
+                                    planId=getattr(self, 'plan_id', None),
+                                    timestamp=int(time.time() * 1000),
+                                    sqlQuery=sql_text,
+                                    databaseName=getattr(self.workflow.task, 'database_name', None) if hasattr(self, 'workflow') and self.workflow else None
+                                )
+                                if self.emit_queue is not None:
+                                    try:
+                                        self.emit_queue.put_nowait(sql_start_event)
+                                        logger.debug(f"Emitted SQL execution start event for query: {sql_text[:50]}...")
+                                    except Exception as e:
+                                        logger.debug(f"Failed to emit SQL start event: {e}")
+
+                                # Emit progress event - preparing for execution
+                                sql_progress_event = SqlExecutionProgressEvent(
+                                    id=f"sql_progress_{call_id}_prep",
+                                    planId=getattr(self, 'plan_id', None),
+                                    timestamp=int(time.time() * 1000),
+                                    sqlQuery=sql_text,
+                                    progress=0.1,
+                                    currentStep="准备执行SQL查询",
+                                    elapsedTime=0
+                                )
+                                if self.emit_queue is not None:
+                                    try:
+                                        self.emit_queue.put_nowait(sql_progress_event)
+                                        logger.debug("Emitted SQL execution progress: preparing")
+                                    except Exception as e:
+                                        logger.debug(f"Failed to emit SQL progress event: {e}")
+
+                                # Execute with error handling and recovery
+                                start_time = time.time()
+                                res, success, error_info = await self._execute_tool_with_error_handling(
+                                    db_tool.read_query, "execute_sql", sql=sql_text
+                                )
+
+                                # Emit progress event - execution in progress
+                                mid_time = time.time()
+                                sql_progress_event2 = SqlExecutionProgressEvent(
+                                    id=f"sql_progress_{call_id}_exec",
+                                    planId=getattr(self, 'plan_id', None),
+                                    timestamp=int(mid_time * 1000),
+                                    sqlQuery=sql_text,
+                                    progress=0.7,
+                                    currentStep="正在执行数据库查询",
+                                    elapsedTime=int((mid_time - start_time) * 1000)
+                                )
+                                if self.emit_queue is not None:
+                                    try:
+                                        self.emit_queue.put_nowait(sql_progress_event2)
+                                        logger.debug("Emitted SQL execution progress: executing")
+                                    except Exception as e:
+                                        logger.debug(f"Failed to emit SQL progress event: {e}")
+
+                                # Calculate execution time
+                                execution_time_ms = int((time.time() - start_time) * 1000)
+
+                                if success:
+                                    result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+
+                                    # Send success status message for SQL execution
+                                    row_count = getattr(res, 'row_count', 0)
+                                    await self._emit_status_message(f"✅ **查询执行成功**\n\n返回 {row_count} 行数据，耗时 {execution_time_ms}ms", getattr(self, 'plan_id', None))
+
+                                    # Emit successful execution result event
+                                    sql_result_event = SqlExecutionResultEvent(
+                                        id=f"sql_result_{call_id}",
+                                        planId=getattr(self, 'plan_id', None),
+                                        timestamp=int(time.time() * 1000),
+                                        sqlQuery=sql_text,
+                                        rowCount=getattr(res, 'row_count', 0),
+                                        executionTime=execution_time_ms,
+                                        data=getattr(res, 'sql_return', None),
+                                        hasMoreData=getattr(res, 'has_more_data', False),
+                                        dataPreview=str(getattr(res, 'sql_return', ''))[:500] if getattr(res, 'sql_return', None) else None
+                                    )
+                                    if self.emit_queue is not None:
+                                        try:
+                                            self.emit_queue.put_nowait(sql_result_event)
+                                            logger.debug(f"Emitted SQL execution result event: {sql_result_event.rowCount} rows in {execution_time_ms}ms")
+                                        except Exception as e:
+                                            logger.debug(f"Failed to emit SQL result event: {e}")
+                                else:
+                                    # Handle error with enhanced error information
+                                    error_msg = error_info.get("error_message", "Unknown SQL execution error")
+                                    result_payload = {
+                                        "error": error_msg,
+                                        "suggestions": error_info.get("suggestions", []),
+                                        "error_type": error_info.get("error_type", ErrorType.UNKNOWN)
+                                    }
+
+                                    # Emit SQL execution error event with enhanced information
+                                    sql_error_event = SqlExecutionErrorEvent(
+                                        id=f"sql_error_{call_id}",
+                                        planId=getattr(self, 'plan_id', None),
+                                        timestamp=int(time.time() * 1000),
+                                        sqlQuery=sql_text,
+                                        error=error_msg,
+                                        errorType=error_info.get("error_type", ErrorType.UNKNOWN),
+                                        suggestions=error_info.get("suggestions", []),
+                                        canRetry=error_info.get("can_retry", False)
+                                    )
+                                    if self.emit_queue is not None:
+                                        try:
+                                            self.emit_queue.put_nowait(sql_error_event)
+                                            logger.debug(f"Emitted enhanced SQL execution error event: {error_msg}")
+                                        except Exception as e:
+                                            logger.debug(f"Failed to emit SQL error event: {e}")
+
+                                    # Send user-friendly error explanation via Chat event
+                                    error_type = error_info.get("error_type", ErrorType.UNKNOWN)
+                                    suggestions = error_info.get("suggestions", [])
+
+                                    if error_type == ErrorType.SYNTAX_ERROR:
+                                        friendly_msg = f"❌ **SQL语法错误**\n\n查询语句存在语法问题，已自动尝试修复。如有疑问，请检查SQL语句结构。"
+                                    elif error_type == ErrorType.TABLE_NOT_FOUND:
+                                        friendly_msg = f"❌ **表不存在**\n\n查询的表在数据库中不存在。请检查表名是否正确。"
+                                    elif error_type == ErrorType.PERMISSION_DENIED:
+                                        friendly_msg = f"❌ **权限不足**\n\n没有执行此查询的权限。请联系数据库管理员。"
+                                    elif error_type == ErrorType.TIMEOUT:
+                                        friendly_msg = f"⚠️ **查询超时**\n\n查询执行时间过长，可能需要优化查询条件。"
+                                    else:
+                                        friendly_msg = f"❌ **查询执行失败**\n\n执行过程中遇到问题，系统已记录详细信息。"
+
+                                    if suggestions:
+                                        friendly_msg += f"\n\n💡 **建议解决方法**:\n" + "\n".join(f"• {s}" for s in suggestions[:3])
+
+                                    await self._emit_status_message(friendly_msg, getattr(self, 'plan_id', None))
+
                                 complete_action_db = ActionHistory(
                                     action_id=f"{call_id}_exec",
                                     role=ActionRole.TOOL,
@@ -1169,7 +2473,7 @@ Respond with only the tool name, nothing else."""
                                     action_type="read_query",
                                     input={"function_name": "read_query", "arguments": json.dumps({"sql": sql_text, "todo_id": item.id})},
                                     output=result_payload,
-                                    status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                    status=ActionStatus.SUCCESS if success else ActionStatus.FAILED,
                                 )
                                 if self.action_history_manager:
                                     self.action_history_manager.add_action(complete_action_db)
@@ -1178,6 +2482,30 @@ Respond with only the tool name, nothing else."""
                                             self.emit_queue.put_nowait(complete_action_db)
                                         except Exception as e:
                                             logger.debug(f"emit_queue put failed for complete_action_db: {e}")
+
+                                # Update workflow SQL context with execution results
+                                try:
+                                    if hasattr(self, 'workflow') and self.workflow and hasattr(res, 'success') and res.success:
+                                        # Update the last SQL context with execution results
+                                        if self.workflow.context.sql_contexts:
+                                            last_sql_context = self.workflow.context.sql_contexts[-1]
+                                            last_sql_context.sql_return = getattr(res, 'sql_return', '')
+                                            last_sql_context.row_count = getattr(res, 'row_count', 0)
+                                            last_sql_context.sql_error = getattr(res, 'error', None)
+                                            logger.info(f"Updated workflow SQL context with execution results for todo {item.id}")
+                                        else:
+                                            # If no existing SQL context, create one with the results
+                                            sql_context = SQLContext(
+                                                sql_query=sql_text,
+                                                sql_return=getattr(res, 'sql_return', ''),
+                                                row_count=getattr(res, 'row_count', 0),
+                                                sql_error=getattr(res, 'error', None),
+                                            )
+                                            self.workflow.context.sql_contexts.append(sql_context)
+                                            logger.info(f"Created new SQL context in workflow for todo {item.id}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to update workflow SQL context for todo {item.id}: {e}")
+
                                 executed_any = True
                         elif matched_tool == "report" and fs_tool:
                             # generate report using filesystem tool
@@ -1223,20 +2551,53 @@ Respond with only the tool name, nothing else."""
                                         logger.debug(f"emit_queue put failed for report actions: {e}")
                             executed_any = True
                         elif matched_tool == "describe_table" and db_tool:
-                            # Describe table structure
+                            # Describe table structure with error handling
                             tool_params = self._extract_tool_parameters(matched_tool, item.content or "")
                             table_name = tool_params.get("table_name")
                             if table_name:
-                                res = db_tool.describe_table(table_name=table_name)
-                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                # Send status message about starting table analysis
+                                await self._emit_status_message(f"📋 **正在分析表结构**\n\n检查表 `{table_name}` 的字段、类型和关系...", getattr(self, 'plan_id', None))
+
+                                # Execute with error handling and recovery
+                                res, success, error_info = await self._execute_tool_with_error_handling(
+                                    db_tool.describe_table, "describe_table", table_name=table_name
+                                )
+
+                                if success:
+                                    result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                    status = ActionStatus.SUCCESS
+                                    messages = f"Server executor: db.describe_table for todo {item.id}"
+
+                                    # Send success status message
+                                    await self._emit_status_message(f"✅ **表结构分析完成**\n\n成功获取表 `{table_name}` 的详细信息", getattr(self, 'plan_id', None))
+                                else:
+                                    # Handle error with user-friendly message
+                                    result_payload = {
+                                        "error": error_info.get("error_message", "Unknown error"),
+                                        "suggestions": error_info.get("suggestions", []),
+                                        "error_type": error_info.get("error_type", ErrorType.UNKNOWN)
+                                    }
+                                    status = ActionStatus.FAILED
+                                    messages = f"Server executor: db.describe_table failed for todo {item.id}: {error_info.get('error_message', 'Unknown error')}"
+
+                                    # Try fallback to search_table if suggested
+                                    if error_info.get("fallback_tool") == "search_table":
+                                        logger.info(f"Attempting fallback to search_table for todo {item.id}")
+                                        fallback_res, fallback_success, _ = await self._execute_tool_with_error_handling(
+                                            db_tool.search_table, "search_table", query_text=item.content or "", top_n=5
+                                        )
+                                        if fallback_success:
+                                            result_payload["fallback_result"] = fallback_res.model_dump() if hasattr(fallback_res, "model_dump") else dict(fallback_res)
+                                            messages += " (fallback search successful)"
+
                                 complete_action_db = ActionHistory(
                                     action_id=f"{call_id}_describe",
                                     role=ActionRole.TOOL,
-                                    messages=f"Server executor: db.describe_table for todo {item.id}",
+                                    messages=messages,
                                     action_type="describe_table",
                                     input={"function_name": "describe_table", "arguments": json.dumps({"table_name": table_name, "todo_id": item.id})},
                                     output=result_payload,
-                                    status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                    status=status,
                                 )
                                 executed_any = True
                             else:
@@ -1769,6 +3130,12 @@ Respond with only the tool name, nothing else."""
                         pass
 
             logger.info("Server executor finished all pending todos")
+
+            # Send completion status message
+            await self._emit_status_message("✅ **执行完成**\n\n所有计划任务已成功完成！", plan_id="server_batch")
+
+            # End execution monitoring with success
+            self.monitor.end_execution("completed")
         except Exception as e:
             logger.error(f"Unhandled server executor error: {e}")
 
@@ -1794,6 +3161,10 @@ Respond with only the tool name, nothing else."""
                             logger.debug(f"Failed to emit server executor error event: {emit_e}")
             except Exception as inner_e:
                 logger.error(f"Failed to create error event for server executor: {inner_e}")
+            finally:
+                # End execution monitoring
+                if self.monitor.current_execution:
+                    self.monitor.end_execution("failed", str(e) if 'e' in locals() else "Unknown error")
 
     async def _emit_plan_update_event(self, todo_id: str = None, status: str = None):
         """

@@ -63,15 +63,8 @@ def evaluate_result(node: Node, workflow: Workflow) -> Dict:
         if not update_result["success"]:
             logger.warning(f"Failed to update context from node {node.id}: {update_result['message']}")
 
-        # Special handling for plan mode: chat node should not immediately advance to execute_sql
-        if (workflow.metadata.get("plan_mode") and
-            node.type == "chat" and
-            workflow.get_next_node() and
-            workflow.get_next_node().type == "execute_sql"):
-            # In plan mode, chat node completion doesn't mean we should execute SQL immediately
-            # The plan mode handles SQL generation and execution within the chat node itself
-            logger.info("Plan mode: chat node completed, skipping automatic advancement to execute_sql")
-            return {"success": True, "message": "Plan mode chat completed, no further node execution needed"}
+        # Note: With dedicated chat_agentic_plan workflow, plan mode no longer has execute_sql node
+        # The workflow naturally progresses from chat → output
 
         # Set up the next node input
         next_node = workflow.get_next_node()

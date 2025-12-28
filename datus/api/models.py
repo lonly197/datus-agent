@@ -115,6 +115,10 @@ class DeepResearchEventType(str, Enum):
     PLAN_UPDATE = "plan_update"
     TOOL_CALL = "tool_call"
     TOOL_CALL_RESULT = "tool_call_result"
+    SQL_EXECUTION_START = "sql_execution_start"
+    SQL_EXECUTION_PROGRESS = "sql_execution_progress"
+    SQL_EXECUTION_RESULT = "sql_execution_result"
+    SQL_EXECUTION_ERROR = "sql_execution_error"
     COMPLETE = "complete"
     REPORT = "report"
     ERROR = "error"
@@ -199,10 +203,53 @@ class ErrorEvent(BaseEvent):
     error: str = Field(..., description="Error message")
 
 
+class SqlExecutionStartEvent(BaseEvent):
+    """SQL execution start event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.SQL_EXECUTION_START
+    sqlQuery: str = Field(..., description="SQL query being executed")
+    databaseName: Optional[str] = Field(None, description="Target database name")
+    estimatedRows: Optional[int] = Field(None, description="Estimated number of rows (if available)")
+
+
+class SqlExecutionProgressEvent(BaseEvent):
+    """SQL execution progress event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.SQL_EXECUTION_PROGRESS
+    sqlQuery: str = Field(..., description="SQL query being executed")
+    progress: float = Field(..., description="Execution progress (0.0 to 1.0)")
+    currentStep: str = Field(..., description="Current execution step description")
+    elapsedTime: Optional[int] = Field(None, description="Elapsed time in milliseconds")
+
+
+class SqlExecutionResultEvent(BaseEvent):
+    """SQL execution result event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.SQL_EXECUTION_RESULT
+    sqlQuery: str = Field(..., description="Executed SQL query")
+    rowCount: int = Field(..., description="Number of rows returned/affected")
+    executionTime: int = Field(..., description="Execution time in milliseconds")
+    data: Optional[Any] = Field(None, description="Query result data (first N rows or summary)")
+    hasMoreData: bool = Field(False, description="Whether there are more results available")
+    dataPreview: Optional[str] = Field(None, description="Text preview of results")
+
+
+class SqlExecutionErrorEvent(BaseEvent):
+    """SQL execution error event."""
+
+    event: DeepResearchEventType = DeepResearchEventType.SQL_EXECUTION_ERROR
+    sqlQuery: str = Field(..., description="Failed SQL query")
+    error: str = Field(..., description="Error message")
+    errorType: str = Field(..., description="Error type (syntax, permission, timeout, etc.)")
+    suggestions: List[str] = Field(default_factory=list, description="Suggested fixes or recovery actions")
+    canRetry: bool = Field(False, description="Whether the query can be retried")
+
+
 # Union type for all events
 from typing import Union
 
 DeepResearchEvent = Union[
-    ChatEvent, PlanUpdateEvent, ToolCallEvent,
-    ToolCallResultEvent, CompleteEvent, ReportEvent, ErrorEvent
+    ChatEvent, PlanUpdateEvent, ToolCallEvent, ToolCallResultEvent,
+    SqlExecutionStartEvent, SqlExecutionProgressEvent, SqlExecutionResultEvent, SqlExecutionErrorEvent,
+    CompleteEvent, ReportEvent, ErrorEvent
 ]

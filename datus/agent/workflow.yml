@@ -36,6 +36,11 @@ workflow:
     - execute_sql
     - output
 
+  # Dedicated workflow for plan mode - chat node handles everything internally
+  chat_agentic_plan:
+    - chat
+    - output
+
   gensql_agentic:
     - chatbot
     - execute_sql

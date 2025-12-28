@@ -129,6 +129,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Update workflow context with chat results.
 
         Stores SQL to workflow context if present in result.
+        In plan mode, SQL context is managed by PlanModeHooks, so skip here.
 
         Args:
             workflow: Workflow instance to update
@@ -136,6 +137,11 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Returns:
             Dictionary with success status and message
         """
+        # In plan mode, SQL context is managed by PlanModeHooks during tool execution
+        if workflow.metadata.get("plan_mode"):
+            logger.info("Plan mode: Skipping SQL context update in chat node, handled by PlanModeHooks")
+            return {"success": True, "message": "Plan mode context update skipped, handled by hooks"}
+
         if not self.result:
             return {"success": False, "message": "No result to update context"}
 

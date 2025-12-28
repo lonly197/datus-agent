@@ -716,3 +716,74 @@ class ChatCommands:
             sql_query=sql, sql_error=error, sql_return=sql_return, row_count=row_count, explanation=explanation
         )
         self.cli.cli_context.add_sql_context(sql_context)
+
+    def do_monitor(self, arg: str) -> None:
+        """
+        Display Plan Mode monitoring dashboard and performance metrics.
+
+        Usage:
+            monitor                    # Show full dashboard
+            monitor json              # Export as JSON
+            monitor text              # Export as formatted text
+            monitor report            # Show detailed log report
+        """
+        try:
+            # Get the plan mode hooks from the current session
+            if not hasattr(self.cli, 'plan_hooks') or not self.cli.plan_hooks:
+                self.cli.console.print("[yellow]No active plan mode session found.[/]")
+                self.cli.console.print("Start a plan mode session first with: [cyan]plan <task>[/]")
+                return
+
+            monitor = self.cli.plan_hooks.monitor
+
+            if arg.lower() == "json":
+                # Export as JSON
+                json_data = monitor.export_monitoring_data("json")
+                self.cli.console.print("[cyan]Monitoring Data (JSON):[/]")
+                syntax = Syntax(json_data, "json", theme="monokai", line_numbers=False)
+                self.cli.console.print(syntax)
+
+            elif arg.lower() == "text":
+                # Export as formatted text
+                text_data = monitor.export_monitoring_data("text")
+                self.cli.console.print("[cyan]Monitoring Report:[/]")
+                self.cli.console.print(text_data)
+
+            elif arg.lower() == "report":
+                # Show detailed log report
+                monitor.log_monitoring_report()
+
+            else:
+                # Show ASCII dashboard
+                dashboard = monitor.generate_performance_dashboard()
+                self.cli.console.print(dashboard)
+
+        except Exception as e:
+            logger.error(f"Failed to display monitoring dashboard: {e}")
+            self.cli.console.print(f"[red]Error displaying monitoring dashboard: {e}[/]")
+
+    def help_monitor(self) -> None:
+        """Help for monitor command."""
+        help_text = """
+[bold cyan]monitor[/] - Display Plan Mode monitoring dashboard and performance metrics
+
+[bold]Usage:[/]
+  monitor                    # Show full ASCII dashboard
+  monitor json              # Export monitoring data as JSON
+  monitor text              # Export monitoring data as formatted text
+  monitor report            # Show detailed performance log report
+
+[bold]Description:[/]
+Shows comprehensive monitoring information for Plan Mode executions including:
+• Execution statistics and success rates
+• Tool performance metrics
+• Cache hit rates and batch optimizations
+• Recent execution trends
+• Active operations status
+
+[bold]Examples:[/]
+  monitor                   # View the main dashboard
+  monitor json > stats.json # Export data for analysis
+  monitor report           # View detailed logs
+        """
+        self.cli.console.print(Markdown(help_text))
