@@ -1423,24 +1423,24 @@ Respond with only the tool name, nothing else."""
                             file_path = f"output/{item.id}_output.txt"
                             file_content = f"Content generated for: {item.content}"
                             res = fs_tool.write_file(path=file_path, content=file_content)
-                        result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
-                        complete_action_fs = ActionHistory(
-                            action_id=f"{call_id}_write",
-                            role=ActionRole.TOOL,
-                            messages=f"Server executor: write_file for todo {item.id}",
-                            action_type="write_file",
+                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                            complete_action_fs = ActionHistory(
+                                action_id=f"{call_id}_write",
+                                role=ActionRole.TOOL,
+                                messages=f"Server executor: write_file for todo {item.id}",
+                                action_type="write_file",
                                 input={"function_name": "write_file", "arguments": json.dumps({"path": file_path, "content": file_content, "todo_id": item.id})},
-                            output=result_payload,
-                            status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
-                        )
-                        if self.action_history_manager:
-                            self.action_history_manager.add_action(complete_action_fs)
-                            if self.emit_queue is not None:
-                                try:
-                                    self.emit_queue.put_nowait(complete_action_fs)
-                                except Exception as e:
-                                    logger.debug(f"emit_queue put failed for complete_action_fs: {e}")
-                            executed_any = True
+                                output=result_payload,
+                                status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                            )
+                            if self.action_history_manager:
+                                self.action_history_manager.add_action(complete_action_fs)
+                                if self.emit_queue is not None:
+                                    try:
+                                        self.emit_queue.put_nowait(complete_action_fs)
+                                    except Exception as e:
+                                        logger.debug(f"emit_queue put failed for complete_action_fs: {e}")
+                                executed_any = True
                         elif matched_tool == "read_file" and fs_tool:
                             # Read file operation - placeholder
                             try:
