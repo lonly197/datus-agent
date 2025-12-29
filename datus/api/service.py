@@ -1083,9 +1083,11 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Datus API Service shutting down")
 
-    # Cancel all running tasks
+    # Cancel all running tasks asynchronously to avoid blocking shutdown
     if service:
-        await service.cancel_all_running_tasks()
+        # Create background task for cancellation to prevent blocking lifespan shutdown
+        asyncio.create_task(service.cancel_all_running_tasks())
+        logger.info("Task cancellation initiated in background")
 
 
 def create_app(agent_args: argparse.Namespace) -> FastAPI:
