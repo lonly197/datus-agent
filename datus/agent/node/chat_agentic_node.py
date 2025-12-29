@@ -489,28 +489,79 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
             # If we're in plan mode and no SQL was produced, attempt a final-summary fallback:
             # synthesize a final JSON report from the completed action history.
-            if getattr(user_input, "plan_mode", False) and not sql_content:
+            plan_mode = getattr(user_input, "plan_mode", False)
+            logger.debug(
+                f"Final-summary check: plan_mode={plan_mode}, sql_content={bool(sql_content)}, response_content_length={len(response_content) if response_content else 0}"
+            )
+
+            # Also trigger fallback if response_content looks like a progress update (not a proper report)
+            looks_like_progress = response_content and any(
+                phrase in response_content for phrase in ["完成第", "completing task", "step", "子任务"]
+            )
+
+            if plan_mode and (not sql_content or looks_like_progress):
                 try:
                     actions_list = action_history_manager.get_actions() if action_history_manager else []
-                    actions_summary = "\n".join(f"- {a.action_type}: {a.messages}" for a in actions_list[-20:])  # limit to last 20
+                    actions_summary = "\n".join(
+                        f"- {a.action_type}: {a.messages[:100]}" for a in actions_list[-20:]
+                    )  # limit to last 20
                     fallback_prompt = (
                         "Plan-mode fallback: All todos appear to have completed but no final SQL/report was produced.\n"
-                        "Based on the action history and tool outputs below, produce a final JSON object with keys "
-                        "'sql' and 'explanation'. The 'sql' value should contain the final SQL statement (string), "
-                        "and 'explanation' should summarize the review and optimizations.\n\n"
+                        "Based on the action history and tool outputs below, produce a comprehensive final JSON report.\n\n"
+                        "Required JSON format:\n"
+                        "{\n"
+                        '  "sql": "<final optimized SQL if applicable, or empty string>",\n'
+                        '  "explanation": "<comprehensive summary of findings, issues found, and optimization recommendations>"\n'
+                        "}\n\n"
                         f"Action history (latest first):\n{actions_summary}\n\n"
+                        "Important: If this is a SQL review/analysis task, the 'explanation' should include:\n"
+                        "- Summary of issues found (e.g., SELECT * usage, partition pruning, function performance)\n"
+                        "- Specific optimization recommendations\n"
+                        "- Expected performance improvements\n"
                         "Return only a JSON object or a JSON code block."
                     )
-                    logger.info("Attempting final-summary fallback to synthesize final SQL/report")
-                    fallback_resp = await asyncio.to_thread(self.model.generate, fallback_prompt, max_tokens=1500, temperature=0.0)
-                    if isinstance(fallback_resp, str) and fallback_resp.strip():
-                        extracted_sql2, extracted_output2 = self._extract_sql_and_output_from_response({"content": fallback_resp})
-                        if extracted_sql2:
-                            sql_content = sql_content or extracted_sql2
+                    logger.info(
+                        f"Attempting final-summary fallback: plan_mode={plan_mode}, looks_like_progress={looks_like_progress}"
+                    )
+                    logger.debug(f"Fallback actions_summary: {actions_summary[:500]}...")
+                    fallback_resp = await asyncio.to_thread(
+                        self.model.generate, fallback_prompt, max_tokens=2000, temperature=0.0
+                    )
+
+                    logger.debug(
+                        f"Fallback response type: {type(fallback_resp)}, length: {len(fallback_resp) if isinstance(fallback_resp, str) else 'N/A'}"
+                    )
+
+                    # Handle different response types from model.generate
+                    fallback_text = ""
+                    if isinstance(fallback_resp, str):
+                        fallback_text = fallback_resp
+                    elif hasattr(fallback_resp, "content"):
+                        fallback_text = str(getattr(fallback_resp, "content", ""))
+                    elif isinstance(fallback_resp, dict) and "content" in fallback_resp:
+                        fallback_text = str(fallback_resp.get("content", ""))
+
+                    if fallback_text.strip():
+                        extracted_sql2, extracted_output2 = self._extract_sql_and_output_from_response(
+                            {"content": fallback_text}
+                        )
+                        logger.debug(
+                            f"Fallback extraction result: sql={bool(extracted_sql2)}, output={bool(extracted_output2)}"
+                        )
+
+                        # Always use fallback output if available (it's the final report)
                         if extracted_output2:
-                            response_content = response_content or extracted_output2
+                            response_content = extracted_output2
+                            logger.info(
+                                f"Final-summary fallback succeeded, replaced response_content (length: {len(response_content)})"
+                            )
+                        if extracted_sql2:
+                            sql_content = extracted_sql2
+                            logger.info(f"Final-summary fallback extracted SQL (length: {len(sql_content)})")
+                    else:
+                        logger.warning(f"Final-summary fallback returned empty response: type={type(fallback_resp)}")
                 except Exception as e:
-                    logger.warning(f"Final-summary fallback failed: {e}")
+                    logger.error(f"Final-summary fallback failed with exception: {e}", exc_info=True)
 
             # Extract token usage from final actions using our new approach
             # With our streaming token fix, only the final assistant action will have accurate usage

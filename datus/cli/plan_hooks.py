@@ -1685,7 +1685,9 @@ Provide your reasoning and any recommendations. If this requires tool calls, you
                 logger.debug(f"LLM reasoning: failed to normalize response for todo {item.id}: {e}")
                 response_text = None
 
-            logger.info(f"LLM reasoning: normalized response type: {type(response_text)}, length: {len(response_text) if response_text else 0}")
+            logger.info(
+                f"LLM reasoning: normalized response type: {type(response_text)}, length: {len(response_text) if response_text else 0}"
+            )
 
             if response_text and isinstance(response_text, str) and response_text.strip():
                 reasoning_result = {
