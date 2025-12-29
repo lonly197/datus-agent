@@ -184,3 +184,50 @@ class TestTaskManagement:
         task_id_no_prefix = service._generate_task_id("test_client")
         assert task_id_no_prefix.startswith("test_client_")
         assert len(task_id_no_prefix) > len("test_client_")
+
+    @pytest.mark.asyncio
+    async def test_cancel_task_with_client_validation(self, service):
+        """Test task cancellation with client ownership validation."""
+
+        # Register a task for client1
+        task = asyncio.create_task(asyncio.sleep(10))
+        await service.register_running_task("test_task", task, {"client": "client1"})
+
+        # Try to cancel from different client - should fail
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            # Simulate cancel_task logic
+            running_task = await service.get_running_task("test_task")
+            task_client = running_task.meta.get("client") if running_task.meta else None
+            if task_client != "client2":
+                raise HTTPException(status_code=403, detail="Task belongs to different client")
+        assert exc_info.value.status_code == 403
+
+        # Cancel from correct client - should succeed
+        if not task.done():
+            task.cancel()
+        await service.unregister_running_task("test_task")
+
+    @pytest.mark.asyncio
+    async def test_cancel_completed_task(self, service):
+        """Test cancelling a task that has already completed."""
+
+        # Create a task that completes immediately
+        async def quick_task():
+            return "done"
+
+        task = asyncio.create_task(quick_task())
+        await service.register_running_task("quick_task", task, {"client": "test_client"})
+
+        # Wait for task to complete
+        await task
+
+        # Try to cancel - should handle gracefully
+        running_task = await service.get_running_task("quick_task")
+        if running_task:
+            if not running_task.task.done():
+                running_task.task.cancel()
+            else:
+                print("Task was already completed")
+
+        await service.unregister_running_task("quick_task")

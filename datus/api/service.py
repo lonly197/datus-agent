@@ -1428,12 +1428,26 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
         try:
             logger.info(f"Task cancel request from client: {current_client} for task: {task_id}")
 
-            # Check if task is running
+            # Check if task is registered (running or pending)
             running_task = await service.get_running_task(task_id)
             if running_task:
-                # Cancel the asyncio task
-                running_task.task.cancel()
+                # Check if the task belongs to the current client
+                task_client = running_task.meta.get("client") if running_task.meta else None
+                if task_client != current_client:
+                    raise HTTPException(status_code=403, detail=f"Task {task_id} belongs to different client")
+
+                # Cancel the asyncio task if it's still running
+                if not running_task.task.done():
+                    running_task.task.cancel()
+                    logger.info(f"Cancelled running task {task_id}")
+                else:
+                    logger.info(f"Task {task_id} was already completed")
+
                 running_task.status = "cancelled"
+
+                # For streaming tasks, we don't immediately remove from registry
+                # The task cleanup will happen in the finally block of _run_*_task methods
+                # But we mark it as cancelled so the cleanup knows it was cancelled
 
                 # Update database
                 if service.task_store:
@@ -1441,19 +1455,31 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
 
                 return {"task_id": task_id, "status": "cancelled", "message": "Task cancellation requested"}
 
-            # Check if task exists in database
+            # Check if task exists in database (for completed/failed tasks that might still be cancellable)
             if service.task_store:
                 task_data = service.task_store.get_task(task_id)
-                if task_data and task_data["status"] == "running":
-                    # Task exists but not in memory (maybe different worker)
-                    service.task_store.update_task(task_id, status="cancelled")
-                    return {
-                        "task_id": task_id,
-                        "status": "cancelled",
-                        "message": "Task cancellation requested (best-effort)",
-                    }
+                if task_data:
+                    # Check if task belongs to current client
+                    task_client = task_data.get("client")
+                    if task_client != current_client:
+                        raise HTTPException(status_code=403, detail=f"Task {task_id} belongs to different client")
 
-            raise HTTPException(status_code=404, detail=f"Running task {task_id} not found")
+                    # Only allow cancellation of running tasks
+                    if task_data.get("status") == "running":
+                        service.task_store.update_task(task_id, status="cancelled")
+                        return {
+                            "task_id": task_id,
+                            "status": "cancelled",
+                            "message": "Task cancellation requested (database update)",
+                        }
+                    else:
+                        return {
+                            "task_id": task_id,
+                            "status": "not_running",
+                            "message": f"Task is already {task_data.get('status', 'completed')}",
+                        }
+
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
         except HTTPException:
             raise
         except Exception as e:
