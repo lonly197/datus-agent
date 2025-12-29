@@ -375,6 +375,29 @@ class ChatAgenticNode(GenSQLAgenticNode):
         # Parse SQL to extract table names for tool calls
         table_names = self._parse_table_names_from_sql(sql_query)
 
+        # ========== Table Existence Check ==========
+        # Check table existence before running schema-dependent tools
+        schema_dependent_tools = {"describe_table", "get_table_ddl"}
+        if any(tool in required_tools for tool in schema_dependent_tools) and table_names:
+            table_existence = {}
+            for table_name in table_names:
+                check_result = await self._execute_preflight_tool(
+                    "check_table_exists", sql_query, [table_name], catalog, database, schema
+                )
+                table_existence[table_name] = check_result
+
+                # Check for missing tables and log warnings
+                if not check_result.get("success") or not check_result.get("result", {}).get("table_exists", True):
+                    suggestions = check_result.get("result", {}).get("suggestions", [])
+                    if suggestions:
+                        logger.warning(f"Table '{table_name}' not found. Did you mean: {', '.join(suggestions)}?")
+                    else:
+                        logger.warning(f"Table '{table_name}' not found in database")
+
+            # Adjust tool sequence based on table existence
+            required_tools = self._adjust_tool_sequence_for_missing_tables(required_tools, table_names, table_existence)
+        # ========== END Table Existence Check ==========
+
         all_success = True
         tool_results = {}
 
@@ -429,14 +452,30 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         result.get("error") if not success else None,
                     )
 
-                # Store result for context injection
+                # Store result for context injection and monitoring
                 tool_results[tool_name] = result
 
                 # Inject results into workflow context
                 self._inject_tool_result_into_context(workflow, tool_name, result)
 
                 if not success:
-                    logger.warning(f"Preflight tool {tool_name} failed: {result.get('error', 'Unknown error')}")
+                    error_desc = result.get("error", "Unknown error")
+                    # Enhanced error classification
+                    error_type = self._classify_error_type(error_desc, tool_name)
+                    recovery_suggestions = self._get_recovery_suggestions(error_type)
+
+                    # Store enhanced error data in result
+                    enhanced_result = dict(result)
+                    enhanced_result["error_type"] = error_type
+                    enhanced_result["recovery_suggestions"] = recovery_suggestions
+                    tool_results[tool_name] = enhanced_result
+
+                    logger.warning(f"Preflight tool {tool_name} failed ({error_type}): {error_desc}")
+
+                    # Log recovery suggestions
+                    if recovery_suggestions:
+                        logger.info(f"Recovery suggestions for {error_type}: {recovery_suggestions[0]}")
+
                     all_success = False
 
             except Exception as e:
@@ -548,6 +587,21 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     and self.plan_hooks.enable_query_caching
                 ):
                     self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
+
+                return result_dict
+
+            elif tool_name == "check_table_exists" and table_names:
+                # Check table existence (no caching needed for lightweight check)
+                table_name = table_names[0]
+
+                result = self.db_func_tool.check_table_exists(
+                    table_name=table_name, catalog=catalog, database=database, schema_name=schema
+                )
+                result_dict = (
+                    result.__dict__
+                    if hasattr(result, "__dict__")
+                    else {"success": False, "error": "Invalid result format"}
+                )
 
                 return result_dict
 
@@ -759,6 +813,113 @@ class ChatAgenticNode(GenSQLAgenticNode):
             return "SQL语法错误：解析失败"
         else:
             return "SQL语法错误：无法解析SQL语句"
+
+    def _classify_error_type(self, error_desc: str, tool_name: str) -> str:
+        """Classify error type for better error handling and reporting.
+
+        Args:
+            error_desc: Raw error message
+            tool_name: Tool that generated the error
+
+        Returns:
+            Error category string: syntax_error, table_not_found, permission_error,
+            timeout_error, connection_error, or unknown_error
+        """
+        error_lower = error_desc.lower()
+
+        # Check for specific error patterns
+        if "syntax" in error_lower or "parse" in error_lower:
+            return "syntax_error"
+        elif "not found" in error_lower or "不存在" in error_lower or "unknown" in error_lower:
+            if tool_name in ["describe_table", "get_table_ddl", "check_table_exists"]:
+                return "table_not_found"
+            return "resource_not_found"
+        elif "permission" in error_lower or "access denied" in error_lower or "unauthorized" in error_lower:
+            return "permission_error"
+        elif "timeout" in error_lower or "timed out" in error_lower:
+            return "timeout_error"
+        elif "connection" in error_lower or "connect" in error_lower or "network" in error_lower:
+            return "connection_error"
+        else:
+            return "unknown_error"
+
+    def _get_recovery_suggestions(self, error_type: str) -> list[str]:
+        """Get user-friendly recovery suggestions based on error type.
+
+        Args:
+            error_type: Classified error type
+
+        Returns:
+            List of recovery suggestion strings (Chinese)
+        """
+        suggestions_map = {
+            "syntax_error": [
+                "检查SQL语句是否包含必要的关键词(SELECT, FROM, WHERE等)",
+                "验证括号和引号是否正确匹配",
+                "确认表名和列名拼写正确",
+            ],
+            "table_not_found": [
+                "验证表名拼写是否正确",
+                "确认表存在于当前数据库/schema中",
+                "检查数据库权限配置",
+            ],
+            "permission_error": [
+                "检查数据库用户权限配置",
+                "联系管理员确认访问权限",
+                "确认namespace配置正确",
+            ],
+            "timeout_error": [
+                "尝试简化SQL查询",
+                "检查数据量是否过大",
+                "考虑添加WHERE条件限制数据范围",
+            ],
+            "connection_error": [
+                "检查数据库连接配置",
+                "验证网络连接状态",
+                "确认数据库服务是否运行",
+            ],
+            "unknown_error": [
+                "查看详细错误信息",
+                "检查系统日志",
+                "联系技术支持",
+            ],
+        }
+        return suggestions_map.get(error_type, suggestions_map["unknown_error"])
+
+    def _adjust_tool_sequence_for_missing_tables(
+        self, required_tools: list[str], table_names: list[str], table_existence: dict
+    ) -> list[str]:
+        """Adjust tool sequence based on table existence.
+
+        Args:
+            required_tools: Original tool sequence
+            table_names: List of table names from SQL
+            table_existence: Dict mapping table_name -> existence_result
+
+        Returns:
+            Adjusted tool sequence with schema-dependent tools removed if tables missing
+        """
+        if not table_names:
+            return required_tools
+
+        # Check if all tables exist
+        all_exist = all(
+            table_existence.get(name, {}).get("result", {}).get("table_exists", True) for name in table_names
+        )
+
+        if all_exist:
+            return required_tools
+
+        # Some tables missing - remove tools that depend on table schema
+        schema_dependent_tools = {"describe_table", "get_table_ddl"}
+        adjusted_sequence = [t for t in required_tools if t not in schema_dependent_tools]
+
+        missing_count = len(
+            [n for n in table_names if not table_existence.get(n, {}).get("result", {}).get("table_exists", True)]
+        )
+        logger.info(f"Tables missing ({missing_count}), skipping schema-dependent tools: {schema_dependent_tools}")
+
+        return adjusted_sequence
 
     def _inject_tool_result_into_context(self, workflow, tool_name: str, result: dict):
         """Inject tool results into workflow context for LLM access."""

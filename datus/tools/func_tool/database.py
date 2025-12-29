@@ -505,6 +505,60 @@ class DBFuncTool:
         except Exception as e:
             return FuncToolResult(success=0, error=str(e))
 
+    def check_table_exists(
+        self,
+        table_name: str,
+        catalog: Optional[str] = "",
+        database: Optional[str] = "",
+        schema_name: Optional[str] = "",
+    ) -> FuncToolResult:
+        """
+        Quick check if table exists without fetching full schema.
+
+        Args:
+            table_name: Simple table name (unqualified)
+            catalog: Optional catalog override
+            database: Optional database override
+            schema_name: Optional schema override
+
+        Returns:
+            FuncToolResult with result={"table_exists": bool, "suggestions": [...], "available_tables": [...]}
+        """
+        try:
+            # Get all accessible tables
+            tables = self.connector.get_tables(catalog_name=catalog, database_name=database, schema_name=schema_name)
+
+            if not tables:
+                return FuncToolResult(result={"table_exists": False, "suggestions": [], "available_tables": []})
+
+            # Check if table exists (case-insensitive)
+            table_names_lower = {t.get("name", "").lower(): t.get("name") for t in tables}
+            exists = table_name.lower() in table_names_lower
+
+            # Suggest similar table names if not found
+            suggestions = []
+            if not exists:
+                import difflib
+
+                available = list(table_names_lower.keys())
+                matches = difflib.get_close_matches(table_name.lower(), available, n=3, cutoff=0.6)
+                suggestions = [table_names_lower[m] for m in matches]
+
+            return FuncToolResult(
+                result={
+                    "table_exists": exists,
+                    "suggestions": suggestions,
+                    "available_tables": [t.get("name") for t in tables][:20],  # Limit for performance
+                }
+            )
+
+        except Exception as e:
+            from datus.utils.loggings import get_logger
+
+            logger = get_logger(__name__)
+            logger.error(f"Error checking table existence: {e}")
+            return FuncToolResult(success=0, error=str(e))
+
     def describe_table(
         self,
         table_name: str,

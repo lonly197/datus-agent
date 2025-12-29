@@ -36,9 +36,31 @@ agent:
       tool_timeout_seconds: 30
       # Whether to continue execution if some tools fail (default: true)
       continue_on_failure: true
-      base_url: https://api.openai.com/v1
-      api_key: ${OPENAI_API_KEY}
-      model: gpt-4-turbo
+
+      # Enhanced error handling options
+      error_handling:
+        # Enable enhanced error classification
+        classify_errors: true
+        # Include recovery suggestions in error messages
+        include_recovery_suggestions: true
+        # Detailed error context (SQL snippet, error location)
+        detailed_error_context: true
+
+      # Table existence checking
+      table_existence_check:
+        # Check table existence before running schema-dependent tools
+        enabled: true
+        # Behavior when tables not found: "skip_schema_tools" | "continue" | "fail"
+        on_missing: "skip_schema_tools"
+        # Maximum number of table suggestions to show
+        max_suggestions: 3
+
+      # SQL syntax validation configuration
+      syntax_validation:
+        # Strict mode: fail on any syntax error
+        strict_mode: true
+        # Dialect-specific validation (uses db_type from config)
+        use_dialect: true
 
     google:
       type: gemini

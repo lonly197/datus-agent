@@ -638,6 +638,116 @@ class ExecutionMonitor:
             "cache_hits": preflight["cache_hits"],
         }
 
+    def classify_failure_reason(self, tool_name: str, error: str) -> str:
+        """Classify failure reason for better reporting.
+
+        Args:
+            tool_name: Name of tool that failed
+            error: Error message
+
+        Returns:
+            Failure reason category: database_connection, timeout, permission,
+            table_not_found, resource_not_found, syntax_error, or unknown
+        """
+        error_lower = error.lower()
+
+        if "connection" in error_lower or "connect" in error_lower:
+            return "database_connection"
+        elif "timeout" in error_lower or "timed out" in error_lower:
+            return "timeout"
+        elif "permission" in error_lower or "access denied" in error_lower:
+            return "permission"
+        elif "not found" in error_lower or "不存在" in error_lower:
+            if tool_name in ["describe_table", "get_table_ddl", "check_table_exists"]:
+                return "table_not_found"
+            return "resource_not_found"
+        elif "syntax" in error_lower or "parse" in error_lower:
+            return "syntax_error"
+        else:
+            return "unknown"
+
+    def _get_category_description(self, category: str) -> str:
+        """Get Chinese description for failure category."""
+        descriptions = {
+            "database_connection": "数据库连接失败",
+            "timeout": "查询超时",
+            "permission": "权限不足",
+            "table_not_found": "表不存在",
+            "resource_not_found": "资源未找到",
+            "syntax_error": "SQL语法错误",
+            "unknown": "未知错误",
+        }
+        return descriptions.get(category, category)
+
+    def generate_enhanced_fail_safe_annotation(self, execution_id: str) -> str:
+        """Generate enhanced fail-safe report annotation with detailed failure info.
+
+        Args:
+            execution_id: Execution identifier
+
+        Returns:
+            Formatted annotation string with failure details and suggestions
+        """
+        if not self.current_execution or self.current_execution["id"] != execution_id:
+            return ""
+
+        if "preflight" not in self.current_execution:
+            return ""
+
+        preflight = self.current_execution["preflight"]
+        tool_results = preflight.get("tool_results", {})
+
+        if not tool_results:
+            return ""
+
+        # Classify failures
+        failure_categories = {}
+        critical_failures = []
+
+        for tool_name, result in tool_results.items():
+            if not result.get("success", True):
+                error = result.get("error", "Unknown error")
+                reason = self.classify_failure_reason(tool_name, error)
+
+                if reason not in failure_categories:
+                    failure_categories[reason] = []
+                failure_categories[reason].append(tool_name)
+
+                # Identify critical failures
+                if reason in ["database_connection", "syntax_error"] or tool_name == "validate_sql_syntax":
+                    critical_failures.append((tool_name, reason, error))
+
+        # Generate annotation
+        if not failure_categories:
+            return ""
+
+        parts = []
+
+        # Critical failures section
+        if critical_failures:
+            parts.append("🚨 **关键失败 - 审查结果可靠性受严重影响**:")
+            for tool, reason, error in critical_failures:
+                parts.append(f"   - {tool} ({reason}): {error[:100]}...")
+
+        # Failure details section
+        if failure_categories:
+            parts.append("\\n⚠️ **工具调用失败详情**:")
+            for category, tools in failure_categories.items():
+                desc = self._get_category_description(category)
+                parts.append(f"   - {desc}: {', '.join(tools)}")
+
+        # Suggestions section
+        if "database_connection" in failure_categories:
+            parts.append("\\n💡 **建议**: 检查数据库连接配置和网络连接")
+        if "table_not_found" in failure_categories:
+            parts.append("\\n💡 **建议**: 验证表名拼写和数据库权限")
+        if "syntax_error" in failure_categories:
+            parts.append("\\n💡 **建议**: 检查SQL语句语法，可能需要手动修正")
+        if "permission" in failure_categories:
+            parts.append("\\n💡 **建议**: 检查数据库用户权限配置")
+
+        return "\\n".join(parts)
+
     def generate_fail_safe_report_annotation(self, execution_id: str) -> str:
         """Generate fail-safe report annotation for missing tool data."""
         if not self.current_execution or self.current_execution["id"] != execution_id:
