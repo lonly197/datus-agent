@@ -511,7 +511,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         logger.info(f"Preflight tool execution completed: {'SUCCESS' if all_success else 'PARTIAL_SUCCESS'}")
         if preflight_summary:
             logger.info(f"Preflight summary: {preflight_summary}")
-        return all_success
+        return
 
     async def _execute_preflight_tool(
         self, tool_name: str, sql_query: str, table_names: list, catalog: str, database: str, schema: str
