@@ -44,6 +44,17 @@ python datus/api/server.py \
   --workflow fixed
 ```
 
+### API Gateway Configuration
+If running behind an API gateway or reverse proxy with a path prefix:
+```bash
+python datus/api/server.py \
+  --root-path /sql-api \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+This will make the API available under `/sql-api/` prefix (e.g., `/sql-api/workflows/chat_research`).
+
 ### Daemon Options
 ```bash
 python datus/api/server.py \

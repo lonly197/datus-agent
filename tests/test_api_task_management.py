@@ -195,6 +195,7 @@ class TestTaskManagement:
 
         # Try to cancel from different client - should fail
         from fastapi import HTTPException
+
         with pytest.raises(HTTPException) as exc_info:
             # Simulate cancel_task logic
             running_task = await service.get_running_task("test_task")

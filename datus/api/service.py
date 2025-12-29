@@ -1168,13 +1168,14 @@ async def lifespan(app: FastAPI):
         logger.info("Task cancellation initiated in background")
 
 
-def create_app(agent_args: argparse.Namespace) -> FastAPI:
+def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:
     """Create FastAPI app with agent args."""
     app = FastAPI(
         title="Datus Agent API",
         description="FastAPI service for Datus Agent workflow execution",
         version="1.0.0",
         lifespan=lifespan,
+        root_path=root_path,
     )
     app.state.agent_args = agent_args
 

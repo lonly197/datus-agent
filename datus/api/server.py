@@ -167,7 +167,7 @@ def _build_agent_args(args: argparse.Namespace) -> argparse.Namespace:
 def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> None:
     from datus.api.service import create_app
 
-    app = create_app(agent_args)
+    app = create_app(agent_args, root_path=args.root_path)
     uvicorn.run(
         app,
         host=args.host,
@@ -225,6 +225,12 @@ def main():
         "--daemon-log-file",
         type=str,
         help="Daemon log file path (default: logs/datus-agent-api.log)",
+    )
+    parser.add_argument(
+        "--root-path",
+        type=str,
+        default="",
+        help="Root path for the API (e.g., '/sql-api' for proxy setups)",
     )
 
     args = parser.parse_args()
