@@ -900,16 +900,9 @@ class DatusAPIService:
                 except Exception as e:
                     logger.warning(f"Error cancelling task {running_task.task_id}: {e}")
 
-            # Wait a bit for tasks to cancel
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*[t.task for t in tasks_to_cancel if not t.task.done()], return_exceptions=True),
-                    timeout=5.0,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Some tasks did not cancel within timeout")
-            except Exception as e:
-                logger.warning(f"Error waiting for task cancellation: {e}")
+            # Don't wait for tasks to complete - just cancel them and let them clean up in background
+            # This prevents blocking the lifespan shutdown
+            logger.info("Task cancellation initiated (not waiting for completion)")
 
         logger.info("Task cancellation completed")
 
@@ -1186,14 +1179,19 @@ async def lifespan(app: FastAPI):
     await service.initialize()
     logger.info("Datus API Service started")
     yield
-    # Shutdown
+    # Shutdown - must complete immediately to avoid blocking uvicorn shutdown
     logger.info("Datus API Service shutting down")
 
-    # Cancel all running tasks asynchronously to avoid blocking shutdown
+    # Cancel all running tasks in background without waiting
     if service:
-        # Create background task for cancellation to prevent blocking lifespan shutdown
-        asyncio.create_task(service.cancel_all_running_tasks())
-        logger.info("Task cancellation initiated in background")
+        # Use fire-and-forget approach - don't create a task that could block
+        # The cancellation will happen asynchronously but lifespan returns immediately
+        try:
+            # Schedule cancellation but don't wait for it
+            asyncio.get_event_loop().call_soon(lambda: asyncio.create_task(service.cancel_all_running_tasks()))
+            logger.info("Task cancellation scheduled in background")
+        except Exception as e:
+            logger.warning(f"Failed to schedule task cancellation: {e}")
 
 
 def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:
