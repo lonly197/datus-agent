@@ -112,8 +112,12 @@ class OpenAICompatibleModel(LLMBaseModel):
         self.default_headers = self.model_config.default_headers
 
         # Initialize clients
-        self.client = create_openai_client(OpenAI, self.api_key, self.base_url, default_headers=self.default_headers, timeout=300.0)
-        self.async_client = create_openai_client(AsyncOpenAI, self.api_key, self.base_url, default_headers=self.default_headers, timeout=300.0)
+        self.client = create_openai_client(
+            OpenAI, self.api_key, self.base_url, default_headers=self.default_headers, timeout=300.0
+        )
+        self.async_client = create_openai_client(
+            AsyncOpenAI, self.api_key, self.base_url, default_headers=self.default_headers, timeout=300.0
+        )
 
         # Context for tracing ToDo: replace it with Context object
         self.current_node = None
@@ -665,6 +669,14 @@ class OpenAICompatibleModel(LLMBaseModel):
                             if asyncio.current_task().cancelled():
                                 logger.info("Streaming operation was cancelled during event processing")
                                 break
+
+                            # Check if server executor has completed all todos (plan mode coordination)
+                            if hooks and hasattr(hooks, "_execution_complete") and hooks._execution_complete.is_set():
+                                if hasattr(hooks, "_all_todos_completed") and hooks._all_todos_completed:
+                                    logger.info(
+                                        "Server executor completed all todos, terminating main agent loop early"
+                                    )
+                                    break
 
                             if not hasattr(event, "type") or event.type != "run_item_stream_event":
                                 continue

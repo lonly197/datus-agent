@@ -12,6 +12,7 @@ class DummyDBTool:
 
     def search_table(self, query_text: str, top_n: int = 5):
         self.called = True
+
         # return simple object with model_dump
         class Res:
             def model_dump(self_inner):
@@ -26,7 +27,7 @@ class DummySession:
 
 async def _run_executor_once(hooks: PlanModeHooks, todo_content: str, db_tool):
     # create fake todo list with single item
-    from datus.tools.func_tool.plan_tools import TodoList, TodoItem
+    from datus.tools.func_tool.plan_tools import TodoItem, TodoList
 
     todo_list = TodoList()
     item = TodoItem(content=todo_content)
@@ -49,7 +50,15 @@ async def _run_executor_once(hooks: PlanModeHooks, todo_content: str, db_tool):
 def test_executor_fallback_and_skip_note_sync():
     console = Console()
     session = DummySession()
-    hooks = PlanModeHooks(console=console, session=session, auto_mode=True, action_history_manager=None, agent_config=None, emit_queue=asyncio.Queue(), model=None)
+    hooks = PlanModeHooks(
+        console=console,
+        session=session,
+        auto_mode=True,
+        action_history_manager=None,
+        agent_config=None,
+        emit_queue=asyncio.Queue(),
+        model=None,
+    )
 
     # Case 1: fallback should call DB when content does not match any keyword
     db_tool = DummyDBTool()
@@ -75,9 +84,13 @@ def test_llm_reasoning_execution():
 
     # Create a mock model
     mock_model = AsyncMock()
-    mock_model.generate_async = AsyncMock(return_value=type('Response', (), {
-        'content': 'Based on my analysis, this task requires searching the database for user information.'
-    })())
+    mock_model.generate_async = AsyncMock(
+        return_value=type(
+            "Response",
+            (),
+            {"content": "Based on my analysis, this task requires searching the database for user information."},
+        )()
+    )
 
     hooks = PlanModeHooks(
         console=console,
@@ -86,15 +99,14 @@ def test_llm_reasoning_execution():
         action_history_manager=None,
         agent_config=None,
         emit_queue=None,
-        model=mock_model
+        model=mock_model,
     )
 
     # Create a todo item requiring LLM reasoning
     from datus.tools.func_tool.plan_tools import TodoItem
+
     todo_item = TodoItem(
-        content="Analyze user data requirements",
-        requires_llm_reasoning=True,
-        reasoning_type="analysis"
+        content="Analyze user data requirements", requires_llm_reasoning=True, reasoning_type="analysis"
     )
 
     # Test LLM reasoning execution
@@ -116,7 +128,15 @@ def test_fallback_candidates_prioritization():
     """Test that fallback candidates are properly prioritized by confidence."""
     console = Console()
     session = DummySession()
-    hooks = PlanModeHooks(console=console, session=session, auto_mode=False, action_history_manager=None, agent_config=None, emit_queue=None, model=None)
+    hooks = PlanModeHooks(
+        console=console,
+        session=session,
+        auto_mode=False,
+        action_history_manager=None,
+        agent_config=None,
+        emit_queue=None,
+        model=None,
+    )
 
     # Test with content that should match multiple tools
     candidates = hooks._determine_fallback_candidates("Execute SQL query on the user table")
@@ -131,8 +151,6 @@ def test_fallback_candidates_prioritization():
 
     # Scores should be in descending order
     for i in range(1, len(candidates)):
-        _, prev_score = candidates[i-1]
+        _, prev_score = candidates[i - 1]
         _, curr_score = candidates[i]
         assert prev_score >= curr_score
-
-

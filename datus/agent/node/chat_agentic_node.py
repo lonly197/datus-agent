@@ -157,7 +157,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 sql_explanation = result.response if hasattr(result, "response") else ""
 
             # For plan mode or when result.sql is not available, try to extract from action history
-            action_history_manager = getattr(self, 'action_history_manager', None)
+            action_history_manager = getattr(self, "action_history_manager", None)
             if not sql_content and action_history_manager:
                 try:
                     # Extract SQL directly from summary_report action if available (plan mode final result)
@@ -166,7 +166,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                             if isinstance(stream_action.output, dict):
                                 sql_content = stream_action.output.get("sql")
                                 if sql_content:
-                                    sql_explanation = stream_action.output.get("content", "") or stream_action.output.get("response", "")
+                                    sql_explanation = stream_action.output.get(
+                                        "content", ""
+                                    ) or stream_action.output.get("response", "")
                                     break
 
                     # Fallback: try to extract SQL from any action that might contain it
@@ -241,7 +243,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             System prompt string loaded from the appropriate template
         """
         # Check if plan mode is active by looking at workflow metadata or node state
-        is_plan_mode = getattr(self, 'plan_mode_active', False)
+        is_plan_mode = getattr(self, "plan_mode_active", False)
 
         # Temporarily modify node_config to use plan_mode_system when in plan mode
         if is_plan_mode:
@@ -316,7 +318,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
             logger.info(f"Plan mode auto_mode: {auto_mode} (from input)")
 
             # Check for auto-injected knowledge from workflow task
-            auto_injected_knowledge = getattr(self.workflow.task, '_auto_injected_knowledge', None) if self.workflow else None
+            auto_injected_knowledge = (
+                getattr(self.workflow.task, "_auto_injected_knowledge", None) if self.workflow else None
+            )
 
             self.plan_hooks = PlanModeHooks(
                 console=console,

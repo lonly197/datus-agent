@@ -106,7 +106,9 @@ class ChatResearchRequest(BaseModel):
     plan_mode: Optional[bool] = Field(False, description="Enable plan mode for structured execution")
     auto_execute_plan: Optional[bool] = Field(False, description="Auto execute plan without user confirmation")
     prompt: Optional[str] = Field(None, description="Role definition and task capability prompt to guide the AI agent")
-    prompt_mode: Optional[str] = Field("append", description="How to merge prompt with system prompt: 'replace' or 'append' (default)")
+    prompt_mode: Optional[str] = Field(
+        "append", description="How to merge prompt with system prompt: 'replace' or 'append' (default)"
+    )
 
 
 class DeepResearchEventType(str, Enum):
@@ -251,7 +253,15 @@ class SqlExecutionErrorEvent(BaseEvent):
 from typing import Union
 
 DeepResearchEvent = Union[
-    ChatEvent, PlanUpdateEvent, ToolCallEvent, ToolCallResultEvent,
-    SqlExecutionStartEvent, SqlExecutionProgressEvent, SqlExecutionResultEvent, SqlExecutionErrorEvent,
-    CompleteEvent, ReportEvent, ErrorEvent
+    ChatEvent,
+    PlanUpdateEvent,
+    ToolCallEvent,
+    ToolCallResultEvent,
+    SqlExecutionStartEvent,
+    SqlExecutionProgressEvent,
+    SqlExecutionResultEvent,
+    SqlExecutionErrorEvent,
+    CompleteEvent,
+    ReportEvent,
+    ErrorEvent,
 ]

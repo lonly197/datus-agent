@@ -24,8 +24,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
-import structlog
 import streamlit.components.v1 as components
+import structlog
 
 # Import Datus components to reuse
 from datus.cli.repl import DatusCLI
@@ -787,8 +787,14 @@ class StreamlitChatbot:
         if self.current_subagent:
             # Render with classes for custom styling
             try:
-                st.markdown(f"""<div class='main-title'>{t("title_subagent").format(subagent=self.current_subagent.title())}</div>""", unsafe_allow_html=True)
-                st.markdown(f"""<div class='main-caption'>{t("caption_subagent").format(subagent=self.current_subagent)}</div>""", unsafe_allow_html=True)
+                st.markdown(
+                    f"""<div class='main-title'>{t("title_subagent").format(subagent=self.current_subagent.title())}</div>""",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f"""<div class='main-caption'>{t("caption_subagent").format(subagent=self.current_subagent)}</div>""",
+                    unsafe_allow_html=True,
+                )
             except Exception:
                 # Fallback to default Streamlit rendering
                 st.title(t("title_subagent").format(subagent=self.current_subagent.title()))
@@ -862,9 +868,7 @@ class StreamlitChatbot:
                     if response:
                         self.ui.display_markdown_response(response)
                     else:
-                        st.markdown(
-                            t("response_error", "抱歉，无法生成有效响应。请检查执行详情以获取更多信息。")
-                        )
+                        st.markdown(t("response_error", "抱歉，无法生成有效响应。请检查执行详情以获取更多信息。"))
 
                     # Display SQL if available
                     if sql:

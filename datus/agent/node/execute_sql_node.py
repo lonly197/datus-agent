@@ -2,7 +2,8 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import AsyncGenerator, Dict, Optional
 
 from pydantic import ValidationError
@@ -99,7 +100,9 @@ class ExecuteSQLNode(Node):
             timeout = None
             if hasattr(self.input, "query_timeout_seconds") and self.input.query_timeout_seconds:
                 timeout = int(self.input.query_timeout_seconds)
-            elif getattr(self, "agent_config", None) and getattr(self.agent_config, "default_query_timeout_seconds", None):
+            elif getattr(self, "agent_config", None) and getattr(
+                self.agent_config, "default_query_timeout_seconds", None
+            ):
                 timeout = int(self.agent_config.default_query_timeout_seconds)
 
             # Run blocking execute in thread and enforce timeout if provided
@@ -118,7 +121,9 @@ class ExecuteSQLNode(Node):
                         try:
                             db_connector.close()
                         except (AttributeError, ConnectionError, Exception) as cleanup_error:
-                            logger.warning(f"Failed to close database connection during timeout cleanup: {cleanup_error}")
+                            logger.warning(
+                                f"Failed to close database connection during timeout cleanup: {cleanup_error}"
+                            )
                         return ExecuteSQLResult(
                             success=False,
                             error=f"Query timed out after {timeout} seconds",

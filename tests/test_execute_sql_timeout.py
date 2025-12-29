@@ -37,10 +37,7 @@ class TestExecuteSQLTimeout(unittest.TestCase):
         # Mock a slow connector that sleeps longer than timeout
         mock_connector = MagicMock()
         mock_result = ExecuteSQLResult(
-            success=True,
-            sql_query="SELECT * FROM test",
-            sql_return="test data",
-            row_count=1
+            success=True, sql_query="SELECT * FROM test", sql_return="test data", row_count=1
         )
 
         def slow_execute(input_data):
@@ -50,7 +47,7 @@ class TestExecuteSQLTimeout(unittest.TestCase):
         mock_connector.execute.side_effect = slow_execute
 
         # Mock the _sql_connector method
-        with patch.object(self.node, '_sql_connector', return_value=mock_connector):
+        with patch.object(self.node, "_sql_connector", return_value=mock_connector):
             # Set up input without explicit timeout
             self.node.input = ExecuteSQLInput(
                 database_name="test",
@@ -73,10 +70,7 @@ class TestExecuteSQLTimeout(unittest.TestCase):
         # Mock a slow connector
         mock_connector = MagicMock()
         mock_result = ExecuteSQLResult(
-            success=True,
-            sql_query="SELECT * FROM test",
-            sql_return="test data",
-            row_count=1
+            success=True, sql_query="SELECT * FROM test", sql_return="test data", row_count=1
         )
 
         def slow_execute(input_data):
@@ -86,7 +80,7 @@ class TestExecuteSQLTimeout(unittest.TestCase):
         mock_connector.execute.side_effect = slow_execute
 
         # Mock the _sql_connector method
-        with patch.object(self.node, '_sql_connector', return_value=mock_connector):
+        with patch.object(self.node, "_sql_connector", return_value=mock_connector):
             # Set up input with explicit timeout (1 second)
             self.node.input = ExecuteSQLInput(
                 database_name="test",
@@ -109,10 +103,7 @@ class TestExecuteSQLTimeout(unittest.TestCase):
         # Mock a connector
         mock_connector = MagicMock()
         mock_result = ExecuteSQLResult(
-            success=True,
-            sql_query="SELECT * FROM test",
-            sql_return="test data",
-            row_count=1
+            success=True, sql_query="SELECT * FROM test", sql_return="test data", row_count=1
         )
 
         def fast_execute(input_data):
@@ -121,7 +112,7 @@ class TestExecuteSQLTimeout(unittest.TestCase):
         mock_connector.execute.side_effect = fast_execute
 
         # Mock the _sql_connector method
-        with patch.object(self.node, '_sql_connector', return_value=mock_connector):
+        with patch.object(self.node, "_sql_connector", return_value=mock_connector):
             # Set up input with timeout disabled
             self.node.input = ExecuteSQLInput(
                 database_name="test",
@@ -161,16 +152,13 @@ class TestExecuteSQLTimeout(unittest.TestCase):
         # Mock a connector
         mock_connector = MagicMock()
         mock_result = ExecuteSQLResult(
-            success=True,
-            sql_query="SELECT * FROM test",
-            sql_return="test data",
-            row_count=1
+            success=True, sql_query="SELECT * FROM test", sql_return="test data", row_count=1
         )
 
         mock_connector.execute.return_value = mock_result
 
         # Mock the _sql_connector method
-        with patch.object(node, '_sql_connector', return_value=mock_connector):
+        with patch.object(node, "_sql_connector", return_value=mock_connector):
             # Set up input without timeout
             node.input = ExecuteSQLInput(
                 database_name="test",

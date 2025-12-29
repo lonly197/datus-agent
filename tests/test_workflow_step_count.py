@@ -66,10 +66,9 @@ class TestWorkflowStepCount(unittest.TestCase):
         self.mock_workflow.save = MagicMock()
 
         # Mock the file operations and time
-        with patch('datus.agent.workflow_runner.os.makedirs'), \
-             patch('datus.agent.workflow_runner.time.time', return_value=1234567890), \
-             patch('datus.agent.workflow_runner.logger') as mock_logger:
-
+        with patch("datus.agent.workflow_runner.os.makedirs"), patch(
+            "datus.agent.workflow_runner.time.time", return_value=1234567890
+        ), patch("datus.agent.workflow_runner.logger") as mock_logger:
             # Call _finalize_workflow
             result = self.runner._finalize_workflow(step_count=5)
 
@@ -108,10 +107,9 @@ class TestWorkflowStepCount(unittest.TestCase):
         self.mock_workflow.save = MagicMock()
 
         # Mock the file operations and time
-        with patch('datus.agent.workflow_runner.os.makedirs'), \
-             patch('datus.agent.workflow_runner.time.time', return_value=1234567890), \
-             patch('datus.agent.workflow_runner.logger') as mock_logger:
-
+        with patch("datus.agent.workflow_runner.os.makedirs"), patch(
+            "datus.agent.workflow_runner.time.time", return_value=1234567890
+        ), patch("datus.agent.workflow_runner.logger") as mock_logger:
             # Call _finalize_workflow
             result = self.runner._finalize_workflow(step_count=3)
 
@@ -144,10 +142,9 @@ class TestWorkflowStepCount(unittest.TestCase):
         self.mock_workflow.save = MagicMock()
 
         # Mock the file operations and time
-        with patch('datus.agent.workflow_runner.os.makedirs'), \
-             patch('datus.agent.workflow_runner.time.time', return_value=1234567890), \
-             patch('datus.agent.workflow_runner.logger') as mock_logger:
-
+        with patch("datus.agent.workflow_runner.os.makedirs"), patch(
+            "datus.agent.workflow_runner.time.time", return_value=1234567890
+        ), patch("datus.agent.workflow_runner.logger") as mock_logger:
             # Call _finalize_workflow
             result = self.runner._finalize_workflow(step_count=2)
 

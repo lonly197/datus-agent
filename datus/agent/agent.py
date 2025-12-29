@@ -114,10 +114,16 @@ class Agent:
 
         logger.info(f"Storage modules initialized: {list(self.storage_modules.keys())}")
 
-    def create_workflow_runner(self, check_db: bool = True, run_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> WorkflowRunner:
+    def create_workflow_runner(
+        self, check_db: bool = True, run_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None
+    ) -> WorkflowRunner:
         """Create a workflow runner that can safely execute in isolation."""
         return WorkflowRunner(
-            self.args, self.global_config, pre_run_callable=self.check_db if check_db else None, run_id=run_id, metadata=metadata
+            self.args,
+            self.global_config,
+            pre_run_callable=self.check_db if check_db else None,
+            run_id=run_id,
+            metadata=metadata,
         )
 
     def run(

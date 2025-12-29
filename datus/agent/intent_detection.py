@@ -11,8 +11,8 @@ to automatically inject relevant external knowledge when front-end omits ext_kno
 
 import asyncio
 import re
-from typing import Dict, Optional, Tuple, Any
 from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
 
 from datus.utils.loggings import get_logger
 
@@ -22,6 +22,7 @@ logger = get_logger(__name__)
 @dataclass
 class IntentResult:
     """Result of intent detection."""
+
     intent: str
     confidence: float
     metadata: Dict[str, Any]
@@ -38,32 +39,81 @@ class IntentDetector:
     # SQL-related keywords in both English and Chinese
     SQL_KEYWORDS = {
         # English keywords
-        "sql", "select", "from", "where", "join", "group", "order", "limit",
-        "partition", "starrocks", "hive", "spark", "presto", "clickhouse",
-        "snowflake", "bigquery", "redshift", "athena", "drill", "impala",
-        "kudu", "hbase", "cassandra", "mongodb", "elasticsearch",
-
+        "sql",
+        "select",
+        "from",
+        "where",
+        "join",
+        "group",
+        "order",
+        "limit",
+        "partition",
+        "starrocks",
+        "hive",
+        "spark",
+        "presto",
+        "clickhouse",
+        "snowflake",
+        "bigquery",
+        "redshift",
+        "athena",
+        "drill",
+        "impala",
+        "kudu",
+        "hbase",
+        "cassandra",
+        "mongodb",
+        "elasticsearch",
         # Chinese keywords
-        "查询", "审查", "审核", "检查", "分析", "统计", "报表", "数据",
-        "表", "字段", "索引", "分区", "分桶", "物化视图", "视图",
-        "主键", "外键", "约束", "优化", "性能", "执行计划",
-        "试驾", "线索", "转化", "下定", "用户", "订单", "商品",
-        "销售额", "收入", "利润", "成本", "库存", "物流"
+        "查询",
+        "审查",
+        "审核",
+        "检查",
+        "分析",
+        "统计",
+        "报表",
+        "数据",
+        "表",
+        "字段",
+        "索引",
+        "分区",
+        "分桶",
+        "物化视图",
+        "视图",
+        "主键",
+        "外键",
+        "约束",
+        "优化",
+        "性能",
+        "执行计划",
+        "试驾",
+        "线索",
+        "转化",
+        "下定",
+        "用户",
+        "订单",
+        "商品",
+        "销售额",
+        "收入",
+        "利润",
+        "成本",
+        "库存",
+        "物流",
     }
 
     # Patterns that strongly indicate SQL intent
     SQL_PATTERNS = [
-        r'\bSELECT\b.*\bFROM\b',  # SELECT ... FROM
-        r'\bINSERT\b.*\bINTO\b',  # INSERT ... INTO
-        r'\bUPDATE\b.*\bSET\b',   # UPDATE ... SET
-        r'\bDELETE\b.*\bFROM\b',  # DELETE ... FROM
-        r'\bCREATE\b.*\bTABLE\b', # CREATE TABLE
-        r'\bALTER\b.*\bTABLE\b',  # ALTER TABLE
-        r'\bDROP\b.*\bTABLE\b',   # DROP TABLE
-        r'\b\d+\s+(days?|hours?|minutes?|seconds?|weeks?|months?|years?)\s+ago\b',  # Time expressions
-        r'\bdate_format\b|\bdatediff\b|\bdate_add\b|\bdate_sub\b',  # Date functions
-        r'\bpartition\s+by\b|\bpartitioned\s+by\b',  # Partition keywords
-        r'\bdistribute\s+by\b|\bcluster\s+by\b',     # Distribution keywords
+        r"\bSELECT\b.*\bFROM\b",  # SELECT ... FROM
+        r"\bINSERT\b.*\bINTO\b",  # INSERT ... INTO
+        r"\bUPDATE\b.*\bSET\b",  # UPDATE ... SET
+        r"\bDELETE\b.*\bFROM\b",  # DELETE ... FROM
+        r"\bCREATE\b.*\bTABLE\b",  # CREATE TABLE
+        r"\bALTER\b.*\bTABLE\b",  # ALTER TABLE
+        r"\bDROP\b.*\bTABLE\b",  # DROP TABLE
+        r"\b\d+\s+(days?|hours?|minutes?|seconds?|weeks?|months?|years?)\s+ago\b",  # Time expressions
+        r"\bdate_format\b|\bdatediff\b|\bdate_add\b|\bdate_sub\b",  # Date functions
+        r"\bpartition\s+by\b|\bpartitioned\s+by\b",  # Partition keywords
+        r"\bdistribute\s+by\b|\bcluster\s+by\b",  # Distribution keywords
     ]
 
     def __init__(self, keyword_threshold: int = 1, llm_confidence_threshold: float = 0.7):
@@ -112,7 +162,7 @@ class IntentDetector:
             "pattern_matches": pattern_matches,
             "total_matches": total_matches,
             "has_sql_patterns": len(pattern_matches) > 0,
-            "method": "keyword"
+            "method": "keyword",
         }
 
         is_sql_intent = total_matches >= self.keyword_threshold
@@ -143,12 +193,11 @@ User request: {text}
 """
 
             # Use the model's generate method
-            response = await asyncio.to_thread(
-                model.generate, prompt, max_tokens=100, temperature=0.1
-            )
+            response = await asyncio.to_thread(model.generate, prompt, max_tokens=100, temperature=0.1)
 
             # Parse the response (assuming JSON format)
             import json
+
             try:
                 result = json.loads(response.strip())
                 intent = result.get("intent", "other")
@@ -162,12 +211,7 @@ User request: {text}
             logger.error(f"LLM classification failed: {e}")
             return "other", 0.0
 
-    async def detect_sql_intent(
-        self,
-        text: str,
-        model=None,
-        use_llm_fallback: bool = True
-    ) -> IntentResult:
+    async def detect_sql_intent(self, text: str, model=None, use_llm_fallback: bool = True) -> IntentResult:
         """
         Hybrid intent detection: keyword first, LLM fallback.
 
@@ -195,11 +239,7 @@ User request: {text}
             # Only accept LLM result if confidence is high enough
             if llm_confidence >= self.llm_confidence_threshold:
                 metadata = keyword_metadata.copy()
-                metadata.update({
-                    "llm_intent": llm_intent,
-                    "llm_confidence": llm_confidence,
-                    "method": "llm_fallback"
-                })
+                metadata.update({"llm_intent": llm_intent, "llm_confidence": llm_confidence, "method": "llm_fallback"})
                 return IntentResult(intent=llm_intent, confidence=llm_confidence, metadata=metadata)
 
         # Step 4: Default to no SQL intent if both methods are uncertain
@@ -217,7 +257,7 @@ async def detect_sql_intent(
     model=None,
     keyword_threshold: int = 1,
     llm_confidence_threshold: float = 0.7,
-    use_llm_fallback: bool = True
+    use_llm_fallback: bool = True,
 ) -> IntentResult:
     """
     Convenience function for intent detection.
@@ -232,8 +272,5 @@ async def detect_sql_intent(
     Returns:
         IntentResult with detected intent
     """
-    detector = IntentDetector(
-        keyword_threshold=keyword_threshold,
-        llm_confidence_threshold=llm_confidence_threshold
-    )
+    detector = IntentDetector(keyword_threshold=keyword_threshold, llm_confidence_threshold=llm_confidence_threshold)
     return await detector.detect_sql_intent(text, model, use_llm_fallback)

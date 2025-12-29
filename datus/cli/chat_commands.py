@@ -729,7 +729,7 @@ class ChatCommands:
         """
         try:
             # Get the plan mode hooks from the current session
-            if not hasattr(self.cli, 'plan_hooks') or not self.cli.plan_hooks:
+            if not hasattr(self.cli, "plan_hooks") or not self.cli.plan_hooks:
                 self.cli.console.print("[yellow]No active plan mode session found.[/]")
                 self.cli.console.print("Start a plan mode session first with: [cyan]plan <task>[/]")
                 return

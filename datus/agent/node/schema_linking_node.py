@@ -210,8 +210,8 @@ class SchemaLinkingNode(Node):
             if search_result.success and search_result.result:
                 knowledge_items = []
                 for result in search_result.result:
-                    terminology = result.get('terminology', '')
-                    explanation = result.get('explanation', '')
+                    terminology = result.get("terminology", "")
+                    explanation = result.get("explanation", "")
                     if terminology and explanation:
                         knowledge_items.append(f"- {terminology}: {explanation}")
 

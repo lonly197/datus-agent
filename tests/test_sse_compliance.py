@@ -17,21 +17,26 @@ ChatBot接收信息响应结构定义.ts 的要求。
 
 import asyncio
 import json
-import sys
 import os
-from typing import Dict, List, Any, Optional
+import sys
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from datus.api.models import DeepResearchEventType
 from datus.api.event_converter import DeepResearchEventConverter
-from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.api.models import (
-    ChatEvent, PlanUpdateEvent, ToolCallEvent, ToolCallResultEvent,
-    CompleteEvent, TodoItem, TodoStatus
+    ChatEvent,
+    CompleteEvent,
+    DeepResearchEventType,
+    PlanUpdateEvent,
+    TodoItem,
+    TodoStatus,
+    ToolCallEvent,
+    ToolCallResultEvent,
 )
+from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
 
 class SSEComplianceChecker:
@@ -52,7 +57,9 @@ class SSEComplianceChecker:
 
         # 验证 event 类型
         if event_data["event"] not in [e.value for e in DeepResearchEventType]:
-            self.errors.append(f"Invalid event type '{event_data['event']}'. Valid types: {[e.value for e in DeepResearchEventType]}")
+            self.errors.append(
+                f"Invalid event type '{event_data['event']}'. Valid types: {[e.value for e in DeepResearchEventType]}"
+            )
             return False
 
         # 验证 timestamp 是数字
@@ -262,16 +269,18 @@ async def test_chat_research_sse_mock():
             output={"content": "正在分析'首次试驾'到'下定'的平均转化周期需求..."},
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
-            end_time=datetime.now()
+            end_time=datetime.now(),
         ),
-
         # 2. 计划更新事件 - 生成执行计划 (使用 todo_write 工具)
         ActionHistory(
             action_id="plan_1",
             role=ActionRole.TOOL,
             action_type="todo_write",
             messages="生成执行计划",
-            input={"function_name": "todo_write", "arguments": '{"todos_json": "[{\\"content\\": \\"理解业务需求：分析\'首次试驾\'到\'下定\'的平均转化周期\\", \\"status\\": \\"pending\\"}, {\\"content\\": \\"搜索相关表结构：试驾表和线索表\\", \\"status\\": \\"pending\\"}, {\\"content\\": \\"分析表字段和关联关系\\", \\"status\\": \\"pending\\"}, {\\"content\\": \\"设计SQL逻辑：识别首次试驾时间、下定时间\\", \\"status\\": \\"pending\\"}, {\\"content\\": \\"计算转化周期（天数）并按月统计\\", \\"status\\": \\"pending\\"}, {\\"content\\": \\"编写完整SQL代码并添加详细注释\\", \\"status\\": \\"pending\\"}]"}'},
+            input={
+                "function_name": "todo_write",
+                "arguments": '{"todos_json": "[{\\"content\\": \\"理解业务需求：分析\'首次试驾\'到\'下定\'的平均转化周期\\", \\"status\\": \\"pending\\"}, {\\"content\\": \\"搜索相关表结构：试驾表和线索表\\", \\"status\\": \\"pending\\"}, {\\"content\\": \\"分析表字段和关联关系\\", \\"status\\": \\"pending\\"}, {\\"content\\": \\"设计SQL逻辑：识别首次试驾时间、下定时间\\", \\"status\\": \\"pending\\"}, {\\"content\\": \\"计算转化周期（天数）并按月统计\\", \\"status\\": \\"pending\\"}, {\\"content\\": \\"编写完整SQL代码并添加详细注释\\", \\"status\\": \\"pending\\"}]"}',
+            },
             output={
                 "success": 1,
                 "error": None,
@@ -279,45 +288,20 @@ async def test_chat_research_sse_mock():
                     "message": "Successfully created todo list",
                     "todo_list": {
                         "items": [
-                            {
-                                "id": "task_1",
-                                "content": "理解业务需求：分析'首次试驾'到'下定'的平均转化周期",
-                                "status": "completed"
-                            },
-                            {
-                                "id": "task_2",
-                                "content": "搜索相关表结构：试驾表和线索表",
-                                "status": "in_progress"
-                            },
-                            {
-                                "id": "task_3",
-                                "content": "分析表字段和关联关系",
-                                "status": "pending"
-                            },
-                            {
-                                "id": "task_4",
-                                "content": "设计SQL逻辑：识别首次试驾时间、下定时间",
-                                "status": "pending"
-                            },
-                            {
-                                "id": "task_5",
-                                "content": "计算转化周期（天数）并按月统计",
-                                "status": "pending"
-                            },
-                            {
-                                "id": "task_6",
-                                "content": "编写完整SQL代码并添加详细注释",
-                                "status": "pending"
-                            }
+                            {"id": "task_1", "content": "理解业务需求：分析'首次试驾'到'下定'的平均转化周期", "status": "completed"},
+                            {"id": "task_2", "content": "搜索相关表结构：试驾表和线索表", "status": "in_progress"},
+                            {"id": "task_3", "content": "分析表字段和关联关系", "status": "pending"},
+                            {"id": "task_4", "content": "设计SQL逻辑：识别首次试驾时间、下定时间", "status": "pending"},
+                            {"id": "task_5", "content": "计算转化周期（天数）并按月统计", "status": "pending"},
+                            {"id": "task_6", "content": "编写完整SQL代码并添加详细注释", "status": "pending"},
                         ]
-                    }
-                }
+                    },
+                },
             },
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
-            end_time=datetime.now()
+            end_time=datetime.now(),
         ),
-
         # 3. 单个工具调用事件 (包含输入和输出)
         ActionHistory(
             action_id="tool_call_1",
@@ -329,14 +313,13 @@ async def test_chat_research_sse_mock():
                 "success": True,
                 "result": {
                     "message": "Successfully searched table structure",
-                    "data": {"tables": ["ods_trial_drive", "ods_clue"]}
-                }
+                    "data": {"tables": ["ods_trial_drive", "ods_clue"]},
+                },
             },
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
-            end_time=datetime.now()
+            end_time=datetime.now(),
         ),
-
         # 4. 最终的聊天响应 - 包含生成的 SQL
         ActionHistory(
             action_id="final_response",
@@ -347,13 +330,12 @@ async def test_chat_research_sse_mock():
             output={
                 "response": "已成功生成 SQL 代码来统计每月'首次试驾'到'下定'的平均转化周期",
                 "sql": "SELECT * FROM table",  # 简化的 SQL
-                "tokens_used": 150
+                "tokens_used": 150,
             },
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
-            end_time=datetime.now()
+            end_time=datetime.now(),
         ),
-
         # 5. 工作流完成事件
         ActionHistory(
             action_id="workflow_complete",
@@ -364,8 +346,8 @@ async def test_chat_research_sse_mock():
             output={"final_result": "SQL generation completed successfully"},
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
-            end_time=datetime.now()
-        )
+            end_time=datetime.now(),
+        ),
     ]
 
     # 使用事件转换器将 ActionHistory 转换为 DeepResearchEvent
@@ -381,8 +363,8 @@ async def test_chat_research_sse_mock():
                     # 将事件对象转换为字典格式
                     event_dict = event.model_dump()
                     events.append(event_dict)
-                    event_type = event_dict['event']
-                    if hasattr(event_type, 'value'):
+                    event_type = event_dict["event"]
+                    if hasattr(event_type, "value"):
                         event_type = event_type.value
                     print(f"📨 转换事件: {event_type} (ID: {event_dict.get('id', 'unknown')})")
             else:

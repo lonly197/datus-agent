@@ -434,23 +434,29 @@ class GenSQLAgenticNode(AgenticNode):
 
         try:
             try:
-                base_system_prompt = prompt_manager.render_template(template_name=template_name, version=version, **context)
+                base_system_prompt = prompt_manager.render_template(
+                    template_name=template_name, version=version, **context
+                )
             except FileNotFoundError:
                 # Template not found - throw DatusException
-                logger.warning(f"Failed to render system prompt '{system_prompt_name}', using the default template instead")
-                base_system_prompt = prompt_manager.render_template(template_name="sql_system", version=version, **context)
+                logger.warning(
+                    f"Failed to render system prompt '{system_prompt_name}', using the default template instead"
+                )
+                base_system_prompt = prompt_manager.render_template(
+                    template_name="sql_system", version=version, **context
+                )
 
             # Merge with custom prompt from workflow metadata if provided
-            if self.workflow and hasattr(self.workflow, 'metadata'):
-                custom_prompt = self.workflow.metadata.get('prompt')
-                prompt_mode = self.workflow.metadata.get('prompt_mode', 'append')
+            if self.workflow and hasattr(self.workflow, "metadata"):
+                custom_prompt = self.workflow.metadata.get("prompt")
+                prompt_mode = self.workflow.metadata.get("prompt_mode", "append")
 
                 if custom_prompt and isinstance(custom_prompt, str) and custom_prompt.strip():
-                    if prompt_mode == 'replace':
+                    if prompt_mode == "replace":
                         # Replace the entire system prompt
                         base_system_prompt = custom_prompt.strip()
                         logger.debug("Replaced system prompt with custom prompt")
-                    elif prompt_mode == 'append':
+                    elif prompt_mode == "append":
                         # Append custom prompt to the base system prompt
                         base_system_prompt = f"{base_system_prompt}\n\n{custom_prompt.strip()}"
                         logger.debug("Appended custom prompt to system prompt")
@@ -522,7 +528,9 @@ class GenSQLAgenticNode(AgenticNode):
                 from datus.cli.plan_hooks import PlanModeHooks
 
                 auto_mode = getattr(user_input, "auto_execute_plan", False)
-                self.plan_hooks = PlanModeHooks(console=Console(), session=session, auto_mode=auto_mode, model=self.model)
+                self.plan_hooks = PlanModeHooks(
+                    console=Console(), session=session, auto_mode=auto_mode, model=self.model
+                )
                 logger.info(f"Plan mode activated (auto_mode={auto_mode})")
 
             system_instruction = self._get_system_prompt(conversation_summary, user_input.prompt_version)
@@ -919,7 +927,7 @@ class GenSQLAgenticNode(AgenticNode):
 
             # First, try to extract JSON from markdown code blocks (for plan mode)
             json_content = content
-            json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL | re.IGNORECASE)
+            json_match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL | re.IGNORECASE)
             if json_match:
                 json_content = json_match.group(1).strip()
                 logger.debug(f"Extracted JSON content from markdown block: {json_content[:200]}...")
@@ -1060,9 +1068,7 @@ def build_enhanced_message(
         enhanced_parts.append(f"Reference SQL: \n{to_str([item.model_dump() for item in reference_sql])}")
 
     if enhanced_parts:
-        separator = '\n\n'
-        enhanced_message = (
-            f"{separator.join(enhanced_parts)}\n\nNow based on the rules above, answer the user question: {user_message}"
-        )
+        separator = "\n\n"
+        enhanced_message = f"{separator.join(enhanced_parts)}\n\nNow based on the rules above, answer the user question: {user_message}"
 
     return enhanced_message

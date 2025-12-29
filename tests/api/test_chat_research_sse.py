@@ -2,24 +2,24 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-import json
-import pytest
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi.testclient import TestClient
-import httpx
 
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from datus.api.models import ChatResearchRequest, DeepResearchEventType
 from datus.api.service import create_app
-from datus.api.models import DeepResearchEventType, ChatResearchRequest
 
 
 class TestChatResearchSSE:
-
     @pytest.fixture
     def test_client(self):
         """Create a test client for the FastAPI app."""
         # Mock the agent configuration loading
-        with patch('datus.api.service.load_agent_config') as mock_config:
+        with patch("datus.api.service.load_agent_config") as mock_config:
             mock_config.return_value = MagicMock()
             mock_config.return_value.current_namespace = "test"
             mock_config.return_value.rag_base_path = "/tmp/test"
@@ -30,19 +30,17 @@ class TestChatResearchSSE:
 
     def test_chat_research_endpoint_requires_sse_accept_header(self, test_client):
         """Test that /chat_research endpoint requires Accept: text/event-stream header."""
-        request_data = {
-            "namespace": "test",
-            "task": "Generate a simple SQL query"
-        }
+        request_data = {"namespace": "test", "task": "Generate a simple SQL query"}
 
         # Request without SSE accept header should fail
         response = test_client.post("/workflows/chat_research", json=request_data)
         assert response.status_code == 400
         assert "text/event-stream" in response.json()["detail"]
 
-    @patch('datus.api.service.DatusAPIService.run_chat_research_stream')
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
     def test_chat_research_endpoint_accepts_sse_requests(self, mock_stream, test_client):
         """Test that /chat_research endpoint accepts SSE requests."""
+
         # Mock the streaming response
         async def mock_stream_generator():
             yield 'data: {"id":"evt_1","planId":"plan_123","timestamp":1703123456789,"event":"chat","content":"Starting research..."}\n\n'
@@ -50,16 +48,11 @@ class TestChatResearchSSE:
 
         mock_stream.return_value = mock_stream_generator()
 
-        request_data = {
-            "namespace": "test",
-            "task": "Generate a simple SQL query"
-        }
+        request_data = {"namespace": "test", "task": "Generate a simple SQL query"}
 
         # Request with SSE accept header
         response = test_client.post(
-            "/workflows/chat_research",
-            json=request_data,
-            headers={"Accept": "text/event-stream"}
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
         )
 
         assert response.status_code == 200
@@ -67,9 +60,10 @@ class TestChatResearchSSE:
         assert "Cache-Control" in response.headers
         assert response.headers["Cache-Control"] == "no-cache"
 
-    @patch('datus.api.service.DatusAPIService.run_chat_research_stream')
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
     def test_sse_response_format(self, mock_stream, test_client):
         """Test that SSE responses have correct format."""
+
         # Mock the streaming response with proper SSE format
         async def mock_stream_generator():
             yield 'data: {"id":"evt_1","planId":"plan_123","timestamp":1703123456789,"event":"chat","content":"Hello world"}\n\n'
@@ -77,33 +71,28 @@ class TestChatResearchSSE:
 
         mock_stream.return_value = mock_stream_generator()
 
-        request_data = {
-            "namespace": "test",
-            "task": "Test task"
-        }
+        request_data = {"namespace": "test", "task": "Test task"}
 
         response = test_client.post(
-            "/workflows/chat_research",
-            json=request_data,
-            headers={"Accept": "text/event-stream"}
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
         )
 
         assert response.status_code == 200
 
         # Get response content
-        content = response.content.decode('utf-8')
+        content = response.content.decode("utf-8")
 
         # Verify SSE format - should contain 'data: ' prefix and end with '\n\n'
-        lines = content.strip().split('\n')
+        lines = content.strip().split("\n")
         assert len(lines) >= 2  # At least one data line and empty line
 
         # Check that each data line starts with 'data: '
-        data_lines = [line for line in lines if line.startswith('data: ')]
+        data_lines = [line for line in lines if line.startswith("data: ")]
         assert len(data_lines) >= 1
 
         # Parse JSON from first data line
         first_data_line = data_lines[0]
-        json_str = first_data_line.replace('data: ', '')
+        json_str = first_data_line.replace("data: ", "")
         event_data = json.loads(json_str)
 
         # Verify event structure
@@ -113,9 +102,10 @@ class TestChatResearchSSE:
         assert "event" in event_data
         assert event_data["event"] in [e.value for e in DeepResearchEventType]
 
-    @patch('datus.api.service.DatusAPIService.run_chat_research_stream')
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
     def test_sse_events_contain_valid_json(self, mock_stream, test_client):
         """Test that all SSE events contain valid JSON."""
+
         # Mock streaming with various event types
         async def mock_stream_generator():
             yield 'data: {"id":"chat_1","planId":"plan_123","timestamp":1703123456789,"event":"chat","content":"Starting analysis..."}\n\n'
@@ -126,24 +116,19 @@ class TestChatResearchSSE:
 
         mock_stream.return_value = mock_stream_generator()
 
-        request_data = {
-            "namespace": "test",
-            "task": "Test comprehensive research task"
-        }
+        request_data = {"namespace": "test", "task": "Test comprehensive research task"}
 
         response = test_client.post(
-            "/workflows/chat_research",
-            json=request_data,
-            headers={"Accept": "text/event-stream"}
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
         )
 
         assert response.status_code == 200
 
-        content = response.content.decode('utf-8')
-        lines = content.strip().split('\n')
+        content = response.content.decode("utf-8")
+        lines = content.strip().split("\n")
 
         # Extract all data lines
-        data_lines = [line for line in lines if line.startswith('data: ')]
+        data_lines = [line for line in lines if line.startswith("data: ")]
 
         # Should have 5 events
         assert len(data_lines) == 5
@@ -154,11 +139,11 @@ class TestChatResearchSSE:
             DeepResearchEventType.PLAN_UPDATE,
             DeepResearchEventType.TOOL_CALL,
             DeepResearchEventType.TOOL_CALL_RESULT,
-            DeepResearchEventType.COMPLETE
+            DeepResearchEventType.COMPLETE,
         ]
 
         for i, data_line in enumerate(data_lines):
-            json_str = data_line.replace('data: ', '')
+            json_str = data_line.replace("data: ", "")
             event_data = json.loads(json_str)
 
             # Validate required fields
@@ -190,34 +175,30 @@ class TestChatResearchSSE:
             elif event_data["event"] == DeepResearchEventType.COMPLETE.value:
                 assert "content" in event_data
 
-    @patch('datus.api.service.DatusAPIService.run_chat_research_stream')
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
     def test_error_event_handling(self, mock_stream, test_client):
         """Test that error events are properly formatted."""
+
         # Mock streaming with an error event
         async def mock_stream_generator():
             yield 'data: {"id":"error_1","planId":"plan_456","timestamp":1703123456789,"event":"error","error":"Workflow execution failed: API timeout"}\n\n'
 
         mock_stream.return_value = mock_stream_generator()
 
-        request_data = {
-            "namespace": "test",
-            "task": "Test error handling"
-        }
+        request_data = {"namespace": "test", "task": "Test error handling"}
 
         response = test_client.post(
-            "/workflows/chat_research",
-            json=request_data,
-            headers={"Accept": "text/event-stream"}
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
         )
 
         assert response.status_code == 200
 
-        content = response.content.decode('utf-8')
-        data_lines = [line for line in content.split('\n') if line.startswith('data: ')]
+        content = response.content.decode("utf-8")
+        data_lines = [line for line in content.split("\n") if line.startswith("data: ")]
 
         assert len(data_lines) == 1
 
-        json_str = data_lines[0].replace('data: ', '')
+        json_str = data_lines[0].replace("data: ", "")
         event_data = json.loads(json_str)
 
         assert event_data["event"] == DeepResearchEventType.ERROR.value
@@ -227,20 +208,16 @@ class TestChatResearchSSE:
     def test_request_validation(self, test_client):
         """Test request validation for required fields."""
         # Test missing namespace
-        request_data = {
-            "task": "Generate SQL"
-        }
+        request_data = {"task": "Generate SQL"}
 
         response = test_client.post(
-            "/workflows/chat_research",
-            json=request_data,
-            headers={"Accept": "text/event-stream"}
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
         )
 
         # Should fail validation
         assert response.status_code == 422  # Validation error
 
-    @patch('datus.api.service.DatusAPIService.run_chat_research_stream')
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
     def test_plan_mode_parameter(self, mock_stream, test_client):
         """Test that plan_mode parameter is passed correctly."""
         # Mock to capture the request object passed to the service
@@ -255,17 +232,13 @@ class TestChatResearchSSE:
         async def mock_run_chat_research_stream(request, client_id):
             return capture_request_generator(request)
 
-        with patch.object(test_client.app.state.service, 'run_chat_research_stream', side_effect=mock_run_chat_research_stream):
-            request_data = {
-                "namespace": "test",
-                "task": "Test plan mode",
-                "plan_mode": True
-            }
+        with patch.object(
+            test_client.app.state.service, "run_chat_research_stream", side_effect=mock_run_chat_research_stream
+        ):
+            request_data = {"namespace": "test", "task": "Test plan mode", "plan_mode": True}
 
             response = test_client.post(
-                "/workflows/chat_research",
-                json=request_data,
-                headers={"Accept": "text/event-stream"}
+                "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
             )
 
             assert response.status_code == 200
@@ -279,7 +252,7 @@ class TestChatResearchPromptParameters:
     @pytest.fixture
     def test_client(self):
         """Create a test client for the FastAPI app."""
-        with patch('datus.api.service.load_agent_config') as mock_config:
+        with patch("datus.api.service.load_agent_config") as mock_config:
             mock_config.return_value = MagicMock()
             mock_config.return_value.current_namespace = "test"
             mock_config.return_value.rag_base_path = "/tmp/test"
@@ -295,13 +268,11 @@ class TestChatResearchPromptParameters:
             "namespace": "test",
             "task": "Generate SQL query",
             "prompt": "You are a SQL expert",
-            "prompt_mode": "append"
+            "prompt_mode": "append",
         }
 
         response = test_client.post(
-            "/workflows/chat_research",
-            json=request_data,
-            headers={"Accept": "text/event-stream"}
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
         )
 
         assert response.status_code == 200
@@ -312,13 +283,11 @@ class TestChatResearchPromptParameters:
             "namespace": "test",
             "task": "Generate SQL query",
             "prompt": "You are a data analyst",
-            "prompt_mode": "replace"
+            "prompt_mode": "replace",
         }
 
         response = test_client.post(
-            "/workflows/chat_research",
-            json=request_data,
-            headers={"Accept": "text/event-stream"}
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
         )
 
         assert response.status_code == 200
@@ -333,9 +302,7 @@ class TestChatResearchPromptParameters:
         }
 
         response = test_client.post(
-            "/workflows/chat_research",
-            json=request_data,
-            headers={"Accept": "text/event-stream"}
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
         )
 
         assert response.status_code == 200
@@ -349,9 +316,7 @@ class TestChatResearchPromptParameters:
         }
 
         response = test_client.post(
-            "/workflows/chat_research",
-            json=request_data,
-            headers={"Accept": "text/event-stream"}
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
         )
 
         assert response.status_code == 200
@@ -360,32 +325,23 @@ class TestChatResearchPromptParameters:
         """Test ChatResearchRequest model validation with prompt parameters."""
         # Valid request with prompt
         request = ChatResearchRequest(
-            namespace="test",
-            task="Generate SQL",
-            prompt="You are a SQL expert",
-            prompt_mode="append"
+            namespace="test", task="Generate SQL", prompt="You are a SQL expert", prompt_mode="append"
         )
         assert request.prompt == "You are a SQL expert"
         assert request.prompt_mode == "append"
 
         # Valid request with replace mode
         request = ChatResearchRequest(
-            namespace="test",
-            task="Generate SQL",
-            prompt="You are a data analyst",
-            prompt_mode="replace"
+            namespace="test", task="Generate SQL", prompt="You are a data analyst", prompt_mode="replace"
         )
         assert request.prompt_mode == "replace"
 
         # Valid request without prompt (should work)
-        request = ChatResearchRequest(
-            namespace="test",
-            task="Generate SQL"
-        )
+        request = ChatResearchRequest(namespace="test", task="Generate SQL")
         assert request.prompt is None
         assert request.prompt_mode == "append"  # default value
 
-    @patch('datus.api.service.DatusAPIService.run_chat_research_stream')
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
     def test_prompt_parameters_passed_to_workflow_metadata(self, mock_stream, test_client):
         """Test that prompt parameters are passed to workflow metadata."""
         captured_request = None
@@ -398,18 +354,18 @@ class TestChatResearchPromptParameters:
         async def mock_run_chat_research_stream(request, client_id):
             return capture_request_generator(request)
 
-        with patch.object(test_client.app.state.service, 'run_chat_research_stream', side_effect=mock_run_chat_research_stream):
+        with patch.object(
+            test_client.app.state.service, "run_chat_research_stream", side_effect=mock_run_chat_research_stream
+        ):
             request_data = {
                 "namespace": "test",
                 "task": "Generate SQL with custom prompt",
                 "prompt": "You are a senior SQL developer",
-                "prompt_mode": "replace"
+                "prompt_mode": "replace",
             }
 
             response = test_client.post(
-                "/workflows/chat_research",
-                json=request_data,
-                headers={"Accept": "text/event-stream"}
+                "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
             )
 
             assert response.status_code == 200

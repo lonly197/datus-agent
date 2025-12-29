@@ -3,8 +3,9 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from datus.agent.intent_detection import IntentDetector, IntentResult, detect_sql_intent
 from datus.api.models import RunWorkflowRequest
@@ -18,9 +19,7 @@ class TestIntentDetection:
         detector = IntentDetector()
 
         # Chinese SQL generation query
-        result = detector.detect_sql_intent_by_keyword(
-            "从 ODS 试驾表和线索表关联，统计每个月'首次试驾'到'下定'的平均转化周期"
-        )
+        result = detector.detect_sql_intent_by_keyword("从 ODS 试驾表和线索表关联，统计每个月'首次试驾'到'下定'的平均转化周期")
         assert result[0] == True  # Should detect SQL intent
         assert "试驾" in result[1]["keyword_matches"]
         assert "线索" in result[1]["keyword_matches"]
@@ -29,9 +28,7 @@ class TestIntentDetection:
         """Test keyword detection for SQL review queries."""
         detector = IntentDetector()
 
-        result = detector.detect_sql_intent_by_keyword(
-            "审查以下SQL：SELECT * FROM dwd_assign_dlr_clue_fact_di"
-        )
+        result = detector.detect_sql_intent_by_keyword("审查以下SQL：SELECT * FROM dwd_assign_dlr_clue_fact_di")
         assert result[0] == True
         assert "sql" in result[1]["keyword_matches"]
         assert "审查" in result[1]["keyword_matches"]
@@ -40,18 +37,14 @@ class TestIntentDetection:
         """Test keyword detection for non-SQL queries."""
         detector = IntentDetector()
 
-        result = detector.detect_sql_intent_by_keyword(
-            "What is the weather today?"
-        )
+        result = detector.detect_sql_intent_by_keyword("What is the weather today?")
         assert result[0] == False
 
     def test_sql_pattern_detection(self):
         """Test SQL pattern detection."""
         detector = IntentDetector()
 
-        result = detector.detect_sql_intent_by_keyword(
-            "SELECT user_id, name FROM users WHERE status = 'active'"
-        )
+        result = detector.detect_sql_intent_by_keyword("SELECT user_id, name FROM users WHERE status = 'active'")
         assert result[0] == True
         assert len(result[1]["pattern_matches"]) > 0
 
@@ -65,9 +58,7 @@ class TestIntentDetection:
         mock_model.generate.return_value = '{"intent": "sql_generation", "confidence": 0.9}'
 
         result = await detector.detect_sql_intent(
-            text="Generate a report on user activity",
-            model=mock_model,
-            use_llm_fallback=True
+            text="Generate a report on user activity", model=mock_model, use_llm_fallback=True
         )
 
         assert result.intent == "sql_generation"
@@ -76,11 +67,7 @@ class TestIntentDetection:
 
     def test_intent_result_creation(self):
         """Test IntentResult dataclass."""
-        result = IntentResult(
-            intent="sql_generation",
-            confidence=0.85,
-            metadata={"source": "keyword"}
-        )
+        result = IntentResult(intent="sql_generation", confidence=0.85, metadata={"source": "keyword"})
 
         assert result.intent == "sql_generation"
         assert result.confidence == 0.85
@@ -105,13 +92,13 @@ class TestAutoInjectionIntegration:
         mock_agent.global_config = mock_config
 
         # Mock ExtKnowledgeStore
-        with patch('datus.api.service.ExtKnowledgeStore') as mock_store_class:
+        with patch("datus.api.service.ExtKnowledgeStore") as mock_store_class:
             mock_store = MagicMock()
             # Mock search results
             mock_results = MagicMock()
             mock_results.__iter__.return_value = [
                 {"terminology": "partition_pruning_basic", "explanation": "强制分区裁剪"},
-                {"terminology": "forbid_select_star", "explanation": "禁止SELECT *"}
+                {"terminology": "forbid_select_star", "explanation": "禁止SELECT *"},
             ]
             mock_results.__len__.return_value = 2
             mock_store.search_knowledge.return_value = mock_results
@@ -126,7 +113,7 @@ class TestAutoInjectionIntegration:
                 workflow="chat_agentic_plan",
                 namespace="test",
                 plan_mode=True,
-                ext_knowledge=None  # Explicitly no ext_knowledge
+                ext_knowledge=None,  # Explicitly no ext_knowledge
             )
 
             # Call _create_sql_task
@@ -157,7 +144,7 @@ class TestAutoInjectionIntegration:
             workflow="chat_agentic",
             namespace="test",
             plan_mode=False,  # Not plan mode
-            ext_knowledge=None
+            ext_knowledge=None,
         )
 
         sql_task = await service._create_sql_task(request, "test_task", mock_agent)
@@ -185,7 +172,7 @@ class TestAutoInjectionIntegration:
             workflow="chat_agentic_plan",
             namespace="test",
             plan_mode=True,
-            ext_knowledge=explicit_knowledge  # Explicit knowledge provided
+            ext_knowledge=explicit_knowledge,  # Explicit knowledge provided
         )
 
         sql_task = await service._create_sql_task(request, "test_task", mock_agent)
@@ -201,7 +188,7 @@ class TestAutoInjectionIntegration:
         mock_config.rag_storage_path.return_value = "/tmp/test"
 
         # Mock ExtKnowledgeStore
-        with patch('datus.tools.func_tool.context_search.ExtKnowledgeStore') as mock_store_class:
+        with patch("datus.tools.func_tool.context_search.ExtKnowledgeStore") as mock_store_class:
             mock_store = MagicMock()
             mock_store.table_size.return_value = 5  # Has knowledge
             mock_store_class.return_value = mock_store
@@ -223,7 +210,7 @@ class TestAutoInjectionIntegration:
         mock_config.rag_storage_path.return_value = "/tmp/test"
 
         # Mock empty ExtKnowledgeStore
-        with patch('datus.tools.func_tool.context_search.ExtKnowledgeStore') as mock_store_class:
+        with patch("datus.tools.func_tool.context_search.ExtKnowledgeStore") as mock_store_class:
             mock_store = MagicMock()
             mock_store.table_size.return_value = 0  # Empty store
             mock_store_class.return_value = mock_store

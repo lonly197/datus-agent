@@ -51,7 +51,9 @@ class WorkflowRunner:
         elif hasattr(self.args, "plan_mode"):
             plan_mode = self.args.plan_mode
 
-        logger.info(f"Workflow initialization: plan_type={plan_type}, plan_mode={plan_mode}, metadata={self.initial_metadata}")
+        logger.info(
+            f"Workflow initialization: plan_type={plan_type}, plan_mode={plan_mode}, metadata={self.initial_metadata}"
+        )
 
         # Override workflow type for plan mode
         if plan_mode:

@@ -202,6 +202,7 @@ class PlanTool:
             if task_type == "auto":
                 # 导入TaskTypeClassifier进行自动分类
                 from datus.cli.plan_hooks import TaskTypeClassifier
+
                 task_type = TaskTypeClassifier.classify_task(content)
 
                 # 根据任务类型设置默认的requires_tool和requires_llm_reasoning
@@ -221,6 +222,7 @@ class PlanTool:
             analysis_context = None
             if task_type == TaskTypeClassifier.LLM_ANALYSIS:
                 from datus.cli.plan_hooks import TaskTypeClassifier as TTC
+
                 analysis_context = TTC.get_task_context(content, task_type)
 
             # Validate metadata
@@ -249,7 +251,7 @@ class PlanTool:
                     reasoning_type=reasoning_type,
                     tool_calls=tool_calls,
                     task_type=task_type,
-                    analysis_context=analysis_context
+                    analysis_context=analysis_context,
                 )
                 todo_list.items.append(new_item)
                 logger.info(f"Keeping completed step: {content}")
@@ -263,7 +265,7 @@ class PlanTool:
                     reasoning_type=reasoning_type,
                     tool_calls=tool_calls,
                     task_type=task_type,
-                    analysis_context=analysis_context
+                    analysis_context=analysis_context,
                 )
                 todo_list.items.append(item)
                 logger.info(f"Added pending step: {content}")

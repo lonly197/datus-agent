@@ -53,6 +53,7 @@ _depends_get_current_client = Depends(get_current_client)
 @dataclass
 class RunningTask:
     """Represents a currently running task."""
+
     task_id: str
     task: asyncio.Task[Any]
     created_at: datetime
@@ -71,15 +72,13 @@ class DatusAPIService:
         self.running_tasks: Dict[str, RunningTask] = {}
         self.running_tasks_lock = asyncio.Lock()
 
-    async def register_running_task(self, task_id: str, task: asyncio.Task[Any], meta: Optional[Dict[str, Any]] = None) -> None:
+    async def register_running_task(
+        self, task_id: str, task: asyncio.Task[Any], meta: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Register a running task in the registry."""
         async with self.running_tasks_lock:
             self.running_tasks[task_id] = RunningTask(
-                task_id=task_id,
-                task=task,
-                created_at=datetime.now(),
-                status="running",
-                meta=meta
+                task_id=task_id, task=task, created_at=datetime.now(), status="running", meta=meta
             )
 
     async def unregister_running_task(self, task_id: str) -> None:
@@ -139,6 +138,7 @@ class DatusAPIService:
 
             # Reconstruct the request
             from .models import RunWorkflowRequest
+
             req = RunWorkflowRequest(**req_data)
 
             # Generate the stream
@@ -191,6 +191,7 @@ class DatusAPIService:
 
             # Reconstruct the request
             from .models import ChatResearchRequest
+
             req = ChatResearchRequest(**req_data)
 
             # Generate the stream
@@ -298,9 +299,11 @@ class DatusAPIService:
             external_knowledge = request.ext_knowledge
 
         # Auto-inject external knowledge in plan_mode when not explicitly provided
-        if (request.plan_mode and request.ext_knowledge is None and
-            getattr(agent.global_config, 'plan_mode_auto_inject_ext_knowledge', True)):
-
+        if (
+            request.plan_mode
+            and request.ext_knowledge is None
+            and getattr(agent.global_config, "plan_mode_auto_inject_ext_knowledge", True)
+        ):
             try:
                 # Import here to avoid circular imports
                 from datus.agent.intent_detection import detect_sql_intent
@@ -317,12 +320,14 @@ class DatusAPIService:
                 intent_result = await detect_sql_intent(
                     text=request.task,
                     model=model,
-                    keyword_threshold=getattr(agent.global_config, 'intent_detector_keyword_threshold', 1),
-                    llm_confidence_threshold=getattr(agent.global_config, 'intent_detector_llm_confidence_threshold', 0.7)
+                    keyword_threshold=getattr(agent.global_config, "intent_detector_keyword_threshold", 1),
+                    llm_confidence_threshold=getattr(
+                        agent.global_config, "intent_detector_llm_confidence_threshold", 0.7
+                    ),
                 )
 
                 # If SQL-related intent detected, search for relevant external knowledge
-                if intent_result.intent in ['sql_generation', 'sql_review', 'sql_related']:
+                if intent_result.intent in ["sql_generation", "sql_review", "sql_related"]:
                     try:
                         ext_knowledge_store = ExtKnowledgeStore(agent.global_config.rag_storage_path())
 
@@ -333,15 +338,15 @@ class DatusAPIService:
                                 domain=domain or "",
                                 layer1=layer1 or "",
                                 layer2=layer2 or "",
-                                top_n=5
+                                top_n=5,
                             )
 
                             # Build knowledge string from results
                             if len(search_results) > 0:
                                 knowledge_items = []
                                 for result in search_results:
-                                    terminology = result.get('terminology', '')
-                                    explanation = result.get('explanation', '')
+                                    terminology = result.get("terminology", "")
+                                    explanation = result.get("explanation", "")
                                     if terminology and explanation:
                                         knowledge_items.append(f"- {terminology}: {explanation}")
 
@@ -350,12 +355,16 @@ class DatusAPIService:
                                     if external_knowledge:
                                         external_knowledge = f"{external_knowledge}\n\nAuto-detected relevant knowledge:\n{auto_injected_knowledge}"
                                     else:
-                                        external_knowledge = f"Auto-detected relevant knowledge:\n{auto_injected_knowledge}"
+                                        external_knowledge = (
+                                            f"Auto-detected relevant knowledge:\n{auto_injected_knowledge}"
+                                        )
 
-                                    logger.info(f"Auto-injected {len(knowledge_items)} knowledge items for task: {request.task[:50]}...")
+                                    logger.info(
+                                        f"Auto-injected {len(knowledge_items)} knowledge items for task: {request.task[:50]}..."
+                                    )
 
                                     # Add metadata to indicate auto-injection occurred
-                                    if not hasattr(request, '_auto_injected_knowledge'):
+                                    if not hasattr(request, "_auto_injected_knowledge"):
                                         request._auto_injected_knowledge = []
                                     request._auto_injected_knowledge.extend(knowledge_items)
 
@@ -572,9 +581,10 @@ class DatusAPIService:
                     layer2=request.layer2,
                     ext_knowledge=request.ext_knowledge,
                     plan_mode=request.plan_mode,
-                    mode="async"
+                    mode="async",
                 ),
-                task_id, agent
+                task_id,
+                agent,
             )
 
             # Enable plan mode in workflow metadata
@@ -582,7 +592,7 @@ class DatusAPIService:
                 "plan_mode": request.plan_mode if request.plan_mode is not None else True,
                 "auto_execute_plan": request.auto_execute_plan if request.auto_execute_plan is not None else False,
                 "prompt": request.prompt,
-                "prompt_mode": request.prompt_mode
+                "prompt_mode": request.prompt_mode,
             }
 
             # Initialize task tracking
@@ -618,7 +628,7 @@ class DatusAPIService:
                 id=f"error_{int(time.time() * 1000)}",
                 timestamp=int(time.time() * 1000),
                 event=DeepResearchEventType.ERROR,
-                error=error_message
+                error=error_message,
             )
 
             # Add suggestions as additional data if available
@@ -676,62 +686,37 @@ class DatusAPIService:
         # Database connection errors
         if any(keyword in error_lower for keyword in ["connection", "connect", "network", "timeout"]):
             enhanced_msg = "数据库连接出现问题"
-            suggestions = [
-                "检查数据库服务是否正在运行",
-                "确认网络连接是否正常",
-                "验证数据库连接配置",
-                "稍后重试操作"
-            ]
+            suggestions = ["检查数据库服务是否正在运行", "确认网络连接是否正常", "验证数据库连接配置", "稍后重试操作"]
 
         # Table/column not found errors
         elif any(keyword in error_lower for keyword in ["table", "column", "relation", "does not exist"]):
             enhanced_msg = "查询的表或列不存在"
-            suggestions = [
-                "检查表名和列名是否正确",
-                "确认数据库schema",
-                "使用搜索功能查找可用表"
-            ]
+            suggestions = ["检查表名和列名是否正确", "确认数据库schema", "使用搜索功能查找可用表"]
 
         # Permission errors
         elif any(keyword in error_lower for keyword in ["permission", "access", "denied", "privilege"]):
             enhanced_msg = "数据库访问权限不足"
-            suggestions = [
-                "检查数据库用户权限",
-                "确认有查询相关表的权限",
-                "联系数据库管理员"
-            ]
+            suggestions = ["检查数据库用户权限", "确认有查询相关表的权限", "联系数据库管理员"]
 
         # SQL syntax errors
         elif any(keyword in error_lower for keyword in ["syntax", "invalid sql", "parse error"]):
             enhanced_msg = "SQL语法错误"
-            suggestions = [
-                "检查SQL语句语法",
-                "确认引号和括号匹配",
-                "验证SQL语句结构"
-            ]
+            suggestions = ["检查SQL语句语法", "确认引号和括号匹配", "验证SQL语句结构"]
 
         # Resource exhausted errors
         elif any(keyword in error_lower for keyword in ["resource", "memory", "disk", "quota"]):
             enhanced_msg = "系统资源不足"
-            suggestions = [
-                "减少查询的数据量",
-                "优化查询条件",
-                "分批处理大数据"
-            ]
+            suggestions = ["减少查询的数据量", "优化查询条件", "分批处理大数据"]
 
         else:
             enhanced_msg = "执行过程中出现错误"
-            suggestions = [
-                "检查输入参数是否正确",
-                "确认系统配置",
-                "联系技术支持"
-            ]
+            suggestions = ["检查输入参数是否正确", "确认系统配置", "联系技术支持"]
 
         return enhanced_msg, suggestions
 
     async def cancel_all_running_tasks(self):
         """Cancel all currently running tasks during shutdown."""
-        if not hasattr(self, 'running_tasks_lock') or not hasattr(self, 'running_tasks'):
+        if not hasattr(self, "running_tasks_lock") or not hasattr(self, "running_tasks"):
             return
 
         async with self.running_tasks_lock:
@@ -752,7 +737,7 @@ class DatusAPIService:
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*[t.task for t in tasks_to_cancel if not t.task.done()], return_exceptions=True),
-                    timeout=5.0
+                    timeout=5.0,
                 )
             except asyncio.TimeoutError:
                 logger.warning("Some tasks did not cancel within timeout")
@@ -768,8 +753,8 @@ service = None
 
 async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
     """Generate Server-Sent Events stream for workflow execution."""
-    import json
     import asyncio
+    import json
     import time as time_module
 
     task_id = req.task_id or service._generate_task_id(current_client)
@@ -818,7 +803,11 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                     # Update task in database
                     if service.task_store:
                         service.task_store.update_task(task_id, sql_result=str(sql_result))
-                    result_data = {"row_count": output.get("row_count", 0), "sql_result": sql_result, "progress_seq": progress_seq}
+                    result_data = {
+                        "row_count": output.get("row_count", 0),
+                        "sql_result": sql_result,
+                        "progress_seq": progress_seq,
+                    }
                     yield f"event: execution_complete\ndata: {to_str(result_data)}\n\n"
 
             elif action.action_type == "output_generation" and action.status == "success":
@@ -855,7 +844,12 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
 
             # 2. Handle workflow and node progress events
             elif action.action_id == "workflow_initialization":
-                progress_data = {"action": "initialization", "status": action.status, "message": action.messages, "progress_seq": progress_seq}
+                progress_data = {
+                    "action": "initialization",
+                    "status": action.status,
+                    "message": action.messages,
+                    "progress_seq": progress_seq,
+                }
                 yield f"event: progress\ndata: {to_str(progress_data)}\n\n"
 
             elif action.action_id.startswith("node_execution_"):
@@ -881,7 +875,11 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                 }
                 yield f"event: chat_response\ndata: {to_str(chat_data)}\n\n"
 
-            elif action.role == ActionRole.ASSISTANT and action.action_type in ("message", "llm_generation", "thinking"):
+            elif action.role == ActionRole.ASSISTANT and action.action_type in (
+                "message",
+                "llm_generation",
+                "thinking",
+            ):
                 # Handle chat thinking and streaming content
                 output = action.output or {}
                 partial_content = ""
@@ -935,9 +933,19 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
 
             # 4. Handle expanded node-specific progress for streaming operations
             elif action.action_type in [
-                "schema_linking", "sql_preparation", "sql_generation", "sql_execution",
-                "output_preparation", "output_generation", "llm_generation", "tool_call",
-                "function_call", "message", "thinking", "raw_stream", "response"
+                "schema_linking",
+                "sql_preparation",
+                "sql_generation",
+                "sql_execution",
+                "output_preparation",
+                "output_generation",
+                "llm_generation",
+                "tool_call",
+                "function_call",
+                "message",
+                "thinking",
+                "raw_stream",
+                "response",
             ]:
                 output = action.output or {}
                 detail_data = {
@@ -977,10 +985,10 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                 # Extract serializable subset to avoid issues with complex objects
                 serializable_action = {
                     "action_id": action.action_id,
-                    "role": str(action.role) if hasattr(action, 'role') else None,
+                    "role": str(action.role) if hasattr(action, "role") else None,
                     "action_type": action.action_type,
                     "messages": action.messages,
-                    "status": str(action.status) if hasattr(action, 'status') else None,
+                    "status": str(action.status) if hasattr(action, "status") else None,
                     "progress_seq": progress_seq,
                 }
 
@@ -1083,13 +1091,11 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
 
                 # Create and register the streaming task
                 task_id = req.task_id or service._generate_task_id(current_client)
-                stream_task = asyncio.create_task(
-                    service._run_streaming_workflow_task(req, current_client, task_id)
-                )
+                stream_task = asyncio.create_task(service._run_streaming_workflow_task(req, current_client, task_id))
                 await service.register_running_task(
                     task_id,
                     stream_task,
-                    meta={"type": "workflow_stream", "request": req.model_dump(), "client": current_client}
+                    meta={"type": "workflow_stream", "request": req.model_dump(), "client": current_client},
                 )
 
                 # Return streaming response
@@ -1105,13 +1111,11 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
             else:
                 # Synchronous mode - run in background task for cancellation support
                 task_id = req.task_id or service._generate_task_id(current_client)
-                sync_task = asyncio.create_task(
-                    service._run_sync_workflow_task(req, current_client, task_id)
-                )
+                sync_task = asyncio.create_task(service._run_sync_workflow_task(req, current_client, task_id))
                 await service.register_running_task(
                     task_id,
                     sync_task,
-                    meta={"type": "workflow_sync", "request": req.model_dump(), "client": current_client}
+                    meta={"type": "workflow_sync", "request": req.model_dump(), "client": current_client},
                 )
 
                 # Wait for completion and return result
@@ -1137,20 +1141,15 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
             # Check if client accepts server-sent events
             accept_header = request.headers.get("accept", "")
             if "text/event-stream" not in accept_header:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Accept header must include 'text/event-stream'"
-                )
+                raise HTTPException(status_code=400, detail="Accept header must include 'text/event-stream'")
 
             # Create and register the streaming task
             task_id = f"research_{current_client}_{int(time.time())}"
-            stream_task = asyncio.create_task(
-                service._run_chat_research_task(req, current_client, task_id)
-            )
+            stream_task = asyncio.create_task(service._run_chat_research_task(req, current_client, task_id))
             await service.register_running_task(
                 task_id,
                 stream_task,
-                meta={"type": "chat_research", "request": req.model_dump(), "client": current_client}
+                meta={"type": "chat_research", "request": req.model_dump(), "client": current_client},
             )
 
             # Return streaming response
@@ -1200,7 +1199,7 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
                         created_ts = task["created_at"]
                         if isinstance(created_ts, str):
                             try:
-                                created_ts = datetime.fromisoformat(created_ts.replace('Z', '+00:00')).timestamp()
+                                created_ts = datetime.fromisoformat(created_ts.replace("Z", "+00:00")).timestamp()
                             except:
                                 continue
 
@@ -1218,7 +1217,7 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
                     }
                     for rt in running_tasks.values()
                 ],
-                "recent_tasks": recent_tasks
+                "recent_tasks": recent_tasks,
             }
         except Exception as e:
             logger.error(f"Task list error: {e}")
@@ -1280,11 +1279,7 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
                 if service.task_store:
                     service.task_store.update_task(task_id, status="cancelled")
 
-                return {
-                    "task_id": task_id,
-                    "status": "cancelled",
-                    "message": "Task cancellation requested"
-                }
+                return {"task_id": task_id, "status": "cancelled", "message": "Task cancellation requested"}
 
             # Check if task exists in database
             if service.task_store:
@@ -1295,7 +1290,7 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
                     return {
                         "task_id": task_id,
                         "status": "cancelled",
-                        "message": "Task cancellation requested (best-effort)"
+                        "message": "Task cancellation requested (best-effort)",
                     }
 
             raise HTTPException(status_code=404, detail=f"Running task {task_id} not found")

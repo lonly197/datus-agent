@@ -2,21 +2,27 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-import pytest
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 from datus.api.event_converter import DeepResearchEventConverter
-from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.api.models import (
-    DeepResearchEventType, ChatEvent, PlanUpdateEvent,
-    ToolCallEvent, ToolCallResultEvent, CompleteEvent, ErrorEvent,
-    TodoItem, TodoStatus
+    ChatEvent,
+    CompleteEvent,
+    DeepResearchEventType,
+    ErrorEvent,
+    PlanUpdateEvent,
+    TodoItem,
+    TodoStatus,
+    ToolCallEvent,
+    ToolCallResultEvent,
 )
+from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
 
 class TestDeepResearchEventConverter:
-
     def setup_method(self):
         """Setup test fixtures."""
         self.converter = DeepResearchEventConverter()
@@ -32,7 +38,7 @@ class TestDeepResearchEventConverter:
             output={"content": "Hello world", "response": "Hi there"},
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
-            end_time=datetime.now()
+            end_time=datetime.now(),
         )
 
         event = self.converter.convert_action_to_event(action, 1)
@@ -54,7 +60,7 @@ class TestDeepResearchEventConverter:
             output={},
             status=ActionStatus.PROCESSING,
             start_time=datetime.now(),
-            end_time=None
+            end_time=None,
         )
 
         event = self.converter.convert_action_to_event(action, 1)
@@ -82,7 +88,7 @@ class TestDeepResearchEventConverter:
             output={},
             status=ActionStatus.PROCESSING,
             start_time=datetime.now(),
-            end_time=None
+            end_time=None,
         )
 
         # Convert tool call first
@@ -99,7 +105,7 @@ class TestDeepResearchEventConverter:
             output={"result": "success", "data": {"tables": ["users", "orders"]}},
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
-            end_time=datetime.now()
+            end_time=datetime.now(),
         )
 
         event = self.converter.convert_action_to_event(result_action, 2)
@@ -122,12 +128,12 @@ class TestDeepResearchEventConverter:
             output={
                 "todos": [
                     {"id": "task_1", "content": "Analyze schema", "status": "completed"},
-                    {"id": "task_2", "content": "Generate SQL", "status": "in_progress"}
+                    {"id": "task_2", "content": "Generate SQL", "status": "in_progress"},
                 ]
             },
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
-            end_time=datetime.now()
+            end_time=datetime.now(),
         )
 
         event = self.converter.convert_action_to_event(action, 1)
@@ -151,7 +157,7 @@ class TestDeepResearchEventConverter:
             output={"final_result": "SQL generated"},
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
-            end_time=datetime.now()
+            end_time=datetime.now(),
         )
 
         event = self.converter.convert_action_to_event(action, 1)
@@ -172,7 +178,7 @@ class TestDeepResearchEventConverter:
             output={"error": "API rate limit exceeded"},
             status=ActionStatus.FAILED,
             start_time=datetime.now(),
-            end_time=datetime.now()
+            end_time=datetime.now(),
         )
 
         event = self.converter.convert_action_to_event(action, 1)
@@ -193,7 +199,7 @@ class TestDeepResearchEventConverter:
             output={},
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
-            end_time=datetime.now()
+            end_time=datetime.now(),
         )
 
         event = self.converter.convert_action_to_event(action, 1)
@@ -202,6 +208,7 @@ class TestDeepResearchEventConverter:
 
     def test_convert_stream_to_events_yields_sse_format(self):
         """Test that convert_stream_to_events yields proper SSE format."""
+
         async def mock_action_stream():
             yield ActionHistory(
                 action_id="chat_1",
@@ -212,7 +219,7 @@ class TestDeepResearchEventConverter:
                 output={"content": "Hello world"},
                 status=ActionStatus.SUCCESS,
                 start_time=datetime.now(),
-                end_time=datetime.now()
+                end_time=datetime.now(),
             )
 
         # This would require async testing, but for now we'll test the synchronous parts
@@ -231,7 +238,7 @@ class TestDeepResearchEventConverter:
                 output={"content": "Hello"},
                 status=ActionStatus.SUCCESS,
                 start_time=datetime.now(),
-                end_time=datetime.now()
+                end_time=datetime.now(),
             ),
             ActionHistory(
                 action_id="tool_1",
@@ -242,8 +249,8 @@ class TestDeepResearchEventConverter:
                 output={},
                 status=ActionStatus.PROCESSING,
                 start_time=datetime.now(),
-                end_time=None
-            )
+                end_time=None,
+            ),
         ]
 
         events = []

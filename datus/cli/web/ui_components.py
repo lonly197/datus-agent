@@ -98,8 +98,8 @@ class UIComponents:
             except Exception:
                 pass
 
-            st.caption(t("session_created").format(date=info.get('created_at', 'N/A')))
-            st.caption(t("session_messages").format(count=info.get('message_count', 0)))
+            st.caption(t("session_created").format(date=info.get("created_at", "N/A")))
+            st.caption(t("session_messages").format(count=info.get("message_count", 0)))
             latest_msg = info.get("latest_user_message", "")
             if latest_msg:
                 st.caption(t("session_latest").format(msg=latest_msg[:50]))
@@ -289,7 +289,9 @@ class UIComponents:
                     st.caption(" | ".join(details))
 
                 with col2:
-                    if st.button(t("button_use_subagent").format(subagent=subagent_name), key=f"switch_{subagent_name}"):
+                    if st.button(
+                        t("button_use_subagent").format(subagent=subagent_name), key=f"switch_{subagent_name}"
+                    ):
                         UIComponents.safe_update_query_params({"subagent": subagent_name})
                         st.rerun()
 
@@ -622,9 +624,13 @@ class UIComponents:
                 # Timing information
                 if action.start_time and action.end_time:
                     duration = (action.end_time - action.start_time).total_seconds()
-                    st.caption(t("action_started_duration").format(time=action.start_time.strftime('%H:%M:%S'), duration=duration))
+                    st.caption(
+                        t("action_started_duration").format(
+                            time=action.start_time.strftime("%H:%M:%S"), duration=duration
+                        )
+                    )
                 elif action.start_time:
-                    st.caption(t("action_started").format(time=action.start_time.strftime('%H:%M:%S')))
+                    st.caption(t("action_started").format(time=action.start_time.strftime("%H:%M:%S")))
 
     def render_action_history(self, actions: List[ActionHistory], chat_id: str = None, expanded: bool = False) -> None:
         """Render complete action history with full details.

@@ -2,11 +2,12 @@
 Tests for task management API endpoints.
 """
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from datus.api.models import ChatResearchRequest, RunWorkflowRequest
 from datus.api.service import DatusAPIService, RunningTask
-from datus.api.models import RunWorkflowRequest, ChatResearchRequest
 
 
 class TestTaskManagement:
@@ -55,6 +56,7 @@ class TestTaskManagement:
     @pytest.mark.asyncio
     async def test_task_cancellation(self, service):
         """Test task cancellation functionality."""
+
         # Create a long-running task
         async def long_running():
             await asyncio.sleep(10)
@@ -97,19 +99,14 @@ class TestTaskManagement:
     def test_running_task_dataclass(self):
         """Test RunningTask dataclass."""
         from datetime import datetime
+
         from datus.api.service import RunningTask
 
         task = asyncio.create_task(asyncio.sleep(1))
         created_at = datetime.now()
         meta = {"test": "data"}
 
-        running_task = RunningTask(
-            task_id="test",
-            task=task,
-            created_at=created_at,
-            status="running",
-            meta=meta
-        )
+        running_task = RunningTask(task_id="test", task=task, created_at=created_at, status="running", meta=meta)
 
         assert running_task.task_id == "test"
         assert running_task.status == "running"

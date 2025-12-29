@@ -10,9 +10,9 @@ from agents import Tool
 
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.agent_models import SubAgentConfig
+from datus.storage.ext_knowledge.store import ExtKnowledgeStore
 from datus.storage.metric.store import SemanticMetricsRAG
 from datus.storage.reference_sql.store import ReferenceSqlRAG
-from datus.storage.ext_knowledge.store import ExtKnowledgeStore
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.loggings import get_logger
 
@@ -251,25 +251,23 @@ class ContextSearchTools:
         """
         try:
             search_results = self.ext_knowledge_store.search_knowledge(
-                query_text=query_text,
-                domain=domain,
-                layer1=layer1,
-                layer2=layer2,
-                top_n=top_n
+                query_text=query_text, domain=domain, layer1=layer1, layer2=layer2, top_n=top_n
             )
 
             # Convert pyarrow table to list of dicts
             results = []
             if len(search_results) > 0:
                 for result in search_results:
-                    results.append({
-                        "terminology": result.get("terminology", ""),
-                        "explanation": result.get("explanation", ""),
-                        "domain": result.get("domain", ""),
-                        "layer1": result.get("layer1", ""),
-                        "layer2": result.get("layer2", ""),
-                        "created_at": result.get("created_at", "")
-                    })
+                    results.append(
+                        {
+                            "terminology": result.get("terminology", ""),
+                            "explanation": result.get("explanation", ""),
+                            "domain": result.get("domain", ""),
+                            "layer1": result.get("layer1", ""),
+                            "layer2": result.get("layer2", ""),
+                            "created_at": result.get("created_at", ""),
+                        }
+                    )
 
             logger.debug(f"Found {len(results)} external knowledge entries for query: {query_text}")
             return FuncToolResult(success=1, error=None, result=results)

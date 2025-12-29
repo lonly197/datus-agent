@@ -41,20 +41,20 @@ def test_todo_write_preserves_llm_reasoning_fields():
             "status": "pending",
             "requires_tool": False,
             "requires_llm_reasoning": True,
-            "reasoning_type": "analysis"
+            "reasoning_type": "analysis",
         },
         {
             "content": "Generate the SQL query",
             "status": "pending",
             "requires_tool": True,
-            "requires_llm_reasoning": False
+            "requires_llm_reasoning": False,
         },
         {
             "content": "Execute the query",
             "status": "pending",
             "requires_tool": True,
-            "tool_calls": [{"tool": "execute_sql", "arguments": {"query": "SELECT * FROM users"}}]
-        }
+            "tool_calls": [{"tool": "execute_sql", "arguments": {"query": "SELECT * FROM users"}}],
+        },
     ]
 
     result = plan_tool.todo_write(json.dumps(todos))
@@ -82,5 +82,3 @@ def test_todo_write_preserves_llm_reasoning_fields():
     # Check tool_calls field
     assert execute_item is not None
     assert execute_item.tool_calls == [{"tool": "execute_sql", "arguments": {"query": "SELECT * FROM users"}}]
-
-

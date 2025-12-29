@@ -13,15 +13,13 @@ from typing import Dict, Optional
 
 # 中文本地化字典 - 简体中文 (zh_CN)
 LOCALE_ZH_CN: Dict[str, str] = {
-# 页面配置
-"page_title": "AI Agent",
-
+    # 页面配置
+    "page_title": "AI Agent",
     # 主标题和描述
     "title_main": "🤖 AI Agent",
     "title_subagent": "🤖 AI Agent - {subagent}",
     "caption_main": "智能助手",
     "caption_subagent": "专用的 {subagent} 子代理，用于 SQL 生成 - 自然语言转 SQL",
-
     # 侧边栏
     "sidebar_title": "AI Agent",
     "sidebar_subagent_title": "🤖 当前子代理",
@@ -32,7 +30,6 @@ LOCALE_ZH_CN: Dict[str, str] = {
     "sidebar_session_title": "💬 会话",
     "sidebar_history_title": "📚 会话历史",
     "sidebar_debug_title": "🔍 调试信息",
-
     # 按钮
     "button_clear_chat": "🗑️ 清空聊天",
     "button_load_session": "🔗 加载会话",
@@ -40,12 +37,10 @@ LOCALE_ZH_CN: Dict[str, str] = {
     "button_save_success": "👍 成功",
     "button_download": "⏬ 下载",
     "button_configure_chart": "⚙️ 配置图表",
-
     # Tabs
     "tab_generated_sql": "🔧 生成的 SQL",
     "tab_execute_result": "📊 执行结果",
     "tab_chart": "📈 可视化",
-
     # 提示信息
     "config_loaded": "✅ 配置已加载！",
     "config_failed": "❌ 配置加载失败",
@@ -66,23 +61,19 @@ LOCALE_ZH_CN: Dict[str, str] = {
     "config_load_failed": "加载配置失败: {e}",
     "db_not_initialized": "数据库连接器未初始化。请先配置代理。",
     "excel_generation_failed": "生成 Excel 失败: {error}",
-
     # 会话项
     "session_expander": "📝 {sid}...",
     "session_created": "**创建时间:** {date}",
     "session_messages": "**消息数:** {count}",
     "session_latest": "**最新消息:** {msg}",
-
     # 子代理
     "subagents_expander": "🔧 访问专用子代理",
     "subagents_available": "**可用的专用子代理:**",
     "subagents_description": "**{name} 子代理**: `{url}`",
     "subagents_tip": "💡 **提示**: 收藏子代理 URL 以便直接访问！",
-
     # 执行详情
     "execution_expander": "🔍 查看完整执行详情 ({count} 步)",
     "execution_trace": "完整执行跟踪，包含所有中间步骤",
-
     # 图表和数据
     "no_data_return": "无数据返回",
     "chart_failed": "图表建议失败: {error}",
@@ -90,7 +81,6 @@ LOCALE_ZH_CN: Dict[str, str] = {
     "chart_select_type": "**选择图表类型和轴映射**",
     "chart_configure_hint": "请点击上面的 '⚙️ 配置图表' 按钮选择至少一个 Y 轴指标。",
     "chart_pie_warning": "饼图只能选择一个指标（Y 轴）。",
-
     # 执行详情
     "action_input": "**输入:**",
     "action_no_input": "(无输入)",
@@ -98,7 +88,6 @@ LOCALE_ZH_CN: Dict[str, str] = {
     "action_no_output": "(无输出)",
     "action_started_duration": "⏱️ 开始时间: {time} | 持续时间: {duration}s",
     "action_started": "⏱️ 开始时间: {time}",
-
     # 控制台输出
     "console_error_webchat_not_found": "❌ 错误: 在 {path} 未找到 Web 聊天机器人",
     "console_starting_web_interface": "🚀 启动 Datus Web 界面...",
@@ -109,11 +98,9 @@ LOCALE_ZH_CN: Dict[str, str] = {
     "console_press_ctrl_c": "⏹️ 按 Ctrl+C 停止服务器",
     "console_web_server_stopped": "🛑 Web 服务器已停止",
     "console_web_interface_failed": "❌ 启动 Web 界面失败: {error}",
-
     # 响应
     "ai_response": "### 💬 AI 响应",
     "response_error": "抱歉，无法生成有效响应。请检查执行详情以获取更多信息。",
-
     # 调试信息标签
     "debug_expander": "调试详情",
     "debug_query_params": "查询参数:",

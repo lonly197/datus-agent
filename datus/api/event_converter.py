@@ -7,19 +7,29 @@ Event converter for mapping ActionHistory to DeepResearchEvent format.
 """
 
 import asyncio
+import hashlib
 import json
 import uuid
-import hashlib
 from collections import deque
-from typing import AsyncGenerator, Dict, List, Any, Optional
 from datetime import datetime
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from datus.utils.loggings import get_logger
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.utils.loggings import get_logger
+
 from .models import (
-    DeepResearchEvent, DeepResearchEventType, BaseEvent,
-    ChatEvent, PlanUpdateEvent, ToolCallEvent, ToolCallResultEvent,
-    CompleteEvent, ReportEvent, ErrorEvent, TodoItem, TodoStatus
+    BaseEvent,
+    ChatEvent,
+    CompleteEvent,
+    DeepResearchEvent,
+    DeepResearchEventType,
+    ErrorEvent,
+    PlanUpdateEvent,
+    ReportEvent,
+    TodoItem,
+    TodoStatus,
+    ToolCallEvent,
+    ToolCallResultEvent,
 )
 
 
@@ -46,6 +56,7 @@ class DeepResearchEventConverter:
         returns the first matching dict with keys 'todo_list' or 'updated_item',
         or {} if none found.
         """
+
         def try_parse(obj):
             if isinstance(obj, dict):
                 return obj
@@ -103,6 +114,7 @@ class DeepResearchEventConverter:
         Search nested output for common call id fields (action_id, call_id, callId, tool_call_id, toolCallId).
         Returns the first found string value or None.
         """
+
         def try_parse(obj):
             if isinstance(obj, dict):
                 return obj
@@ -275,10 +287,10 @@ class DeepResearchEventConverter:
                 return True
             # Additionally, check if the message indicates it's an internal update
             if action.messages and (
-                "Server executor: starting todo" in action.messages or
-                "Server executor: todo_in_progress" in action.messages or
-                "Server executor: todo_completed" in action.messages or
-                "Server executor: todo_complete failed" in action.messages
+                "Server executor: starting todo" in action.messages
+                or "Server executor: todo_in_progress" in action.messages
+                or "Server executor: todo_completed" in action.messages
+                or "Server executor: todo_complete failed" in action.messages
             ):
                 return True
         return False
@@ -314,10 +326,10 @@ class DeepResearchEventConverter:
                 content = ""
                 if action.output and isinstance(action.output, dict):
                     content = (
-                        action.output.get("content", "") or
-                        action.output.get("response", "") or
-                        action.output.get("raw_output", "") or
-                        action.messages
+                        action.output.get("content", "")
+                        or action.output.get("response", "")
+                        or action.output.get("raw_output", "")
+                        or action.messages
                     )
                 # Only send chat events if they have actual content or are important messages
                 if content and content.strip():
@@ -328,12 +340,7 @@ class DeepResearchEventConverter:
                         return []
                     if h:
                         self._recent_assistant_hashes.append(h)
-                    events.append(ChatEvent(
-                        id=event_id,
-                        planId=chat_plan_id,
-                        timestamp=timestamp,
-                        content=content
-                    ))
+                    events.append(ChatEvent(id=event_id, planId=chat_plan_id, timestamp=timestamp, content=content))
 
             elif action.action_type == "chat_response":
                 content = ""
@@ -346,12 +353,7 @@ class DeepResearchEventConverter:
                         return []
                     if h:
                         self._recent_assistant_hashes.append(h)
-                    events.append(ChatEvent(
-                        id=event_id,
-                        planId=chat_plan_id,
-                        timestamp=timestamp,
-                        content=content
-                    ))
+                    events.append(ChatEvent(id=event_id, planId=chat_plan_id, timestamp=timestamp, content=content))
 
         # 2. Handle tool calls - ToolCallEvent / ToolCallResultEvent and PlanUpdateEvent for plan tools
         elif action.role == ActionRole.TOOL:
@@ -404,40 +406,48 @@ class DeepResearchEventConverter:
                     if isinstance(tlist, dict) and "items" in tlist:
                         for todo_data in tlist["items"]:
                             if isinstance(todo_data, dict):
-                                todos.append(TodoItem(
-                                    id=todo_data.get("id", str(uuid.uuid4())),
-                                    content=todo_data.get("content", ""),
-                                    status=TodoStatus(todo_data.get("status", "pending"))
-                                ))
+                                todos.append(
+                                    TodoItem(
+                                        id=todo_data.get("id", str(uuid.uuid4())),
+                                        content=todo_data.get("content", ""),
+                                        status=TodoStatus(todo_data.get("status", "pending")),
+                                    )
+                                )
                 elif "updated_item" in plan_data:
                     ui = plan_data["updated_item"]
                     if isinstance(ui, dict):
-                        todos.append(TodoItem(
-                            id=ui.get("id", str(uuid.uuid4())),
-                            content=ui.get("content", ""),
-                            status=TodoStatus(ui.get("status", "pending"))
-                        ))
+                        todos.append(
+                            TodoItem(
+                                id=ui.get("id", str(uuid.uuid4())),
+                                content=ui.get("content", ""),
+                                status=TodoStatus(ui.get("status", "pending")),
+                            )
+                        )
 
                 if todos:
                     # For plan tools, emit tool events AND plan update event
-                    events.append(ToolCallEvent(
-                        id=f"{event_id}_call",
-                        planId=tool_plan_id,
-                        timestamp=timestamp,
-                        toolCallId=tool_call_id,
-                        toolName=action.action_type,
-                        input=normalized_input or (action.input if isinstance(action.input, dict) else {})
-                    ))
-
-                    if action.output:
-                        events.append(ToolCallResultEvent(
-                            id=f"{event_id}_result",
+                    events.append(
+                        ToolCallEvent(
+                            id=f"{event_id}_call",
                             planId=tool_plan_id,
                             timestamp=timestamp,
                             toolCallId=tool_call_id,
-                            data=action.output,
-                            error=action.status == ActionStatus.FAILED
-                        ))
+                            toolName=action.action_type,
+                            input=normalized_input or (action.input if isinstance(action.input, dict) else {}),
+                        )
+                    )
+
+                    if action.output:
+                        events.append(
+                            ToolCallResultEvent(
+                                id=f"{event_id}_result",
+                                planId=tool_plan_id,
+                                timestamp=timestamp,
+                                toolCallId=tool_call_id,
+                                data=action.output,
+                                error=action.status == ActionStatus.FAILED,
+                            )
+                        )
 
                     # PlanUpdateEvent uses the specific todo_id for updated items, or None for plan creation
                     plan_update_plan_id = None
@@ -446,31 +456,34 @@ class DeepResearchEventConverter:
                         if isinstance(ui, dict) and ui.get("id"):
                             plan_update_plan_id = ui["id"]
 
-                    events.append(PlanUpdateEvent(
-                        id=f"{event_id}_plan",
-                        planId=plan_update_plan_id,
-                        timestamp=timestamp,
-                        todos=todos
-                    ))
+                    events.append(
+                        PlanUpdateEvent(
+                            id=f"{event_id}_plan", planId=plan_update_plan_id, timestamp=timestamp, todos=todos
+                        )
+                    )
             else:
                 # Normal tool call: emit call + result (if available)
-                events.append(ToolCallEvent(
-                    id=f"{event_id}_call",
-                    planId=tool_plan_id,
-                    timestamp=timestamp,
-                    toolCallId=tool_call_id,
-                    toolName=action.action_type,
-                    input=normalized_input or (action.input if isinstance(action.input, dict) else {})
-                ))
-                if action.output:
-                    events.append(ToolCallResultEvent(
-                        id=f"{event_id}_result",
+                events.append(
+                    ToolCallEvent(
+                        id=f"{event_id}_call",
                         planId=tool_plan_id,
                         timestamp=timestamp,
                         toolCallId=tool_call_id,
-                        data=action.output,
-                        error=action.status == ActionStatus.FAILED
-                    ))
+                        toolName=action.action_type,
+                        input=normalized_input or (action.input if isinstance(action.input, dict) else {}),
+                    )
+                )
+                if action.output:
+                    events.append(
+                        ToolCallResultEvent(
+                            id=f"{event_id}_result",
+                            planId=tool_plan_id,
+                            timestamp=timestamp,
+                            toolCallId=tool_call_id,
+                            data=action.output,
+                            error=action.status == ActionStatus.FAILED,
+                        )
+                    )
 
         # 3. Handle tool results (legacy support)
         elif action.action_type == "tool_call_result" and action.output:
@@ -478,14 +491,16 @@ class DeepResearchEventConverter:
             tool_call_id = self._find_tool_call_id(action)
 
             if tool_call_id:
-                events.append(ToolCallResultEvent(
-                    id=event_id,
-                    planId=self.plan_id,
-                    timestamp=timestamp,
-                    toolCallId=tool_call_id,
-                    data=action.output,
-                    error=action.status == ActionStatus.FAILED
-                ))
+                events.append(
+                    ToolCallResultEvent(
+                        id=event_id,
+                        planId=self.plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        data=action.output,
+                        error=action.status == ActionStatus.FAILED,
+                    )
+                )
 
         # 4. Handle plan updates
         elif action.action_type == "plan_update" and action.output:
@@ -501,39 +516,37 @@ class DeepResearchEventConverter:
                 if todo_data_source:
                     for todo_data in todo_data_source:
                         if isinstance(todo_data, dict):
-                            todos.append(TodoItem(
-                                id=todo_data.get("id", str(uuid.uuid4())),
-                                content=todo_data.get("content", ""),
-                                status=TodoStatus(todo_data.get("status", "pending"))
-                            ))
+                            todos.append(
+                                TodoItem(
+                                    id=todo_data.get("id", str(uuid.uuid4())),
+                                    content=todo_data.get("content", ""),
+                                    status=TodoStatus(todo_data.get("status", "pending")),
+                                )
+                            )
 
             # For plan_update events, planId should be None (global plan update)
-            events.append(PlanUpdateEvent(
-                id=event_id,
-                planId=None,
-                timestamp=timestamp,
-                todos=todos
-            ))
+            events.append(PlanUpdateEvent(id=event_id, planId=None, timestamp=timestamp, todos=todos))
 
         # 5. Handle workflow completion (修复 CompleteEvent 处理)
         elif action.action_type == "workflow_completion" and action.status == ActionStatus.SUCCESS:
-            events.append(CompleteEvent(
-                id=event_id,
-                planId=None,  # CompleteEvent should not have planId by default
-                timestamp=timestamp,
-                content=action.messages
-            ))
+            events.append(
+                CompleteEvent(
+                    id=event_id,
+                    planId=None,  # CompleteEvent should not have planId by default
+                    timestamp=timestamp,
+                    content=action.messages,
+                )
+            )
 
         # 6. Handle errors
         elif action.status == ActionStatus.FAILED:
             # ErrorEvent should use todo_id if the error is related to a specific todo
             error_plan_id = todo_id if todo_id else None
-            events.append(ErrorEvent(
-                id=event_id,
-                planId=error_plan_id,
-                timestamp=timestamp,
-                error=action.messages or "Unknown error"
-            ))
+            events.append(
+                ErrorEvent(
+                    id=event_id, planId=error_plan_id, timestamp=timestamp, error=action.messages or "Unknown error"
+                )
+            )
 
         # 7. Handle report generation
         elif action.action_type == "output_generation" and action.output:
@@ -544,13 +557,11 @@ class DeepResearchEventConverter:
                 if report_url or report_data:
                     # ReportEvent should use todo_id if related to a specific todo
                     report_plan_id = todo_id if todo_id else None
-                    events.append(ReportEvent(
-                        id=event_id,
-                        planId=report_plan_id,
-                        timestamp=timestamp,
-                        url=report_url,
-                        data=report_data
-                    ))
+                    events.append(
+                        ReportEvent(
+                            id=event_id, planId=report_plan_id, timestamp=timestamp, url=report_url, data=report_data
+                        )
+                    )
 
         return events
 

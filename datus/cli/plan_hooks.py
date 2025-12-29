@@ -39,9 +39,10 @@ logger = get_logger(__name__)
 # Task type classification for intelligent execution routing
 class TaskType:
     """Task type classifications for intelligent execution routing."""
+
     TOOL_EXECUTION = "tool_execution"  # Needs external tool calls
-    LLM_ANALYSIS = "llm_analysis"      # Needs LLM reasoning/analysis
-    HYBRID = "hybrid"                  # May need both tools and analysis
+    LLM_ANALYSIS = "llm_analysis"  # Needs LLM reasoning/analysis
+    HYBRID = "hybrid"  # May need both tools and analysis
 
     @classmethod
     def classify_task(cls, task_content: str) -> str:
@@ -53,27 +54,63 @@ class TaskType:
 
         # Analysis keywords (higher priority)
         analysis_keywords = [
-            '分析', '检查', '评估', '验证', '优化', '审查', '性能影响',
-            'analyze', 'check', 'evaluate', 'validate', 'optimize', 'review', 'performance impact',
-            '审查规则', '质量检查', '代码审查', 'sql审查', '规则验证'
+            "分析",
+            "检查",
+            "评估",
+            "验证",
+            "优化",
+            "审查",
+            "性能影响",
+            "analyze",
+            "check",
+            "evaluate",
+            "validate",
+            "optimize",
+            "review",
+            "performance impact",
+            "审查规则",
+            "质量检查",
+            "代码审查",
+            "sql审查",
+            "规则验证",
         ]
 
         # Tool execution keywords (higher priority)
         tool_keywords = [
-            '执行', '运行', '查询', '搜索', '创建', '写入', '插入', '更新', '删除',
-            'execute', 'run', 'query', 'search', 'create', 'write', 'insert', 'update', 'delete',
-            '生成sql', '执行sql', '运行查询', '查找表', '搜索数据'
+            "执行",
+            "运行",
+            "查询",
+            "搜索",
+            "创建",
+            "写入",
+            "插入",
+            "更新",
+            "删除",
+            "execute",
+            "run",
+            "query",
+            "search",
+            "create",
+            "write",
+            "insert",
+            "update",
+            "delete",
+            "生成sql",
+            "执行sql",
+            "运行查询",
+            "查找表",
+            "搜索数据",
         ]
 
         analysis_score = sum(1 for kw in analysis_keywords if kw in content_lower)
         tool_score = sum(1 for kw in tool_keywords if kw in content_lower)
 
         # Boost analysis score for SQL review patterns
-        if any(pattern in content_lower for pattern in ['sql审查', '质量检查', '规则验证', '性能评估']):
+        if any(pattern in content_lower for pattern in ["sql审查", "质量检查", "规则验证", "性能评估"]):
             analysis_score += 2
 
         # Boost tool score for specific tool patterns
-        if any(pattern in content_lower for pattern in ['表结构', '字段信息', '执行查询', '运行sql']):
+        if any(pattern in content_lower for pattern in ["表结构", "字段信息", "执行查询", "运行sql"]):
             tool_score += 2
 
         if analysis_score > tool_score:
@@ -82,6 +119,7 @@ class TaskType:
             return cls.TOOL_EXECUTION
         else:
             return cls.HYBRID
+
 
 class SmartExecutionRouter:
     """Intelligent task execution router based on task type classification."""
@@ -94,7 +132,7 @@ class SmartExecutionRouter:
 
     async def execute_task(self, todo_item, context) -> Dict[str, Any]:
         """Smart routing of task execution based on task type."""
-        task_type = getattr(todo_item, 'task_type', 'hybrid')
+        task_type = getattr(todo_item, "task_type", "hybrid")
 
         if task_type == TaskType.LLM_ANALYSIS:
             return await self._execute_llm_analysis(todo_item, context)
@@ -116,23 +154,19 @@ class SmartExecutionRouter:
                 todo_item.analysis_context = {
                     "domain": "sql_review",
                     "rules": ["starrocks_3_3_rules", "performance_best_practices"],
-                    "output_format": "structured_report"
+                    "output_format": "structured_report",
                 }
 
             return {
                 "success": True,
                 "execution_type": "llm_analysis",
                 "action": "execute_llm_reasoning",  # 返回执行指令
-                "todo_item": todo_item
+                "todo_item": todo_item,
             }
 
         except Exception as e:
             logger.error(f"LLM analysis setup failed for todo {todo_item.id}: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "execution_type": "llm_analysis"
-            }
+            return {"success": False, "error": str(e), "execution_type": "llm_analysis"}
 
     async def _execute_tool_call(self, todo_item, context) -> Dict[str, Any]:
         """Return instruction to execute tool-based task."""
@@ -140,7 +174,7 @@ class SmartExecutionRouter:
             "success": True,
             "execution_type": "tool_execution",
             "action": "execute_tool",  # 返回执行指令
-            "todo_item": todo_item
+            "todo_item": todo_item,
         }
 
     async def _execute_hybrid_task(self, todo_item, context) -> Dict[str, Any]:
@@ -148,7 +182,7 @@ class SmartExecutionRouter:
         content_lower = todo_item.content.lower()
 
         # Check if this looks more like a tool task
-        tool_indicators = ['执行', '运行', '查询', '搜索', '查找', 'execute', 'run', 'query', 'search']
+        tool_indicators = ["执行", "运行", "查询", "搜索", "查找", "execute", "run", "query", "search"]
         if any(indicator in content_lower for indicator in tool_indicators):
             # Prefer tool execution for hybrid tasks that look tool-oriented
             return await self._execute_tool_call(todo_item, context)
@@ -156,9 +190,11 @@ class SmartExecutionRouter:
             # Prefer LLM analysis for hybrid tasks that look analysis-oriented
             return await self._execute_llm_analysis(todo_item, context)
 
+
 # Error handling types and configurations
 class ErrorType(str):
     """Error type classifications for better handling."""
+
     NETWORK = "network"
     DATABASE_CONNECTION = "database_connection"
     DATABASE_QUERY = "database_query"
@@ -185,7 +221,7 @@ class ErrorRecoveryStrategy:
             ErrorType.NETWORK,
             ErrorType.DATABASE_CONNECTION,
             ErrorType.TIMEOUT,
-            ErrorType.RESOURCE_EXHAUSTED
+            ErrorType.RESOURCE_EXHAUSTED,
         }
 
         return error_type in retryable_errors and attempt_count < self.max_retries
@@ -208,57 +244,33 @@ class ErrorHandler:
             # Database connection errors
             r"connection.*failed|unable.*connect": {
                 "type": ErrorType.DATABASE_CONNECTION,
-                "suggestions": [
-                    "检查数据库连接配置",
-                    "确认数据库服务正在运行",
-                    "验证网络连接"
-                ]
+                "suggestions": ["检查数据库连接配置", "确认数据库服务正在运行", "验证网络连接"],
             },
             # Table not found errors
             r"table.*not.*found|relation.*does.*exist|doesn't exist": {
                 "type": ErrorType.TABLE_NOT_FOUND,
-                "suggestions": [
-                    "确认表名拼写正确",
-                    "检查数据库schema",
-                    "使用search_table工具查找可用表"
-                ]
+                "suggestions": ["确认表名拼写正确", "检查数据库schema", "使用search_table工具查找可用表"],
             },
             # Column not found errors
             r"column.*not.*found|field.*does.*exist": {
                 "type": ErrorType.COLUMN_NOT_FOUND,
-                "suggestions": [
-                    "检查列名拼写",
-                    "使用describe_table查看表结构",
-                    "确认字段是否存在于表中"
-                ]
+                "suggestions": ["检查列名拼写", "使用describe_table查看表结构", "确认字段是否存在于表中"],
             },
             # Syntax errors
             r"syntax.*error|invalid.*sql": {
                 "type": ErrorType.SYNTAX_ERROR,
-                "suggestions": [
-                    "检查SQL语法",
-                    "确认引号和括号匹配",
-                    "验证SQL语句结构"
-                ]
+                "suggestions": ["检查SQL语法", "确认引号和括号匹配", "验证SQL语句结构"],
             },
             # Permission errors
             r"permission.*denied|access.*denied": {
                 "type": ErrorType.PERMISSION_DENIED,
-                "suggestions": [
-                    "检查数据库权限",
-                    "确认用户有查询权限",
-                    "联系数据库管理员"
-                ]
+                "suggestions": ["检查数据库权限", "确认用户有查询权限", "联系数据库管理员"],
             },
             # Timeout errors
             r"timeout|query.*timed.*out": {
                 "type": ErrorType.TIMEOUT,
-                "suggestions": [
-                    "简化查询条件",
-                    "添加适当的索引",
-                    "考虑分批处理大数据"
-                ]
-            }
+                "suggestions": ["简化查询条件", "添加适当的索引", "考虑分批处理大数据"],
+            },
         }
 
     def classify_error(self, error_message: str) -> Tuple[ErrorType, List[str]]:
@@ -271,7 +283,9 @@ class ErrorHandler:
 
         return ErrorType.UNKNOWN, ["检查错误详情并联系技术支持"]
 
-    def handle_tool_error(self, tool_name: str, error: Exception, attempt_count: int = 1, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    def handle_tool_error(
+        self, tool_name: str, error: Exception, attempt_count: int = 1, context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """Handle tool execution errors with recovery strategies and auto-fix suggestions."""
 
         error_message = str(error)
@@ -284,7 +298,7 @@ class ErrorHandler:
             "can_retry": self.recovery_strategy.should_retry(error_type, attempt_count),
             "retry_delay": 0.0,
             "auto_fix_available": False,
-            "auto_fix_suggestion": None
+            "auto_fix_suggestion": None,
         }
 
         if result["can_retry"]:
@@ -303,7 +317,9 @@ class ErrorHandler:
 
         return result
 
-    def _handle_describe_table_error(self, error_type: ErrorType, error_message: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_describe_table_error(
+        self, error_type: ErrorType, error_message: str, context: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Handle describe_table specific errors."""
         result = {}
 
@@ -313,43 +329,35 @@ class ErrorHandler:
             result["auto_fix_available"] = True
             result["auto_fix_suggestion"] = "自动切换到search_table工具查找相似表名"
         elif error_type == ErrorType.PERMISSION_DENIED:
-            result["suggestions"].extend([
-                "检查是否对该表有DESCRIBE权限",
-                "尝试使用search_table获取基本表信息"
-            ])
+            result["suggestions"].extend(["检查是否对该表有DESCRIBE权限", "尝试使用search_table获取基本表信息"])
 
         return result
 
-    def _handle_search_table_error(self, error_type: ErrorType, error_message: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_search_table_error(
+        self, error_type: ErrorType, error_message: str, context: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Handle search_table specific errors."""
         result = {}
 
         if error_type == ErrorType.DATABASE_CONNECTION:
-            result["suggestions"].extend([
-                "检查数据库连接字符串",
-                "确认数据库服务状态"
-            ])
+            result["suggestions"].extend(["检查数据库连接字符串", "确认数据库服务状态"])
             result["auto_fix_available"] = True
             result["auto_fix_suggestion"] = "简化搜索查询，使用基本关键词重试"
         elif error_type == ErrorType.TIMEOUT:
-            result["suggestions"].extend([
-                "缩短搜索关键词",
-                "减少搜索结果数量"
-            ])
+            result["suggestions"].extend(["缩短搜索关键词", "减少搜索结果数量"])
             result["auto_fix_available"] = True
             result["auto_fix_suggestion"] = "自动减少top_n参数并重试"
 
         return result
 
-    def _handle_execute_sql_error(self, error_type: ErrorType, error_message: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_execute_sql_error(
+        self, error_type: ErrorType, error_message: str, context: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Handle execute_sql specific errors with advanced auto-fix."""
         result = {}
 
         if error_type == ErrorType.SYNTAX_ERROR:
-            result["suggestions"].extend([
-                "检查SQL语法，特别是引号和分号",
-                "验证表名和列名是否正确"
-            ])
+            result["suggestions"].extend(["检查SQL语法，特别是引号和分号", "验证表名和列名是否正确"])
             result["auto_fix_available"] = True
             result["auto_fix_suggestion"] = "尝试自动修复常见语法错误"
 
@@ -359,16 +367,10 @@ class ErrorHandler:
                 result["fixed_sql"] = fixed_sql
 
         elif error_type == ErrorType.PERMISSION_DENIED:
-            result["suggestions"].extend([
-                "检查是否有执行该SQL的权限",
-                "确认用户角色和权限设置"
-            ])
+            result["suggestions"].extend(["检查是否有执行该SQL的权限", "确认用户角色和权限设置"])
 
         elif error_type == ErrorType.TABLE_NOT_FOUND:
-            result["suggestions"].extend([
-                "检查SQL中引用的表名是否存在",
-                "使用search_table查找可用表名"
-            ])
+            result["suggestions"].extend(["检查SQL中引用的表名是否存在", "使用search_table查找可用表名"])
             result["auto_fix_available"] = True
             result["auto_fix_suggestion"] = "查找相似的表名进行自动修正"
 
@@ -382,8 +384,8 @@ class ErrorHandler:
         fixed_sql = sql_query.strip()
 
         # Fix missing semicolon for SELECT statements
-        if not fixed_sql.endswith(';') and fixed_sql.upper().strip().startswith('SELECT'):
-            fixed_sql += ';'
+        if not fixed_sql.endswith(";") and fixed_sql.upper().strip().startswith("SELECT"):
+            fixed_sql += ";"
 
         # Fix common quote issues
         error_lower = error_message.lower()
@@ -431,14 +433,16 @@ class ExecutionMonitor:
         }
 
         # Tool-specific metrics
-        self.tool_metrics = defaultdict(lambda: {
-            "calls": 0,
-            "successes": 0,
-            "failures": 0,
-            "avg_execution_time": 0,
-            "total_execution_time": 0,
-            "errors": defaultdict(int)
-        })
+        self.tool_metrics = defaultdict(
+            lambda: {
+                "calls": 0,
+                "successes": 0,
+                "failures": 0,
+                "avg_execution_time": 0,
+                "total_execution_time": 0,
+                "errors": defaultdict(int),
+            }
+        )
 
         # Real-time monitoring data
         self.active_operations = {}
@@ -454,7 +458,7 @@ class ExecutionMonitor:
             "todos": [],
             "tools_used": set(),
             "events": [],
-            "metrics": {}
+            "metrics": {},
         }
         self.start_time = time.time()
         logger.info(f"📊 Started monitoring execution {execution_id}")
@@ -467,13 +471,15 @@ class ExecutionMonitor:
         end_time = time.time()
         duration = end_time - self.current_execution["start_time"]
 
-        self.current_execution.update({
-            "end_time": end_time,
-            "duration": duration,
-            "status": status,
-            "error_message": error_message,
-            "final_metrics": self._calculate_execution_metrics()
-        })
+        self.current_execution.update(
+            {
+                "end_time": end_time,
+                "duration": duration,
+                "status": status,
+                "error_message": error_message,
+                "final_metrics": self._calculate_execution_metrics(),
+            }
+        )
 
         # Update global metrics
         self.metrics["total_executions"] += 1
@@ -488,13 +494,15 @@ class ExecutionMonitor:
         self.execution_history.append(self.current_execution.copy())
 
         # Update performance trends
-        self.performance_trends.append({
-            "timestamp": end_time,
-            "duration": duration,
-            "todos_count": len(self.current_execution["todos"]),
-            "tools_used": len(self.current_execution["tools_used"]),
-            "status": status
-        })
+        self.performance_trends.append(
+            {
+                "timestamp": end_time,
+                "duration": duration,
+                "todos_count": len(self.current_execution["todos"]),
+                "tools_used": len(self.current_execution["tools_used"]),
+                "status": status,
+            }
+        )
 
         logger.info(f"📊 Ended monitoring execution {self.current_execution['id']}: {status} in {duration:.2f}s")
         self.current_execution = None
@@ -511,14 +519,16 @@ class ExecutionMonitor:
             "start_time": time.time(),
             "status": "in_progress",
             "tools_used": [],
-            "events": []
+            "events": [],
         }
         self.current_execution["todos"].append(todo_record)
         self.active_operations[todo_id] = todo_record
 
         logger.debug(f"📝 Started todo {todo_id}: {content[:50]}...")
 
-    def record_todo_end(self, todo_id: str, status: str = "completed", result: Optional[Any] = None, error: Optional[str] = None):
+    def record_todo_end(
+        self, todo_id: str, status: str = "completed", result: Optional[Any] = None, error: Optional[str] = None
+    ):
         """Record the end of a todo execution."""
         if not self.current_execution or todo_id not in self.active_operations:
             return
@@ -527,13 +537,15 @@ class ExecutionMonitor:
         todo_record = self.active_operations[todo_id]
         start_time = todo_record["start_time"]
 
-        todo_record.update({
-            "end_time": end_time,
-            "duration": end_time - start_time,
-            "status": status,
-            "result": result,
-            "error": error
-        })
+        todo_record.update(
+            {
+                "end_time": end_time,
+                "duration": end_time - start_time,
+                "status": status,
+                "result": result,
+                "error": error,
+            }
+        )
 
         del self.active_operations[todo_id]
 
@@ -553,15 +565,22 @@ class ExecutionMonitor:
                     "tool_name": tool_name,
                     "params": params,
                     "start_time": start_time,
-                    "status": "in_progress"
+                    "status": "in_progress",
                 }
                 todo["tools_used"].append(tool_call)
                 break
 
         logger.debug(f"🔧 Started {tool_name} for todo {todo_id}")
 
-    def record_tool_result(self, tool_name: str, todo_id: str, success: bool, execution_time: float,
-                          result: Optional[Any] = None, error: Optional[str] = None):
+    def record_tool_result(
+        self,
+        tool_name: str,
+        todo_id: str,
+        success: bool,
+        execution_time: float,
+        result: Optional[Any] = None,
+        error: Optional[str] = None,
+    ):
         """Record a tool call result."""
         if not self.current_execution:
             return
@@ -584,14 +603,16 @@ class ExecutionMonitor:
             if todo["id"] == todo_id:
                 for tool_call in todo["tools_used"]:
                     if tool_call["tool_name"] == tool_name and tool_call["status"] == "in_progress":
-                        tool_call.update({
-                            "end_time": time.time(),
-                            "execution_time": execution_time,
-                            "success": success,
-                            "result": result,
-                            "error": error,
-                            "status": "completed" if success else "failed"
-                        })
+                        tool_call.update(
+                            {
+                                "end_time": time.time(),
+                                "execution_time": execution_time,
+                                "success": success,
+                                "result": result,
+                                "error": error,
+                                "status": "completed" if success else "failed",
+                            }
+                        )
                         break
                 break
 
@@ -607,7 +628,9 @@ class ExecutionMonitor:
         """Record batch optimization."""
         self.metrics["batch_optimizations"] += 1
         savings = original_count - optimized_count
-        logger.info(f"⚡ Batch optimization ({optimization_type}): {original_count} → {optimized_count} (saved {savings} operations)")
+        logger.info(
+            f"⚡ Batch optimization ({optimization_type}): {original_count} → {optimized_count} (saved {savings} operations)"
+        )
 
     def record_error_recovery(self, strategy: str, success: bool):
         """Record error recovery attempt."""
@@ -636,7 +659,7 @@ class ExecutionMonitor:
             "total_tools_called": total_tools,
             "total_execution_time": total_execution_time,
             "avg_todo_duration": total_execution_time / total_todos if total_todos > 0 else 0,
-            "tools_used": list(self.current_execution["tools_used"])
+            "tools_used": list(self.current_execution["tools_used"]),
         }
 
     def get_monitoring_report(self) -> Dict[str, Any]:
@@ -649,19 +672,21 @@ class ExecutionMonitor:
         report = {
             "summary": {
                 "total_executions": self.metrics["total_executions"],
-                "success_rate": self.metrics["successful_executions"] / self.metrics["total_executions"] if self.metrics["total_executions"] > 0 else 0,
+                "success_rate": self.metrics["successful_executions"] / self.metrics["total_executions"]
+                if self.metrics["total_executions"] > 0
+                else 0,
                 "total_todos_processed": self.metrics["total_todos_processed"],
                 "cache_hit_rate": cache_hit_rate,
                 "batch_optimizations": self.metrics["batch_optimizations"],
-                "error_recoveries": self.metrics["error_recoveries"]
+                "error_recoveries": self.metrics["error_recoveries"],
             },
             "current_status": {
                 "active_operations": len(self.active_operations),
-                "active_operation_details": list(self.active_operations.keys())
+                "active_operation_details": list(self.active_operations.keys()),
             },
             "tool_performance": dict(self.tool_metrics),
             "recent_executions": recent_executions,
-            "performance_trends": list(self.performance_trends)[-20:]  # Last 20 data points
+            "performance_trends": list(self.performance_trends)[-20:],  # Last 20 data points
         }
 
         return report
@@ -684,7 +709,9 @@ class ExecutionMonitor:
             if metrics["calls"] > 0:
                 success_rate = metrics["successes"] / metrics["calls"]
                 avg_time = metrics["avg_execution_time"]
-                logger.info(f"  {tool_name}: {metrics['calls']} calls, {success_rate:.1%} success, {avg_time:.2f}ms avg")
+                logger.info(
+                    f"  {tool_name}: {metrics['calls']} calls, {success_rate:.1%} success, {avg_time:.2f}ms avg"
+                )
 
         # Log active operations
         if report["current_status"]["active_operations"] > 0:
@@ -717,7 +744,9 @@ class ExecutionMonitor:
                 if metrics["calls"] > 0:
                     success_rate = metrics["successes"] / metrics["calls"]
                     avg_time = metrics["avg_execution_time"]
-                    lines.append(f"  {tool_name}: {metrics['calls']} calls, {success_rate:.1%} success, {avg_time:.2f}ms avg")
+                    lines.append(
+                        f"  {tool_name}: {metrics['calls']} calls, {success_rate:.1%} success, {avg_time:.2f}ms avg"
+                    )
 
             return "\n".join(lines)
         else:
@@ -763,11 +792,13 @@ class ExecutionMonitor:
         else:
             dashboard_lines.append("║                              No tool data available                        ║")
 
-        dashboard_lines.extend([
-            "╠══════════════════════════════════════════════════════════════════════════════╣",
-            "║                             📈 RECENT PERFORMANCE TREND                      ║",
-            "╠══════════════════════════════════════════════════════════════════════════════╣",
-        ])
+        dashboard_lines.extend(
+            [
+                "╠══════════════════════════════════════════════════════════════════════════════╣",
+                "║                             📈 RECENT PERFORMANCE TREND                      ║",
+                "╠══════════════════════════════════════════════════════════════════════════════╣",
+            ]
+        )
 
         # Add performance trend (last 5 executions)
         trends = report["performance_trends"][-5:]
@@ -782,16 +813,18 @@ class ExecutionMonitor:
         else:
             dashboard_lines.append("║                              No recent executions                          ║")
 
-        dashboard_lines.extend([
-            "╚══════════════════════════════════════════════════════════════════════════════╝",
-            "",
-            "💡 Tips:",
-            f"   • Cache hit rate of {summary['cache_hit_rate']:.1%} indicates {'excellent' if summary['cache_hit_rate'] > 0.8 else 'good' if summary['cache_hit_rate'] > 0.5 else 'needs improvement'} caching performance",
-            f"   • {summary['batch_optimizations']} batch optimizations saved computational resources",
-            f"   • {summary['error_recoveries']} successful error recoveries improved reliability",
-            "",
-            "Use monitor.export_monitoring_data('json') for detailed JSON export"
-        ])
+        dashboard_lines.extend(
+            [
+                "╚══════════════════════════════════════════════════════════════════════════════╝",
+                "",
+                "💡 Tips:",
+                f"   • Cache hit rate of {summary['cache_hit_rate']:.1%} indicates {'excellent' if summary['cache_hit_rate'] > 0.8 else 'good' if summary['cache_hit_rate'] > 0.5 else 'needs improvement'} caching performance",
+                f"   • {summary['batch_optimizations']} batch optimizations saved computational resources",
+                f"   • {summary['error_recoveries']} successful error recoveries improved reliability",
+                "",
+                "Use monitor.export_monitoring_data('json') for detailed JSON export",
+            ]
+        )
 
         return "\n".join(dashboard_lines)
 
@@ -807,7 +840,7 @@ class QueryCache:
     def _get_cache_key(self, tool_name: str, **kwargs) -> str:
         """Generate a deterministic cache key for the query."""
         # Normalize kwargs by sorting keys and excluding non-deterministic parameters
-        cache_params = {k: v for k, v in kwargs.items() if k not in ['todo_id', 'call_id']}
+        cache_params = {k: v for k, v in kwargs.items() if k not in ["todo_id", "call_id"]}
         sorted_params = json.dumps(cache_params, sort_keys=True)
         key_content = f"{tool_name}:{sorted_params}"
         return hashlib.md5(key_content.encode()).hexdigest()
@@ -818,9 +851,9 @@ class QueryCache:
 
         if cache_key in self.cache:
             entry = self.cache[cache_key]
-            if time.time() - entry['timestamp'] < self.ttl_seconds:
+            if time.time() - entry["timestamp"] < self.ttl_seconds:
                 logger.debug(f"Cache hit for {tool_name} with key {cache_key}")
-                return entry['result']
+                return entry["result"]
 
             # Remove expired entry
             del self.cache[cache_key]
@@ -833,13 +866,10 @@ class QueryCache:
 
         # Implement LRU eviction if cache is full
         if len(self.cache) >= self.max_size:
-            oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k]['timestamp'])
+            oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k]["timestamp"])
             del self.cache[oldest_key]
 
-        self.cache[cache_key] = {
-            'result': result,
-            'timestamp': time.time()
-        }
+        self.cache[cache_key] = {"result": result, "timestamp": time.time()}
 
         logger.debug(f"Cached result for {tool_name} with key {cache_key}")
 
@@ -877,7 +907,7 @@ class ToolBatchProcessor:
         # Group by similar query patterns
         query_groups = {}
         for todo_item, params in batch:
-            query_text = params.get('query_text', '').lower().strip()
+            query_text = params.get("query_text", "").lower().strip()
 
             # Find the most specific query (longest common prefix)
             found_group = False
@@ -901,7 +931,7 @@ class ToolBatchProcessor:
                 optimized_batch.extend(items)
             else:
                 # For multiple similar queries, use the one with highest top_n
-                best_item = max(items, key=lambda x: x[1].get('top_n', 5))
+                best_item = max(items, key=lambda x: x[1].get("top_n", 5))
                 optimized_batch.append(best_item)
                 logger.info(f"Optimized search_table batch: consolidated {len(items)} similar queries into 1")
 
@@ -917,7 +947,7 @@ class ToolBatchProcessor:
         unique_batch = []
 
         for todo_item, params in batch:
-            table_name = params.get('table_name', '').lower().strip()
+            table_name = params.get("table_name", "").lower().strip()
             if table_name and table_name not in seen_tables:
                 seen_tables.add(table_name)
                 unique_batch.append((todo_item, params))
@@ -930,110 +960,217 @@ class ToolBatchProcessor:
 
 # Default keyword mapping for plan executor - tool name to list of matching phrases
 DEFAULT_PLAN_EXECUTOR_KEYWORD_MAP = {
-            # Database tools
-            "search_table": [
-                "search for table", "搜索表结构", "查找数据库表", "find table in database",
-                "search table schema", "查找表信息", "find database tables", "搜索数据库表",
-                "探索数据库中的表结构", "找到试驾表和线索表", "确认表名", "表结构", "字段名"
-            ],
-            "describe_table": [
-                "describe table", "检查表结构", "inspect table schema", "查看表结构",
-        "examine table structure", "分析表结构", "describe table structure",
-        "检查表定义", "查看表模式", "analyze table structure", "分析表元数据",
-        "表定义", "表模式", "表元数据", "表字段"
-            ],
-            "execute_sql": [
-                "execute sql query", "执行sql查询", "run sql statement", "执行sql语句",
-        "run database query", "执行数据库查询", "execute the sql", "运行sql代码",
-        "execute sql", "执行sql", "run the query", "执行查询",
-        "运行sql", "执行sql语句", "查询执行"
-            ],
-            "read_query": [
-                "run query", "执行查询", "execute database query", "运行数据库查询",
-                "perform sql execution", "执行sql执行"
-            ],
-
-            # Metrics and reference SQL tools
-            "search_metrics": [
-                "search metrics", "查找指标", "find business metrics", "搜索业务指标",
-                "look for kpis", "查找kpi", "search performance metrics", "查找绩效指标"
-            ],
-            "search_reference_sql": [
-                "search sql examples", "查找参考sql", "find reference sql", "搜索sql模板",
-                "look for sql patterns", "查找sql模式", "search similar sql", "查找相似sql"
-            ],
-            "list_domain_layers_tree": [
-                "list domains", "查看领域层级", "show domain structure", "显示业务分类",
-                "explore domain layers", "浏览领域层级", "view business taxonomy", "查看业务分类法"
-            ],
-
-            # Semantic model tools
-            "check_semantic_model_exists": [
-                "check semantic model", "检查语义模型", "verify semantic model", "验证语义模型",
-                "semantic model exists", "语义模型是否存在", "find semantic model", "查找语义模型"
-            ],
-            "check_metric_exists": [
-                "check metric exists", "检查指标是否存在", "verify metric availability", "验证指标可用性",
-                "metric exists", "指标是否存在", "find existing metric", "查找现有指标"
-            ],
-            "generate_sql_summary_id": [
-                "generate summary id", "生成摘要标识", "create sql summary", "创建sql摘要",
-                "generate sql id", "生成sql标识", "create summary identifier", "创建摘要标识符"
-            ],
-
-            # Time parsing tools
-            "parse_temporal_expressions": [
-                "parse date expressions", "解析日期表达式", "parse temporal expressions", "解析时间表达式",
-                "analyze date ranges", "分析日期范围", "parse time periods", "解析时间段"
-            ],
-            "get_current_date": [
-                "get current date", "获取当前日期", "current date", "今天日期",
-                "today's date", "今日日期", "get today date", "获取今天日期"
-            ],
-
-            # File system tools
-            "write_file": [
-                "write file", "写入文件", "save to file", "保存到文件",
-                "create file", "创建文件", "write content to file", "将内容写入文件"
-            ],
-            "read_file": [
-                "read file", "读取文件", "load file", "加载文件",
-                "open file", "打开文件", "read file content", "读取文件内容"
-            ],
-            "list_directory": [
-                "list directory", "列出目录", "show directory contents", "显示目录内容",
-                "list files", "列出文件", "directory listing", "目录列表"
-            ],
-
-            # Reporting tools
-            "report": [
-                "generate final report", "生成最终报告", "create comprehensive report", "创建综合报告",
-        "write final report", "编写最终报告", "produce report", "生成报告",
-        "生成最终html", "生成最终", "生成html", "生成报告文档"
-            ],
-
-            # Plan management tools
-            "todo_write": [
-                "create plan", "创建计划", "write execution plan", "编写执行计划",
-                "generate todo list", "生成任务列表", "create task plan", "创建任务计划"
-            ],
-            "todo_update": [
-                "update task status", "更新任务状态", "mark task complete", "标记任务完成",
-                "update todo status", "更新待办状态", "change task state", "更改任务状态"
-            ],
-            "todo_read": [
-                "read plan", "查看计划", "show execution plan", "显示执行计划",
-                "check plan status", "检查计划状态", "view todo list", "查看任务列表"
-            ],
-        }
+    # Database tools
+    "search_table": [
+        "search for table",
+        "搜索表结构",
+        "查找数据库表",
+        "find table in database",
+        "search table schema",
+        "查找表信息",
+        "find database tables",
+        "搜索数据库表",
+        "探索数据库中的表结构",
+        "找到试驾表和线索表",
+        "确认表名",
+        "表结构",
+        "字段名",
+    ],
+    "describe_table": [
+        "describe table",
+        "检查表结构",
+        "inspect table schema",
+        "查看表结构",
+        "examine table structure",
+        "分析表结构",
+        "describe table structure",
+        "检查表定义",
+        "查看表模式",
+        "analyze table structure",
+        "分析表元数据",
+        "表定义",
+        "表模式",
+        "表元数据",
+        "表字段",
+    ],
+    "execute_sql": [
+        "execute sql query",
+        "执行sql查询",
+        "run sql statement",
+        "执行sql语句",
+        "run database query",
+        "执行数据库查询",
+        "execute the sql",
+        "运行sql代码",
+        "execute sql",
+        "执行sql",
+        "run the query",
+        "执行查询",
+        "运行sql",
+        "执行sql语句",
+        "查询执行",
+    ],
+    "read_query": ["run query", "执行查询", "execute database query", "运行数据库查询", "perform sql execution", "执行sql执行"],
+    # Metrics and reference SQL tools
+    "search_metrics": [
+        "search metrics",
+        "查找指标",
+        "find business metrics",
+        "搜索业务指标",
+        "look for kpis",
+        "查找kpi",
+        "search performance metrics",
+        "查找绩效指标",
+    ],
+    "search_reference_sql": [
+        "search sql examples",
+        "查找参考sql",
+        "find reference sql",
+        "搜索sql模板",
+        "look for sql patterns",
+        "查找sql模式",
+        "search similar sql",
+        "查找相似sql",
+    ],
+    "list_domain_layers_tree": [
+        "list domains",
+        "查看领域层级",
+        "show domain structure",
+        "显示业务分类",
+        "explore domain layers",
+        "浏览领域层级",
+        "view business taxonomy",
+        "查看业务分类法",
+    ],
+    # Semantic model tools
+    "check_semantic_model_exists": [
+        "check semantic model",
+        "检查语义模型",
+        "verify semantic model",
+        "验证语义模型",
+        "semantic model exists",
+        "语义模型是否存在",
+        "find semantic model",
+        "查找语义模型",
+    ],
+    "check_metric_exists": [
+        "check metric exists",
+        "检查指标是否存在",
+        "verify metric availability",
+        "验证指标可用性",
+        "metric exists",
+        "指标是否存在",
+        "find existing metric",
+        "查找现有指标",
+    ],
+    "generate_sql_summary_id": [
+        "generate summary id",
+        "生成摘要标识",
+        "create sql summary",
+        "创建sql摘要",
+        "generate sql id",
+        "生成sql标识",
+        "create summary identifier",
+        "创建摘要标识符",
+    ],
+    # Time parsing tools
+    "parse_temporal_expressions": [
+        "parse date expressions",
+        "解析日期表达式",
+        "parse temporal expressions",
+        "解析时间表达式",
+        "analyze date ranges",
+        "分析日期范围",
+        "parse time periods",
+        "解析时间段",
+    ],
+    "get_current_date": [
+        "get current date",
+        "获取当前日期",
+        "current date",
+        "今天日期",
+        "today's date",
+        "今日日期",
+        "get today date",
+        "获取今天日期",
+    ],
+    # File system tools
+    "write_file": [
+        "write file",
+        "写入文件",
+        "save to file",
+        "保存到文件",
+        "create file",
+        "创建文件",
+        "write content to file",
+        "将内容写入文件",
+    ],
+    "read_file": ["read file", "读取文件", "load file", "加载文件", "open file", "打开文件", "read file content", "读取文件内容"],
+    "list_directory": [
+        "list directory",
+        "列出目录",
+        "show directory contents",
+        "显示目录内容",
+        "list files",
+        "列出文件",
+        "directory listing",
+        "目录列表",
+    ],
+    # Reporting tools
+    "report": [
+        "generate final report",
+        "生成最终报告",
+        "create comprehensive report",
+        "创建综合报告",
+        "write final report",
+        "编写最终报告",
+        "produce report",
+        "生成报告",
+        "生成最终html",
+        "生成最终",
+        "生成html",
+        "生成报告文档",
+    ],
+    # Plan management tools
+    "todo_write": [
+        "create plan",
+        "创建计划",
+        "write execution plan",
+        "编写执行计划",
+        "generate todo list",
+        "生成任务列表",
+        "create task plan",
+        "创建任务计划",
+    ],
+    "todo_update": [
+        "update task status",
+        "更新任务状态",
+        "mark task complete",
+        "标记任务完成",
+        "update todo status",
+        "更新待办状态",
+        "change task state",
+        "更改任务状态",
+    ],
+    "todo_read": [
+        "read plan",
+        "查看计划",
+        "show execution plan",
+        "显示执行计划",
+        "check plan status",
+        "检查计划状态",
+        "view todo list",
+        "查看任务列表",
+    ],
+}
 
 
 class TaskTypeClassifier:
     """智能任务类型分类器"""
 
     TOOL_EXECUTION = "tool_execution"  # 需要调用外部工具
-    LLM_ANALYSIS = "llm_analysis"      # 需要LLM推理分析
-    HYBRID = "hybrid"                  # 可能需要工具+分析
+    LLM_ANALYSIS = "llm_analysis"  # 需要LLM推理分析
+    HYBRID = "hybrid"  # 可能需要工具+分析
 
     @classmethod
     def classify_task(cls, task_content: str) -> str:
@@ -1042,15 +1179,52 @@ class TaskTypeClassifier:
             return cls.HYBRID
 
         analysis_keywords = [
-            '分析', '检查', '评估', '验证', '优化', '审查', '性能影响',
-            'analyze', 'check', 'evaluate', 'validate', 'optimize', 'review', 'performance impact',
-            '考察', '审视', '审核', '诊断', '评测', '衡量', '比对'
+            "分析",
+            "检查",
+            "评估",
+            "验证",
+            "优化",
+            "审查",
+            "性能影响",
+            "analyze",
+            "check",
+            "evaluate",
+            "validate",
+            "optimize",
+            "review",
+            "performance impact",
+            "考察",
+            "审视",
+            "审核",
+            "诊断",
+            "评测",
+            "衡量",
+            "比对",
         ]
 
         tool_keywords = [
-            '执行', '运行', '查询', '搜索', '创建', '写入', '获取', '获取',
-            'execute', 'run', 'query', 'search', 'create', 'write', 'fetch', 'retrieve',
-            '调用', '启动', '构建', '生成', '制作', '编写'
+            "执行",
+            "运行",
+            "查询",
+            "搜索",
+            "创建",
+            "写入",
+            "获取",
+            "获取",
+            "execute",
+            "run",
+            "query",
+            "search",
+            "create",
+            "write",
+            "fetch",
+            "retrieve",
+            "调用",
+            "启动",
+            "构建",
+            "生成",
+            "制作",
+            "编写",
         ]
 
         content_lower = task_content.lower()
@@ -1058,11 +1232,11 @@ class TaskTypeClassifier:
         tool_score = sum(1 for kw in tool_keywords if kw in content_lower)
 
         # 特殊规则：如果明确提到"执行SQL"、"运行查询"等，优先归类为工具执行
-        if any(phrase in content_lower for phrase in ['执行sql', '运行sql', 'execute sql', 'run sql']):
+        if any(phrase in content_lower for phrase in ["执行sql", "运行sql", "execute sql", "run sql"]):
             return cls.TOOL_EXECUTION
 
         # 特殊规则：如果明确提到"分析"、"检查"、"评估"等，优先归类为LLM分析
-        if any(phrase in content_lower for phrase in ['sql审查', 'sql检查', 'sql分析', 'sql优化']):
+        if any(phrase in content_lower for phrase in ["sql审查", "sql检查", "sql分析", "sql优化"]):
             return cls.LLM_ANALYSIS
 
         # 基于关键词得分分类
@@ -1082,27 +1256,33 @@ class TaskTypeClassifier:
             content_lower = task_content.lower()
 
             # SQL审查任务的特殊上下文
-            if 'sql审查' in content_lower or 'sql检查' in content_lower:
-                context.update({
-                    "domain": "sql_review",
-                    "rules": ["starrocks_3_3_rules", "performance_best_practices"],
-                    "output_format": "structured_report"
-                })
+            if "sql审查" in content_lower or "sql检查" in content_lower:
+                context.update(
+                    {
+                        "domain": "sql_review",
+                        "rules": ["starrocks_3_3_rules", "performance_best_practices"],
+                        "output_format": "structured_report",
+                    }
+                )
 
             # 性能分析任务的上下文
-            elif '性能' in content_lower or 'performance' in content_lower:
-                context.update({
-                    "domain": "performance_analysis",
-                    "metrics": ["execution_time", "memory_usage", "query_complexity"],
-                    "focus_areas": ["index_usage", "join_efficiency", "data_distribution"]
-                })
+            elif "性能" in content_lower or "performance" in content_lower:
+                context.update(
+                    {
+                        "domain": "performance_analysis",
+                        "metrics": ["execution_time", "memory_usage", "query_complexity"],
+                        "focus_areas": ["index_usage", "join_efficiency", "data_distribution"],
+                    }
+                )
 
             # 业务逻辑验证的上下文
-            elif '业务逻辑' in content_lower or 'business logic' in content_lower:
-                context.update({
-                    "domain": "business_logic_validation",
-                    "aspects": ["data_consistency", "business_rules", "data_quality"]
-                })
+            elif "业务逻辑" in content_lower or "business logic" in content_lower:
+                context.update(
+                    {
+                        "domain": "business_logic_validation",
+                        "aspects": ["data_consistency", "business_rules", "data_quality"],
+                    }
+                )
 
         return context
 
@@ -1118,7 +1298,17 @@ class UserCancelledException(Exception):
 class PlanModeHooks(AgentHooks):
     """Plan Mode hooks for workflow management"""
 
-    def __init__(self, console: Console, session: SQLiteSession, auto_mode: bool = False, action_history_manager=None, agent_config=None, emit_queue: Optional[asyncio.Queue] = None, model=None, auto_injected_knowledge: Optional[List[str]] = None):
+    def __init__(
+        self,
+        console: Console,
+        session: SQLiteSession,
+        auto_mode: bool = False,
+        action_history_manager=None,
+        agent_config=None,
+        emit_queue: Optional[asyncio.Queue] = None,
+        model=None,
+        auto_injected_knowledge: Optional[List[str]] = None,
+    ):
         self.console = console
         self.session = session
         self.auto_mode = auto_mode
@@ -1140,6 +1330,9 @@ class PlanModeHooks(AgentHooks):
         self.emit_queue = emit_queue
         # Executor task handle
         self._executor_task = None
+        # Completion signaling for coordination between server executor and main agent loop
+        self._execution_complete = asyncio.Event()
+        self._all_todos_completed = False
         # Load and merge keyword->tool mapping
         self.keyword_map: Dict[str, List[str]] = self._load_keyword_map(agent_config)
         # fallback behavior enabled by default unless agent_config disables it
@@ -1155,10 +1348,7 @@ class PlanModeHooks(AgentHooks):
 
         # Initialize smart execution router for intelligent task routing
         self.execution_router = SmartExecutionRouter(
-            agent_config=agent_config,
-            model=model,
-            action_history_manager=action_history_manager,
-            emit_queue=emit_queue
+            agent_config=agent_config, model=model, action_history_manager=action_history_manager, emit_queue=emit_queue
         )
 
         # Initialize monitoring system
@@ -1233,7 +1423,7 @@ class PlanModeHooks(AgentHooks):
             "search_table": ["table", "database", "schema", "column", "field", "表", "字段", "结构", "数据库"],
             "describe_table": ["describe", "structure", "definition", "schema", "describe table"],
             "execute_sql": ["sql", "query", "execute", "run", "SQL", "查询", "执行"],
-            "read_query": ["read", "select", "query", "读取", "查询"]
+            "read_query": ["read", "select", "query", "读取", "查询"],
         }
 
         for tool, patterns in db_patterns.items():
@@ -1284,24 +1474,30 @@ class PlanModeHooks(AgentHooks):
 
         # Tier 1: Task Intent Classification (most intelligent)
         intent_result = self._classify_task_intent(cleaned_text)
-        if intent_result and intent_result['confidence'] > 0.8:
-            logger.debug(f"Matched tool '{intent_result['tool']}' via intent classification (confidence: {intent_result['confidence']:.2f})")
-            return intent_result['tool']
+        if intent_result and intent_result["confidence"] > 0.8:
+            logger.debug(
+                f"Matched tool '{intent_result['tool']}' via intent classification (confidence: {intent_result['confidence']:.2f})"
+            )
+            return intent_result["tool"]
 
         # Tier 2: Enhanced Context-Aware Keyword Matching
         context_match = self._match_keywords_with_context(cleaned_text)
-        if context_match and context_match['confidence'] > 0.7:
-            logger.debug(f"Matched tool '{context_match['tool']}' via context-aware matching (confidence: {context_match['confidence']:.2f})")
-            return context_match['tool']
+        if context_match and context_match["confidence"] > 0.7:
+            logger.debug(
+                f"Matched tool '{context_match['tool']}' via context-aware matching (confidence: {context_match['confidence']:.2f})"
+            )
+            return context_match["tool"]
 
         # Tier 3: Semantic Understanding for Chinese Tasks
         semantic_match = self._semantic_chinese_matching(cleaned_text)
         if semantic_match:
-            logger.debug(f"Matched tool '{semantic_match['tool']}' via semantic understanding (confidence: {semantic_match['confidence']:.2f})")
-            return semantic_match['tool']
+            logger.debug(
+                f"Matched tool '{semantic_match['tool']}' via semantic understanding (confidence: {semantic_match['confidence']:.2f})"
+            )
+            return semantic_match["tool"]
 
         # Tier 4: LLM reasoning fallback (if model available and high uncertainty)
-        if self.model and (not intent_result or intent_result['confidence'] < 0.6):
+        if self.model and (not intent_result or intent_result["confidence"] < 0.6):
             tool = self._enhanced_llm_reasoning(cleaned_text)
             if tool:
                 logger.debug(f"Matched tool '{tool}' via enhanced LLM reasoning")
@@ -1394,21 +1590,25 @@ class PlanModeHooks(AgentHooks):
                 recent_actions = self.action_history_manager.get_actions()[-5:]
                 for action in recent_actions:
                     if action.role in [ActionRole.ASSISTANT, ActionRole.TOOL]:
-                        context_actions.append({
-                            "role": action.role.value if hasattr(action.role, "value") else str(action.role),
-                            "action_type": action.action_type,
-                            "messages": action.messages[:100] if action.messages else "",  # Truncate for context
-                        })
+                        context_actions.append(
+                            {
+                                "role": action.role.value if hasattr(action.role, "value") else str(action.role),
+                                "action_type": action.action_type,
+                                "messages": action.messages[:100] if action.messages else "",  # Truncate for context
+                            }
+                        )
 
             # Build reasoning prompt based on type
             reasoning_instructions = {
                 "analysis": "Analyze the following task and provide insights, considerations, or structured breakdown.",
                 "reflection": "Reflect on the current state and previous actions. What worked well? What could be improved?",
                 "validation": "Validate the approach, check for completeness, and identify potential issues.",
-                "synthesis": "Synthesize information from context and provide a comprehensive response or next steps."
+                "synthesis": "Synthesize information from context and provide a comprehensive response or next steps.",
             }
 
-            instruction = reasoning_instructions.get(item.reasoning_type, "Provide reasoning and insights for this task.")
+            instruction = reasoning_instructions.get(
+                item.reasoning_type, "Provide reasoning and insights for this task."
+            )
 
             prompt = f"""{instruction}
 
@@ -1422,24 +1622,26 @@ Provide your reasoning and any recommendations. If this requires tool calls, you
             # Execute LLM reasoning
             logger.info(f"LLM reasoning: calling model.generate for todo {item.id}")
             try:
-                response = await asyncio.to_thread(
-                    self.model.generate, prompt, max_tokens=500, temperature=0.3
+                response = await asyncio.to_thread(self.model.generate, prompt, max_tokens=500, temperature=0.3)
+                logger.info(
+                    f"LLM reasoning: model.generate returned for todo {item.id}, response type: {type(response)}"
                 )
-                logger.info(f"LLM reasoning: model.generate returned for todo {item.id}, response type: {type(response)}")
             except Exception as e:
                 logger.error(f"LLM reasoning: model.generate failed for todo {item.id}: {e}")
                 return None
 
             if response:
                 logger.info(f"LLM reasoning: response has content attr: {hasattr(response, 'content')}")
-                if hasattr(response, 'content'):
+                if hasattr(response, "content"):
                     logger.info(f"LLM reasoning: content length: {len(response.content) if response.content else 0}")
                 else:
-                    logger.info(f"LLM reasoning: response attrs: {[attr for attr in dir(response) if not attr.startswith('_')]}")
+                    logger.info(
+                        f"LLM reasoning: response attrs: {[attr for attr in dir(response) if not attr.startswith('_')]}"
+                    )
             else:
                 logger.warning(f"LLM reasoning: response is None for todo {item.id}")
 
-            if response and hasattr(response, 'content'):
+            if response and hasattr(response, "content"):
                 reasoning_result = {
                     "reasoning_type": item.reasoning_type,
                     "response": response.content.strip(),
@@ -1450,7 +1652,8 @@ Provide your reasoning and any recommendations. If this requires tool calls, you
 
                 # Try to extract SQL if present in response
                 import re
-                sql_match = re.search(r'```sql\s*(.*?)\s*```', response.content, re.DOTALL | re.IGNORECASE)
+
+                sql_match = re.search(r"```sql\s*(.*?)\s*```", response.content, re.DOTALL | re.IGNORECASE)
                 if sql_match:
                     reasoning_result["sql"] = sql_match.group(1).strip()
 
@@ -1501,7 +1704,7 @@ Respond with only the tool name, nothing else."""
             # Use a simple completion call
             response = self.model.generate(prompt, max_tokens=50, temperature=0.1)
 
-            if response and hasattr(response, 'content'):
+            if response and hasattr(response, "content"):
                 tool_name = response.content.strip().lower()
                 # Validate that the suggested tool exists
                 if tool_name in [t.lower() for t in available_tools]:
@@ -1542,18 +1745,17 @@ Consider the intent and requirements of the todo item. Choose the single most ap
 Respond with only the tool name, nothing else."""
 
             # Use async generation if available
-            if hasattr(self.model, 'generate_async'):
-                response = await asyncio.to_thread(
-                    self.model.generate, prompt, max_tokens=50, temperature=0.1
-                )
+            if hasattr(self.model, "generate_async"):
+                response = await asyncio.to_thread(self.model.generate, prompt, max_tokens=50, temperature=0.1)
             else:
                 # Fallback to sync method in a thread
                 import asyncio
+
                 response = await asyncio.get_event_loop().run_in_executor(
                     None, lambda: self.model.generate(prompt, max_tokens=50, temperature=0.1)
                 )
 
-            if response and hasattr(response, 'content'):
+            if response and hasattr(response, "content"):
                 tool_name = response.content.strip().lower()
                 # Validate that the suggested tool exists
                 if tool_name in [t.lower() for t in available_tools]:
@@ -1579,31 +1781,50 @@ Respond with only the tool name, nothing else."""
         t = text.lower()
 
         # Database-related inference (more specific patterns)
-        if ("search" in t or "find" in t or "lookup" in t or "查找" in t) and ("table" in t or "database" in t or "表" in t or "数据库" in t):
-                return "search_table"
-        elif ("describe" in t and "table" in t) or ("表结构" in t) or ("table schema" in t) or ("表模式" in t) or ("table metadata" in t):
-                return "describe_table"
-        elif ("execute" in t and "sql" in t) or ("run" in t and "query" in t) or ("执行" in t and ("sql" in t or "查询" in t)):
-                return "execute_sql"
+        if ("search" in t or "find" in t or "lookup" in t or "查找" in t) and (
+            "table" in t or "database" in t or "表" in t or "数据库" in t
+        ):
+            return "search_table"
+        elif (
+            ("describe" in t and "table" in t)
+            or ("表结构" in t)
+            or ("table schema" in t)
+            or ("表模式" in t)
+            or ("table metadata" in t)
+        ):
+            return "describe_table"
+        elif (
+            ("execute" in t and "sql" in t)
+            or ("run" in t and "query" in t)
+            or ("执行" in t and ("sql" in t or "查询" in t))
+        ):
+            return "execute_sql"
 
         # Metrics-related inference (require both metric and search intent)
-        if ("search" in t or "find" in t or "lookup" in t or "查找" in t) and any(keyword in t for keyword in ["metric", "kpi", "指标", "转化率", "收入", "销售额", "performance", "绩效"]):
+        if ("search" in t or "find" in t or "lookup" in t or "查找" in t) and any(
+            keyword in t for keyword in ["metric", "kpi", "指标", "转化率", "收入", "销售额", "performance", "绩效"]
+        ):
             return "search_metrics"
 
         # Time-related inference (require both time and parse/analyze intent)
-        if ("parse" in t or "analyze" in t or "解析" in t or "分析" in t) and any(keyword in t for keyword in ["date", "time", "temporal", "日期", "时间", "period", "期间"]):
+        if ("parse" in t or "analyze" in t or "解析" in t or "分析" in t) and any(
+            keyword in t for keyword in ["date", "time", "temporal", "日期", "时间", "period", "期间"]
+        ):
             return "parse_temporal_expressions"
 
         # File-related inference (more specific patterns)
         if ("write" in t or "save" in t or "create" in t or "写入" in t or "保存" in t) and ("file" in t or "文件" in t):
-                return "write_file"
+            return "write_file"
         elif ("read" in t or "load" in t or "读取" in t) and ("file" in t or "文件" in t):
-                return "read_file"
+            return "read_file"
         elif ("list" in t or "directory" in t or "列出" in t) and ("directory" in t or "文件夹" in t):
-                return "list_directory"
+            return "list_directory"
 
         # Report-related inference (require specific report generation intent)
-        if any(phrase in t for phrase in ["final report", "生成报告", "create report", "生成最终", "final summary", "最终报告", "generate report"]):
+        if any(
+            phrase in t
+            for phrase in ["final report", "生成报告", "create report", "生成最终", "final summary", "最终报告", "generate report"]
+        ):
             return "report"
 
         return None
@@ -1652,6 +1873,15 @@ Respond with only the tool name, nothing else."""
         self._state_transitions.append(transition_data)
         logger.info(f"Plan mode state transition: {old_state} -> {new_state}")
         return transition_data
+
+    def is_execution_complete(self) -> bool:
+        """Check if server executor has completed all todos.
+
+        This provides coordination between the server executor (background task)
+        and the main agent loop, allowing early termination when all plan todos
+        are completed.
+        """
+        return self._execution_complete.is_set() and self._all_todos_completed
 
     async def _on_plan_generated(self):
         todo_list = self.todo_storage.get_todo_list()
@@ -2027,7 +2257,9 @@ Respond with only the tool name, nothing else."""
                         if isinstance(args, str):
                             try:
                                 parsed = json.loads(args)
-                                if isinstance(parsed, dict) and (parsed.get("todo_id") == todo_id or parsed.get("todoId") == todo_id):
+                                if isinstance(parsed, dict) and (
+                                    parsed.get("todo_id") == todo_id or parsed.get("todoId") == todo_id
+                                ):
                                     if a.status == ActionStatus.SUCCESS:
                                         return True
                             except Exception:
@@ -2037,7 +2269,9 @@ Respond with only the tool name, nothing else."""
                         if isinstance(inp, str):
                             try:
                                 parsed = json.loads(inp)
-                                if isinstance(parsed, dict) and (parsed.get("todo_id") == todo_id or parsed.get("todoId") == todo_id):
+                                if isinstance(parsed, dict) and (
+                                    parsed.get("todo_id") == todo_id or parsed.get("todoId") == todo_id
+                                ):
                                     if a.status == ActionStatus.SUCCESS:
                                         return True
                             except Exception:
@@ -2062,7 +2296,9 @@ Respond with only the tool name, nothing else."""
             logger.debug(f"Error checking action history for todo execution: {e}")
             return False
 
-    async def _execute_tool_with_error_handling(self, tool_func, tool_name: str, *args, **kwargs) -> Tuple[Any, bool, Dict[str, Any]]:
+    async def _execute_tool_with_error_handling(
+        self, tool_func, tool_name: str, *args, **kwargs
+    ) -> Tuple[Any, bool, Dict[str, Any]]:
         """
         Execute a tool function with comprehensive error handling, recovery, and auto-fix.
 
@@ -2113,11 +2349,11 @@ Respond with only the tool name, nothing else."""
                         if fallback_result:
                             # Record successful error recovery
                             self.monitor.record_error_recovery(f"fallback_to_{fallback_tool}", True)
-                            return fallback_result[0], fallback_result[1], {
-                                **error_info,
-                                "fallback_used": True,
-                                "fallback_tool": fallback_tool
-                            }
+                            return (
+                                fallback_result[0],
+                                fallback_result[1],
+                                {**error_info, "fallback_used": True, "fallback_tool": fallback_tool},
+                            )
                         else:
                             # Record failed error recovery
                             self.monitor.record_error_recovery(f"fallback_to_{fallback_tool}", False)
@@ -2139,7 +2375,9 @@ Respond with only the tool name, nothing else."""
         # Should not reach here, but just in case
         return None, False, {"error_type": ErrorType.UNKNOWN, "error_message": "Maximum retries exceeded"}
 
-    def _apply_auto_fix(self, tool_name: str, error_info: Dict[str, Any], kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _apply_auto_fix(
+        self, tool_name: str, error_info: Dict[str, Any], kwargs: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         """Apply automatic fixes based on error analysis."""
         fixed_kwargs = kwargs.copy()
 
@@ -2170,7 +2408,9 @@ Respond with only the tool name, nothing else."""
 
         return None
 
-    async def _execute_fallback_tool(self, fallback_tool_name: str, original_kwargs: Dict[str, Any], error_info: Dict[str, Any]) -> Optional[Tuple[Any, bool]]:
+    async def _execute_fallback_tool(
+        self, fallback_tool_name: str, original_kwargs: Dict[str, Any], error_info: Dict[str, Any]
+    ) -> Optional[Tuple[Any, bool]]:
         """Execute a fallback tool when the primary tool fails."""
         try:
             # Import tools here to avoid circular imports
@@ -2178,7 +2418,7 @@ Respond with only the tool name, nothing else."""
 
             # Get database tool instance (this assumes we have access to it)
             # In practice, this would need to be passed as a parameter
-            db_tool = getattr(self, '_db_tool', None)
+            db_tool = getattr(self, "_db_tool", None)
             if not db_tool:
                 return None
 
@@ -2189,7 +2429,9 @@ Respond with only the tool name, nothing else."""
 
             elif fallback_tool_name == "describe_table":
                 # This would be unusual, but handle it
-                table_name = original_kwargs.get("query_text", "").split()[0] if original_kwargs.get("query_text") else ""
+                table_name = (
+                    original_kwargs.get("query_text", "").split()[0] if original_kwargs.get("query_text") else ""
+                )
                 if table_name:
                     result = db_tool.describe_table(table_name=table_name)
                     return (result, True)
@@ -2208,7 +2450,7 @@ Respond with only the tool name, nothing else."""
                     planId=plan_id,
                     timestamp=int(time.time() * 1000),
                     event=DeepResearchEventType.Chat,
-                    content=message
+                    content=message,
                 )
                 await self.emit_queue.put(status_event)
                 logger.debug(f"Emitted status message: {message}")
@@ -2226,11 +2468,11 @@ Respond with only the tool name, nothing else."""
 
             # Record batch optimization
             if len(optimized_batch) < len(search_batch):
-                self.monitor.record_batch_optimization("search_table_consolidation", len(search_batch), len(optimized_batch))
+                self.monitor.record_batch_optimization(
+                    "search_table_consolidation", len(search_batch), len(optimized_batch)
+                )
 
-            batch_results["search_table"] = await self._execute_search_table_batch(
-                optimized_batch, db_tool, call_id
-            )
+            batch_results["search_table"] = await self._execute_search_table_batch(optimized_batch, db_tool, call_id)
 
         # Process describe_table batch
         if self.batch_processor.get_batch_size("describe_table") > 0:
@@ -2239,7 +2481,9 @@ Respond with only the tool name, nothing else."""
 
             # Record batch optimization
             if len(optimized_batch) < len(describe_batch):
-                self.monitor.record_batch_optimization("describe_table_deduplication", len(describe_batch), len(optimized_batch))
+                self.monitor.record_batch_optimization(
+                    "describe_table_deduplication", len(describe_batch), len(optimized_batch)
+                )
 
             batch_results["describe_table"] = await self._execute_describe_table_batch(
                 optimized_batch, db_tool, call_id
@@ -2263,13 +2507,20 @@ Respond with only the tool name, nothing else."""
                     # Record cache hit
                     self.monitor.record_cache_hit("search_table", f"{query_text}_{top_n}")
 
-                    result_payload = cached_result.model_dump() if hasattr(cached_result, "model_dump") else dict(cached_result)
+                    result_payload = (
+                        cached_result.model_dump() if hasattr(cached_result, "model_dump") else dict(cached_result)
+                    )
                     complete_action_db = ActionHistory(
                         action_id=f"{call_id}_cached_search",
                         role=ActionRole.TOOL,
                         messages=f"Server executor: db.search_table (cached) for todo {todo_item.id}",
                         action_type="search_table",
-                        input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": top_n, "todo_id": todo_item.id})},
+                        input={
+                            "function_name": "search_table",
+                            "arguments": json.dumps(
+                                {"query_text": query_text, "top_n": top_n, "todo_id": todo_item.id}
+                            ),
+                        },
                         output=result_payload,
                         status=ActionStatus.SUCCESS,
                     )
@@ -2302,7 +2553,7 @@ Respond with only the tool name, nothing else."""
                 result_payload = {
                     "error": error_info.get("error_message", "Unknown error"),
                     "suggestions": error_info.get("suggestions", []),
-                    "error_type": error_info.get("error_type", ErrorType.UNKNOWN)
+                    "error_type": error_info.get("error_type", ErrorType.UNKNOWN),
                 }
                 status = ActionStatus.FAILED
                 messages = f"Server executor: db.search_table failed for todo {todo_item.id}: {error_info.get('error_message', 'Unknown error')}"
@@ -2312,7 +2563,10 @@ Respond with only the tool name, nothing else."""
                 role=ActionRole.TOOL,
                 messages=messages,
                 action_type="search_table",
-                input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": top_n, "todo_id": todo_item.id})},
+                input={
+                    "function_name": "search_table",
+                    "arguments": json.dumps({"query_text": query_text, "top_n": top_n, "todo_id": todo_item.id}),
+                },
                 output=result_payload,
                 status=status,
             )
@@ -2344,13 +2598,18 @@ Respond with only the tool name, nothing else."""
                     # Record cache hit
                     self.monitor.record_cache_hit("describe_table", table_name)
 
-                    result_payload = cached_result.model_dump() if hasattr(cached_result, "model_dump") else dict(cached_result)
+                    result_payload = (
+                        cached_result.model_dump() if hasattr(cached_result, "model_dump") else dict(cached_result)
+                    )
                     complete_action_db = ActionHistory(
                         action_id=f"{call_id}_cached_describe",
                         role=ActionRole.TOOL,
                         messages=f"Server executor: db.describe_table (cached) for todo {todo_item.id}",
                         action_type="describe_table",
-                        input={"function_name": "describe_table", "arguments": json.dumps({"table_name": table_name, "todo_id": todo_item.id})},
+                        input={
+                            "function_name": "describe_table",
+                            "arguments": json.dumps({"table_name": table_name, "todo_id": todo_item.id}),
+                        },
                         output=result_payload,
                         status=ActionStatus.SUCCESS,
                     )
@@ -2383,7 +2642,7 @@ Respond with only the tool name, nothing else."""
                 result_payload = {
                     "error": error_info.get("error_message", "Unknown error"),
                     "suggestions": error_info.get("suggestions", []),
-                    "error_type": error_info.get("error_type", ErrorType.UNKNOWN)
+                    "error_type": error_info.get("error_type", ErrorType.UNKNOWN),
                 }
                 status = ActionStatus.FAILED
                 messages = f"Server executor: db.describe_table failed for todo {todo_item.id}: {error_info.get('error_message', 'Unknown error')}"
@@ -2393,7 +2652,10 @@ Respond with only the tool name, nothing else."""
                 role=ActionRole.TOOL,
                 messages=messages,
                 action_type="describe_table",
-                input={"function_name": "describe_table", "arguments": json.dumps({"table_name": table_name, "todo_id": todo_item.id})},
+                input={
+                    "function_name": "describe_table",
+                    "arguments": json.dumps({"table_name": table_name, "todo_id": todo_item.id}),
+                },
                 output=result_payload,
                 status=status,
             )
@@ -2433,6 +2695,7 @@ Respond with only the tool name, nothing else."""
                 return
 
             from datus.tools.func_tool.plan_tools import PlanTool
+
             plan_tool = PlanTool(self.session)
             plan_tool.storage = self.todo_storage
 
@@ -2443,7 +2706,9 @@ Respond with only the tool name, nothing else."""
                 if self.agent_config:
                     from datus.tools.func_tool.database import db_function_tool_instance
 
-                    db_tool = db_function_tool_instance(self.agent_config, database_name=getattr(self.agent_config, "current_database", ""))
+                    db_tool = db_function_tool_instance(
+                        self.agent_config, database_name=getattr(self.agent_config, "current_database", "")
+                    )
             except Exception as e:
                 logger.debug(f"Could not initialize DB tool: {e}")
 
@@ -2480,18 +2745,15 @@ Respond with only the tool name, nothing else."""
                 call_id = f"server_call_{uuid.uuid4().hex[:8]}"
 
                 # 智能任务路由：根据任务类型选择执行方式
-                task_type = getattr(item, 'task_type', 'hybrid')
+                task_type = getattr(item, "task_type", "hybrid")
                 if task_type == TaskType.LLM_ANALYSIS:
                     # 对于纯分析任务，使用智能路由器执行LLM分析
                     logger.info(f"Server executor: routing {item.id} to LLM analysis (task_type: {task_type})")
 
                     try:
-                        routing_result = await self.execution_router.execute_task(item, {
-                            'call_id': call_id,
-                            'plan_tool': plan_tool,
-                            'db_tool': db_tool,
-                            'fs_tool': fs_tool
-                        })
+                        routing_result = await self.execution_router.execute_task(
+                            item, {"call_id": call_id, "plan_tool": plan_tool, "db_tool": db_tool, "fs_tool": fs_tool}
+                        )
 
                         if routing_result["success"]:
                             action = routing_result.get("action")
@@ -2499,7 +2761,9 @@ Respond with only the tool name, nothing else."""
                             # Execute the actual task based on action
                             if action == "execute_llm_reasoning":
                                 # Execute LLM reasoning
-                                logger.info(f"Server executor: executing LLM reasoning for todo {item.id} (execution_router)")
+                                logger.info(
+                                    f"Server executor: executing LLM reasoning for todo {item.id} (execution_router)"
+                                )
                                 reasoning_result = await self._execute_llm_reasoning(item)
                                 executed_any = True  # Always mark as executed to avoid infinite loop
                                 if reasoning_result:
@@ -2511,7 +2775,9 @@ Respond with only the tool name, nothing else."""
                                     except Exception as e:
                                         logger.error(f"Failed to mark LLM analysis task as completed {item.id}: {e}")
                                 else:
-                                    logger.warning(f"Server executor: LLM reasoning failed for todo {item.id}, marking as failed")
+                                    logger.warning(
+                                        f"Server executor: LLM reasoning failed for todo {item.id}, marking as failed"
+                                    )
                                     try:
                                         plan_tool._update_todo_status(item.id, "failed")
                                         await self._emit_plan_update_event(item.id, "failed")
@@ -2528,7 +2794,9 @@ Respond with only the tool name, nothing else."""
                                 executed_any = True
                                 logger.warning(f"Unknown action '{action}' for execution_router of todo {item.id}")
                         else:
-                            logger.warning(f"LLM analysis routing failed for {item.id}: {routing_result.get('error', 'Unknown error')}")
+                            logger.warning(
+                                f"LLM analysis routing failed for {item.id}: {routing_result.get('error', 'Unknown error')}"
+                            )
                             # Fall through to regular tool execution
                     except Exception as e:
                         logger.error(f"Smart routing failed for {item.id}: {e}")
@@ -2555,7 +2823,10 @@ Respond with only the tool name, nothing else."""
                             action_type="thinking",
                             messages=f"Skipped tool execution for todo {item.id} (requires_tool=False)",
                             input_data={"todo_id": item.id},
-                            output={"raw_output": "This step does not require external tool execution", "emit_chat": True},
+                            output={
+                                "raw_output": "This step does not require external tool execution",
+                                "emit_chat": True,
+                            },
                             status=ActionStatus.SUCCESS,
                         )
                         if self.action_history_manager:
@@ -2572,7 +2843,9 @@ Respond with only the tool name, nothing else."""
                 # Execute LLM reasoning if required
                 if not executed_any and getattr(item, "requires_llm_reasoning", False):
                     try:
-                        logger.info(f"Server executor: executing LLM reasoning for todo {item.id} (type: {item.reasoning_type})")
+                        logger.info(
+                            f"Server executor: executing LLM reasoning for todo {item.id} (type: {item.reasoning_type})"
+                        )
                         reasoning_result = await self._execute_llm_reasoning(item)
 
                         if reasoning_result:
@@ -2584,14 +2857,14 @@ Respond with only the tool name, nothing else."""
                                 input_data={
                                     "todo_id": item.id,
                                     "reasoning_type": item.reasoning_type,
-                                    "content": item.content
+                                    "content": item.content,
                                 },
                                 output_data={
                                     "response": reasoning_result["response"],
                                     "reasoning_type": reasoning_result["reasoning_type"],
                                     "context_used": reasoning_result["context_used"],
                                     "sql": reasoning_result["sql"],
-                                    "emit_chat": True
+                                    "emit_chat": True,
                                 },
                                 status=ActionStatus.SUCCESS,
                             )
@@ -2617,14 +2890,18 @@ Respond with only the tool name, nothing else."""
                 # If a tool was matched, execute mapped action
                 if not executed_any and matched_tool:
                     try:
-                        logger.info(f"Server executor: matched tool '{matched_tool}' for todo {item.id} (fs_tool: {fs_tool is not None}, db_tool: {db_tool is not None})")
+                        logger.info(
+                            f"Server executor: matched tool '{matched_tool}' for todo {item.id} (fs_tool: {fs_tool is not None}, db_tool: {db_tool is not None})"
+                        )
                         if matched_tool == "search_table" and db_tool:
                             tool_params = self._extract_tool_parameters(matched_tool, item.content or "")
                             query_text = tool_params.get("query_text", item.content or "")
                             top_n = tool_params.get("top_n", 5)
 
                             # Send status message about starting search
-                            await self._emit_status_message(f"🔍 **正在搜索数据库表**\n\n查找包含关键词的表结构和信息...", getattr(self, 'plan_id', None))
+                            await self._emit_status_message(
+                                f"🔍 **正在搜索数据库表**\n\n查找包含关键词的表结构和信息...", getattr(self, "plan_id", None)
+                            )
 
                             # Execute with error handling and recovery
                             res, success, error_info = await self._execute_tool_with_error_handling(
@@ -2632,18 +2909,27 @@ Respond with only the tool name, nothing else."""
                             )
 
                             if success:
-                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                result_payload = (
+                                    res.model_dump()
+                                    if hasattr(res, "model_dump")
+                                    else dict(res)
+                                    if isinstance(res, dict)
+                                    else {"result": res}
+                                )
                                 status = ActionStatus.SUCCESS
                                 messages = f"Server executor: db.search_table for todo {item.id}"
 
                                 # Send success status message
-                                await self._emit_status_message(f"✅ **搜索完成**\n\n找到 {len(result_payload.get('tables', []))} 个相关表", getattr(self, 'plan_id', None))
+                                await self._emit_status_message(
+                                    f"✅ **搜索完成**\n\n找到 {len(result_payload.get('tables', []))} 个相关表",
+                                    getattr(self, "plan_id", None),
+                                )
                             else:
                                 # Handle error with user-friendly message
                                 result_payload = {
                                     "error": error_info.get("error_message", "Unknown error"),
                                     "suggestions": error_info.get("suggestions", []),
-                                    "error_type": error_info.get("error_type", ErrorType.UNKNOWN)
+                                    "error_type": error_info.get("error_type", ErrorType.UNKNOWN),
                                 }
                                 status = ActionStatus.FAILED
                                 messages = f"Server executor: db.search_table failed for todo {item.id}: {error_info.get('error_message', 'Unknown error')}"
@@ -2653,7 +2939,12 @@ Respond with only the tool name, nothing else."""
                                 role=ActionRole.TOOL,
                                 messages=messages,
                                 action_type="search_table",
-                                input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": top_n, "todo_id": item.id})},
+                                input={
+                                    "function_name": "search_table",
+                                    "arguments": json.dumps(
+                                        {"query_text": query_text, "top_n": top_n, "todo_id": item.id}
+                                    ),
+                                },
                                 output=result_payload,
                                 status=status,
                             )
@@ -2670,13 +2961,20 @@ Respond with only the tool name, nothing else."""
                             sql_text = None
                             if self.action_history_manager:
                                 for a in reversed(self.action_history_manager.get_actions()):
-                                    if getattr(a, "role", "") == "assistant" or getattr(a, "role", "") == ActionRole.ASSISTANT:
+                                    if (
+                                        getattr(a, "role", "") == "assistant"
+                                        or getattr(a, "role", "") == ActionRole.ASSISTANT
+                                    ):
                                         out = getattr(a, "output", None)
                                         if isinstance(out, dict) and out.get("sql"):
                                             sql_text = out.get("sql")
                                             break
                                         content_field = out.get("content") if isinstance(out, dict) else None
-                                        if content_field and isinstance(content_field, str) and "```sql" in content_field:
+                                        if (
+                                            content_field
+                                            and isinstance(content_field, str)
+                                            and "```sql" in content_field
+                                        ):
                                             start = content_field.find("```sql")
                                             end = content_field.find("```", start + 6)
                                             if start != -1 and end != -1:
@@ -2686,10 +2984,12 @@ Respond with only the tool name, nothing else."""
                                 # Emit SQL execution start event
                                 sql_start_event = SqlExecutionStartEvent(
                                     id=f"sql_start_{call_id}",
-                                    planId=getattr(self, 'plan_id', None),
+                                    planId=getattr(self, "plan_id", None),
                                     timestamp=int(time.time() * 1000),
                                     sqlQuery=sql_text,
-                                    databaseName=getattr(self.workflow.task, 'database_name', None) if hasattr(self, 'workflow') and self.workflow else None
+                                    databaseName=getattr(self.workflow.task, "database_name", None)
+                                    if hasattr(self, "workflow") and self.workflow
+                                    else None,
                                 )
                                 if self.emit_queue is not None:
                                     try:
@@ -2701,12 +3001,12 @@ Respond with only the tool name, nothing else."""
                                 # Emit progress event - preparing for execution
                                 sql_progress_event = SqlExecutionProgressEvent(
                                     id=f"sql_progress_{call_id}_prep",
-                                    planId=getattr(self, 'plan_id', None),
+                                    planId=getattr(self, "plan_id", None),
                                     timestamp=int(time.time() * 1000),
                                     sqlQuery=sql_text,
                                     progress=0.1,
                                     currentStep="准备执行SQL查询",
-                                    elapsedTime=0
+                                    elapsedTime=0,
                                 )
                                 if self.emit_queue is not None:
                                     try:
@@ -2725,12 +3025,12 @@ Respond with only the tool name, nothing else."""
                                 mid_time = time.time()
                                 sql_progress_event2 = SqlExecutionProgressEvent(
                                     id=f"sql_progress_{call_id}_exec",
-                                    planId=getattr(self, 'plan_id', None),
+                                    planId=getattr(self, "plan_id", None),
                                     timestamp=int(mid_time * 1000),
                                     sqlQuery=sql_text,
                                     progress=0.7,
                                     currentStep="正在执行数据库查询",
-                                    elapsedTime=int((mid_time - start_time) * 1000)
+                                    elapsedTime=int((mid_time - start_time) * 1000),
                                 )
                                 if self.emit_queue is not None:
                                     try:
@@ -2743,28 +3043,41 @@ Respond with only the tool name, nothing else."""
                                 execution_time_ms = int((time.time() - start_time) * 1000)
 
                                 if success:
-                                    result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                    result_payload = (
+                                        res.model_dump()
+                                        if hasattr(res, "model_dump")
+                                        else dict(res)
+                                        if isinstance(res, dict)
+                                        else {"result": res}
+                                    )
 
                                     # Send success status message for SQL execution
-                                    row_count = getattr(res, 'row_count', 0)
-                                    await self._emit_status_message(f"✅ **查询执行成功**\n\n返回 {row_count} 行数据，耗时 {execution_time_ms}ms", getattr(self, 'plan_id', None))
+                                    row_count = getattr(res, "row_count", 0)
+                                    await self._emit_status_message(
+                                        f"✅ **查询执行成功**\n\n返回 {row_count} 行数据，耗时 {execution_time_ms}ms",
+                                        getattr(self, "plan_id", None),
+                                    )
 
                                     # Emit successful execution result event
                                     sql_result_event = SqlExecutionResultEvent(
                                         id=f"sql_result_{call_id}",
-                                        planId=getattr(self, 'plan_id', None),
+                                        planId=getattr(self, "plan_id", None),
                                         timestamp=int(time.time() * 1000),
                                         sqlQuery=sql_text,
-                                        rowCount=getattr(res, 'row_count', 0),
+                                        rowCount=getattr(res, "row_count", 0),
                                         executionTime=execution_time_ms,
-                                        data=getattr(res, 'sql_return', None),
-                                        hasMoreData=getattr(res, 'has_more_data', False),
-                                        dataPreview=str(getattr(res, 'sql_return', ''))[:500] if getattr(res, 'sql_return', None) else None
+                                        data=getattr(res, "sql_return", None),
+                                        hasMoreData=getattr(res, "has_more_data", False),
+                                        dataPreview=str(getattr(res, "sql_return", ""))[:500]
+                                        if getattr(res, "sql_return", None)
+                                        else None,
                                     )
                                     if self.emit_queue is not None:
                                         try:
                                             self.emit_queue.put_nowait(sql_result_event)
-                                            logger.debug(f"Emitted SQL execution result event: {sql_result_event.rowCount} rows in {execution_time_ms}ms")
+                                            logger.debug(
+                                                f"Emitted SQL execution result event: {sql_result_event.rowCount} rows in {execution_time_ms}ms"
+                                            )
                                         except Exception as e:
                                             logger.debug(f"Failed to emit SQL result event: {e}")
                                 else:
@@ -2773,19 +3086,19 @@ Respond with only the tool name, nothing else."""
                                     result_payload = {
                                         "error": error_msg,
                                         "suggestions": error_info.get("suggestions", []),
-                                        "error_type": error_info.get("error_type", ErrorType.UNKNOWN)
+                                        "error_type": error_info.get("error_type", ErrorType.UNKNOWN),
                                     }
 
                                     # Emit SQL execution error event with enhanced information
                                     sql_error_event = SqlExecutionErrorEvent(
                                         id=f"sql_error_{call_id}",
-                                        planId=getattr(self, 'plan_id', None),
+                                        planId=getattr(self, "plan_id", None),
                                         timestamp=int(time.time() * 1000),
                                         sqlQuery=sql_text,
                                         error=error_msg,
                                         errorType=error_info.get("error_type", ErrorType.UNKNOWN),
                                         suggestions=error_info.get("suggestions", []),
-                                        canRetry=error_info.get("can_retry", False)
+                                        canRetry=error_info.get("can_retry", False),
                                     )
                                     if self.emit_queue is not None:
                                         try:
@@ -2810,16 +3123,21 @@ Respond with only the tool name, nothing else."""
                                         friendly_msg = f"❌ **查询执行失败**\n\n执行过程中遇到问题，系统已记录详细信息。"
 
                                     if suggestions:
-                                        friendly_msg += f"\n\n💡 **建议解决方法**:\n" + "\n".join(f"• {s}" for s in suggestions[:3])
+                                        friendly_msg += f"\n\n💡 **建议解决方法**:\n" + "\n".join(
+                                            f"• {s}" for s in suggestions[:3]
+                                        )
 
-                                    await self._emit_status_message(friendly_msg, getattr(self, 'plan_id', None))
+                                    await self._emit_status_message(friendly_msg, getattr(self, "plan_id", None))
 
                                 complete_action_db = ActionHistory(
                                     action_id=f"{call_id}_exec",
                                     role=ActionRole.TOOL,
                                     messages=f"Server executor: db.read_query for todo {item.id}",
                                     action_type="read_query",
-                                    input={"function_name": "read_query", "arguments": json.dumps({"sql": sql_text, "todo_id": item.id})},
+                                    input={
+                                        "function_name": "read_query",
+                                        "arguments": json.dumps({"sql": sql_text, "todo_id": item.id}),
+                                    },
                                     output=result_payload,
                                     status=ActionStatus.SUCCESS if success else ActionStatus.FAILED,
                                 )
@@ -2833,21 +3151,28 @@ Respond with only the tool name, nothing else."""
 
                                 # Update workflow SQL context with execution results
                                 try:
-                                    if hasattr(self, 'workflow') and self.workflow and hasattr(res, 'success') and res.success:
+                                    if (
+                                        hasattr(self, "workflow")
+                                        and self.workflow
+                                        and hasattr(res, "success")
+                                        and res.success
+                                    ):
                                         # Update the last SQL context with execution results
                                         if self.workflow.context.sql_contexts:
                                             last_sql_context = self.workflow.context.sql_contexts[-1]
-                                            last_sql_context.sql_return = getattr(res, 'sql_return', '')
-                                            last_sql_context.row_count = getattr(res, 'row_count', 0)
-                                            last_sql_context.sql_error = getattr(res, 'error', None)
-                                            logger.info(f"Updated workflow SQL context with execution results for todo {item.id}")
+                                            last_sql_context.sql_return = getattr(res, "sql_return", "")
+                                            last_sql_context.row_count = getattr(res, "row_count", 0)
+                                            last_sql_context.sql_error = getattr(res, "error", None)
+                                            logger.info(
+                                                f"Updated workflow SQL context with execution results for todo {item.id}"
+                                            )
                                         else:
                                             # If no existing SQL context, create one with the results
                                             sql_context = SQLContext(
                                                 sql_query=sql_text,
-                                                sql_return=getattr(res, 'sql_return', ''),
-                                                row_count=getattr(res, 'row_count', 0),
-                                                sql_error=getattr(res, 'error', None),
+                                                sql_return=getattr(res, "sql_return", ""),
+                                                row_count=getattr(res, "row_count", 0),
+                                                sql_error=getattr(res, "error", None),
                                             )
                                             self.workflow.context.sql_contexts.append(sql_context)
                                             logger.info(f"Created new SQL context in workflow for todo {item.id}")
@@ -2860,7 +3185,13 @@ Respond with only the tool name, nothing else."""
                             report_path = f"reports/{item.id}_report.html"
                             report_body = f"<html><body><h1>Report for {item.content}</h1><p>Generated by server executor.</p></body></html>"
                             res = fs_tool.write_file(path=report_path, content=report_body, file_type="report")
-                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                            result_payload = (
+                                res.model_dump()
+                                if hasattr(res, "model_dump")
+                                else dict(res)
+                                if isinstance(res, dict)
+                                else {"result": res}
+                            )
 
                             # Create tool call action for report generation
                             complete_action_report = ActionHistory(
@@ -2868,7 +3199,12 @@ Respond with only the tool name, nothing else."""
                                 role=ActionRole.TOOL,
                                 messages=f"Server executor: report generation for todo {item.id}",
                                 action_type="write_file",  # Use write_file as the actual tool action
-                                input={"function_name": "write_file", "arguments": json.dumps({"path": report_path, "content": report_body, "todo_id": item.id})},
+                                input={
+                                    "function_name": "write_file",
+                                    "arguments": json.dumps(
+                                        {"path": report_path, "content": report_body, "todo_id": item.id}
+                                    ),
+                                },
                                 output=result_payload,
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
@@ -2883,7 +3219,7 @@ Respond with only the tool name, nothing else."""
                                 output={
                                     "report_url": report_path,
                                     "html_content": report_body,
-                                    "success": getattr(res, "success", 1)
+                                    "success": getattr(res, "success", 1),
                                 },
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
@@ -2904,7 +3240,9 @@ Respond with only the tool name, nothing else."""
                             table_name = tool_params.get("table_name")
                             if table_name:
                                 # Send status message about starting table analysis
-                                await self._emit_status_message(f"📋 **正在分析表结构**\n\n检查表 `{table_name}` 的字段、类型和关系...", getattr(self, 'plan_id', None))
+                                await self._emit_status_message(
+                                    f"📋 **正在分析表结构**\n\n检查表 `{table_name}` 的字段、类型和关系...", getattr(self, "plan_id", None)
+                                )
 
                                 # Execute with error handling and recovery
                                 res, success, error_info = await self._execute_tool_with_error_handling(
@@ -2912,18 +3250,26 @@ Respond with only the tool name, nothing else."""
                                 )
 
                                 if success:
-                                    result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                    result_payload = (
+                                        res.model_dump()
+                                        if hasattr(res, "model_dump")
+                                        else dict(res)
+                                        if isinstance(res, dict)
+                                        else {"result": res}
+                                    )
                                     status = ActionStatus.SUCCESS
                                     messages = f"Server executor: db.describe_table for todo {item.id}"
 
                                     # Send success status message
-                                    await self._emit_status_message(f"✅ **表结构分析完成**\n\n成功获取表 `{table_name}` 的详细信息", getattr(self, 'plan_id', None))
+                                    await self._emit_status_message(
+                                        f"✅ **表结构分析完成**\n\n成功获取表 `{table_name}` 的详细信息", getattr(self, "plan_id", None)
+                                    )
                                 else:
                                     # Handle error with user-friendly message
                                     result_payload = {
                                         "error": error_info.get("error_message", "Unknown error"),
                                         "suggestions": error_info.get("suggestions", []),
-                                        "error_type": error_info.get("error_type", ErrorType.UNKNOWN)
+                                        "error_type": error_info.get("error_type", ErrorType.UNKNOWN),
                                     }
                                     status = ActionStatus.FAILED
                                     messages = f"Server executor: db.describe_table failed for todo {item.id}: {error_info.get('error_message', 'Unknown error')}"
@@ -2931,11 +3277,19 @@ Respond with only the tool name, nothing else."""
                                     # Try fallback to search_table if suggested
                                     if error_info.get("fallback_tool") == "search_table":
                                         logger.info(f"Attempting fallback to search_table for todo {item.id}")
-                                        fallback_res, fallback_success, _ = await self._execute_tool_with_error_handling(
+                                        (
+                                            fallback_res,
+                                            fallback_success,
+                                            _,
+                                        ) = await self._execute_tool_with_error_handling(
                                             db_tool.search_table, "search_table", query_text=item.content or "", top_n=5
                                         )
                                         if fallback_success:
-                                            result_payload["fallback_result"] = fallback_res.model_dump() if hasattr(fallback_res, "model_dump") else dict(fallback_res)
+                                            result_payload["fallback_result"] = (
+                                                fallback_res.model_dump()
+                                                if hasattr(fallback_res, "model_dump")
+                                                else dict(fallback_res)
+                                            )
                                             messages += " (fallback search successful)"
 
                                 complete_action_db = ActionHistory(
@@ -2943,23 +3297,39 @@ Respond with only the tool name, nothing else."""
                                     role=ActionRole.TOOL,
                                     messages=messages,
                                     action_type="describe_table",
-                                    input={"function_name": "describe_table", "arguments": json.dumps({"table_name": table_name, "todo_id": item.id})},
+                                    input={
+                                        "function_name": "describe_table",
+                                        "arguments": json.dumps({"table_name": table_name, "todo_id": item.id}),
+                                    },
                                     output=result_payload,
                                     status=status,
                                 )
                                 executed_any = True
                             else:
                                 # If no table name found, this might be a search operation
-                                logger.info(f"No table name extracted for describe_table, falling back to search_table for todo {item.id}")
+                                logger.info(
+                                    f"No table name extracted for describe_table, falling back to search_table for todo {item.id}"
+                                )
                                 query_text = tool_params.get("query_text", item.content or "")
                                 res = db_tool.search_table(query_text=query_text, top_n=5)
-                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                result_payload = (
+                                    res.model_dump()
+                                    if hasattr(res, "model_dump")
+                                    else dict(res)
+                                    if isinstance(res, dict)
+                                    else {"result": res}
+                                )
                                 complete_action_db = ActionHistory(
                                     action_id=f"{call_id}_search_fallback",
                                     role=ActionRole.TOOL,
                                     messages=f"Server executor: db.search_table (fallback from describe_table) for todo {item.id}",
                                     action_type="search_table",
-                                    input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": 5, "todo_id": item.id})},
+                                    input={
+                                        "function_name": "search_table",
+                                        "arguments": json.dumps(
+                                            {"query_text": query_text, "top_n": 5, "todo_id": item.id}
+                                        ),
+                                    },
                                     output=result_payload,
                                     status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                                 )
@@ -2977,13 +3347,20 @@ Respond with only the tool name, nothing else."""
                             sql_text = None
                             if self.action_history_manager:
                                 for a in reversed(self.action_history_manager.get_actions()):
-                                    if getattr(a, "role", "") == "assistant" or getattr(a, "role", "") == ActionRole.ASSISTANT:
+                                    if (
+                                        getattr(a, "role", "") == "assistant"
+                                        or getattr(a, "role", "") == ActionRole.ASSISTANT
+                                    ):
                                         out = getattr(a, "output", None)
                                         if isinstance(out, dict) and out.get("sql"):
                                             sql_text = out.get("sql")
                                             break
                                         content_field = out.get("content") if isinstance(out, dict) else None
-                                        if content_field and isinstance(content_field, str) and "```sql" in content_field:
+                                        if (
+                                            content_field
+                                            and isinstance(content_field, str)
+                                            and "```sql" in content_field
+                                        ):
                                             start = content_field.find("```sql")
                                             end = content_field.find("```", start + 6)
                                             if start != -1 and end != -1:
@@ -2991,13 +3368,22 @@ Respond with only the tool name, nothing else."""
                                                 break
                             if sql_text:
                                 res = db_tool.read_query(sql=sql_text)
-                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                result_payload = (
+                                    res.model_dump()
+                                    if hasattr(res, "model_dump")
+                                    else dict(res)
+                                    if isinstance(res, dict)
+                                    else {"result": res}
+                                )
                                 complete_action_db = ActionHistory(
-                                        action_id=f"{call_id}_read",
+                                    action_id=f"{call_id}_read",
                                     role=ActionRole.TOOL,
                                     messages=f"Server executor: db.read_query for todo {item.id}",
                                     action_type="read_query",
-                                    input={"function_name": "read_query", "arguments": json.dumps({"sql": sql_text, "todo_id": item.id})},
+                                    input={
+                                        "function_name": "read_query",
+                                        "arguments": json.dumps({"sql": sql_text, "todo_id": item.id}),
+                                    },
                                     output=result_payload,
                                     status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                                 )
@@ -3014,13 +3400,22 @@ Respond with only the tool name, nothing else."""
                             tool_params = self._extract_tool_parameters(matched_tool, item.content or "")
                             query_text = tool_params.get("query_text", item.content or "")
                             res = db_tool.search_metrics(query_text=query_text)
-                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                            result_payload = (
+                                res.model_dump()
+                                if hasattr(res, "model_dump")
+                                else dict(res)
+                                if isinstance(res, dict)
+                                else {"result": res}
+                            )
                             complete_action_db = ActionHistory(
                                 action_id=f"{call_id}_metrics",
                                 role=ActionRole.TOOL,
                                 messages=f"Server executor: db.search_metrics for todo {item.id}",
                                 action_type="search_metrics",
-                                input={"function_name": "search_metrics", "arguments": json.dumps({"query_text": query_text, "todo_id": item.id})},
+                                input={
+                                    "function_name": "search_metrics",
+                                    "arguments": json.dumps({"query_text": query_text, "todo_id": item.id}),
+                                },
                                 output=result_payload,
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
@@ -3037,13 +3432,22 @@ Respond with only the tool name, nothing else."""
                             tool_params = self._extract_tool_parameters(matched_tool, item.content or "")
                             query_text = tool_params.get("query_text", item.content or "")
                             res = db_tool.search_reference_sql(query_text=query_text)
-                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                            result_payload = (
+                                res.model_dump()
+                                if hasattr(res, "model_dump")
+                                else dict(res)
+                                if isinstance(res, dict)
+                                else {"result": res}
+                            )
                             complete_action_db = ActionHistory(
                                 action_id=f"{call_id}_refsql",
                                 role=ActionRole.TOOL,
                                 messages=f"Server executor: db.search_reference_sql for todo {item.id}",
                                 action_type="search_reference_sql",
-                                input={"function_name": "search_reference_sql", "arguments": json.dumps({"query_text": query_text, "todo_id": item.id})},
+                                input={
+                                    "function_name": "search_reference_sql",
+                                    "arguments": json.dumps({"query_text": query_text, "todo_id": item.id}),
+                                },
                                 output=result_payload,
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
@@ -3063,7 +3467,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"Domain layers listing for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"Domain layers exploration completed for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"Domain layers exploration completed for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3084,7 +3491,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"Semantic model check for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"Semantic model verification completed for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"Semantic model verification completed for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3105,7 +3515,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"Metric existence check for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"Metric availability verification completed for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"Metric availability verification completed for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3126,7 +3539,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"SQL summary ID generation for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"SQL summary identifier created for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"SQL summary identifier created for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3147,7 +3563,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"Temporal expression parsing for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"Date/time expression analysis completed for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"Date/time expression analysis completed for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3168,7 +3587,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"Current date retrieval for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"Current date/time information retrieved for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"Current date/time information retrieved for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3186,13 +3608,24 @@ Respond with only the tool name, nothing else."""
                             write_file_path = f"output/{item.id}_output.txt"
                             write_file_content = f"Content generated for: {item.content}"
                             res = fs_tool.write_file(path=write_file_path, content=write_file_content)
-                            result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                            result_payload = (
+                                res.model_dump()
+                                if hasattr(res, "model_dump")
+                                else dict(res)
+                                if isinstance(res, dict)
+                                else {"result": res}
+                            )
                             complete_action_fs = ActionHistory(
                                 action_id=f"{call_id}_write",
                                 role=ActionRole.TOOL,
                                 messages=f"Server executor: write_file for todo {item.id}",
                                 action_type="write_file",
-                                input={"function_name": "write_file", "arguments": json.dumps({"path": write_file_path, "content": write_file_content, "todo_id": item.id})},
+                                input={
+                                    "function_name": "write_file",
+                                    "arguments": json.dumps(
+                                        {"path": write_file_path, "content": write_file_content, "todo_id": item.id}
+                                    ),
+                                },
                                 output=result_payload,
                                 status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                             )
@@ -3212,7 +3645,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"File reading operation for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"File content read operation completed for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"File content read operation completed for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3233,7 +3669,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"Directory listing for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"Directory contents listed for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"Directory contents listed for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3254,7 +3693,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"Todo list creation/update for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"Task planning completed for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"Task planning completed for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3275,7 +3717,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"Todo status update for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"Task status updated for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"Task status updated for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3296,7 +3741,10 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"Todo list reading for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={"raw_output": f"Task list retrieved for: {item.content}", "emit_chat": True},
+                                    output={
+                                        "raw_output": f"Task list retrieved for: {item.content}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3313,6 +3761,7 @@ Respond with only the tool name, nothing else."""
                         logger.error(f"Server executor matched_tool '{matched_tool}' failed for {item.id}: {e}")
                         logger.error(f"Exception type: {type(e).__name__}, matched_tool was: {matched_tool}")
                         import traceback
+
                         logger.error(f"Traceback: {traceback.format_exc()}")
 
                 # Execute LLM-suggested tool calls if available
@@ -3333,9 +3782,12 @@ Respond with only the tool name, nothing else."""
                                     "todo_id": item.id,
                                     "suggested_by_llm": True,
                                     "tool": tool_name,
-                                    "arguments": tool_args
+                                    "arguments": tool_args,
                                 },
-                                output_data={"raw_output": f"Tool call suggested by LLM reasoning: {tool_name}", "emit_chat": True},
+                                output_data={
+                                    "raw_output": f"Tool call suggested by LLM reasoning: {tool_name}",
+                                    "emit_chat": True,
+                                },
                                 status=ActionStatus.SUCCESS,
                             )
 
@@ -3360,22 +3812,25 @@ Respond with only the tool name, nothing else."""
                     logger.info(f"Server executor: using SmartExecutionRouter for task {item.id}")
 
                     # Initialize SmartExecutionRouter if not exists
-                    if not hasattr(self, '_smart_router'):
+                    if not hasattr(self, "_smart_router"):
                         self._smart_router = SmartExecutionRouter(
                             agent_config=self.agent_config,
                             model=self.model,
                             action_history_manager=self.action_history_manager,
-                            emit_queue=self.emit_queue
+                            emit_queue=self.emit_queue,
                         )
 
                     try:
                         # Use smart router to determine execution strategy
-                        routing_result = await self._smart_router.execute_task(item, {
-                            "todo_id": item.id,
-                            "agent_config": self.agent_config,
-                            "action_history_manager": self.action_history_manager,
-                            "emit_queue": self.emit_queue
-                        })
+                        routing_result = await self._smart_router.execute_task(
+                            item,
+                            {
+                                "todo_id": item.id,
+                                "agent_config": self.agent_config,
+                                "action_history_manager": self.action_history_manager,
+                                "emit_queue": self.emit_queue,
+                            },
+                        )
 
                         if routing_result["success"]:
                             action = routing_result.get("action")
@@ -3386,8 +3841,15 @@ Respond with only the tool name, nothing else."""
                                     role=ActionRole.SYSTEM,
                                     action_type="thinking",
                                     messages=f"Smart routing: {routing_result['execution_type']} for task {item.id}",
-                                    input_data={"todo_id": item.id, "execution_type": routing_result["execution_type"], "action": action},
-                                    output={"raw_output": f"智能路由决策: {routing_result['execution_type']}", "emit_chat": True},
+                                    input_data={
+                                        "todo_id": item.id,
+                                        "execution_type": routing_result["execution_type"],
+                                        "action": action,
+                                    },
+                                    output={
+                                        "raw_output": f"智能路由决策: {routing_result['execution_type']}",
+                                        "emit_chat": True,
+                                    },
                                     status=ActionStatus.SUCCESS,
                                 )
                                 if self.action_history_manager:
@@ -3403,7 +3865,9 @@ Respond with only the tool name, nothing else."""
                             # Execute the actual task based on action
                             if action == "execute_llm_reasoning":
                                 # Execute LLM reasoning
-                                logger.info(f"Server executor: executing LLM reasoning for todo {item.id} (smart routing)")
+                                logger.info(
+                                    f"Server executor: executing LLM reasoning for todo {item.id} (smart routing)"
+                                )
                                 reasoning_result = await self._execute_llm_reasoning(item)
                                 executed_any = True  # Always mark as executed to avoid infinite loop
                                 if reasoning_result:
@@ -3415,7 +3879,9 @@ Respond with only the tool name, nothing else."""
                                     except Exception as e:
                                         logger.error(f"Failed to mark LLM analysis task as completed {item.id}: {e}")
                                 else:
-                                    logger.warning(f"Server executor: LLM reasoning failed for todo {item.id}, marking as failed")
+                                    logger.warning(
+                                        f"Server executor: LLM reasoning failed for todo {item.id}, marking as failed"
+                                    )
                                     try:
                                         plan_tool._update_todo_status(item.id, "failed")
                                         await self._emit_plan_update_event(item.id, "failed")
@@ -3455,53 +3921,104 @@ Respond with only the tool name, nothing else."""
                         # Try to execute the fallback tool
                         try:
                             if tool_name == "search_table" and db_tool:
-                                logger.info(f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})")
+                                logger.info(
+                                    f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})"
+                                )
                                 tool_params = self._extract_tool_parameters(tool_name, item.content or "")
                                 query_text = tool_params.get("query_text", item.content or "")
                                 top_n = tool_params.get("top_n", 3)
                                 res = db_tool.search_table(query_text=query_text, top_n=top_n)
-                                result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                result_payload = (
+                                    res.model_dump()
+                                    if hasattr(res, "model_dump")
+                                    else dict(res)
+                                    if isinstance(res, dict)
+                                    else {"result": res}
+                                )
                                 fallback_action = ActionHistory(
-                                        action_id=f"{call_id}_fallback_{tool_name}",
+                                    action_id=f"{call_id}_fallback_{tool_name}",
                                     role=ActionRole.TOOL,
-                                        messages=f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})",
-                                        action_type=tool_name,
-                                        input={"function_name": tool_name, "arguments": json.dumps({"query_text": query_text, "top_n": top_n, "todo_id": item.id, "is_fallback": True})},
+                                    messages=f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})",
+                                    action_type=tool_name,
+                                    input={
+                                        "function_name": tool_name,
+                                        "arguments": json.dumps(
+                                            {
+                                                "query_text": query_text,
+                                                "top_n": top_n,
+                                                "todo_id": item.id,
+                                                "is_fallback": True,
+                                            }
+                                        ),
+                                    },
                                     output=result_payload,
                                     status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
                                 )
                                 success = True
 
                             elif tool_name == "describe_table" and db_tool:
-                                logger.info(f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})")
+                                logger.info(
+                                    f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})"
+                                )
                                 tool_params = self._extract_tool_parameters(tool_name, item.content or "")
                                 table_name = tool_params.get("table_name")
                                 if table_name:
                                     res = db_tool.describe_table(table_name=table_name)
-                                    result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                    result_payload = (
+                                        res.model_dump()
+                                        if hasattr(res, "model_dump")
+                                        else dict(res)
+                                        if isinstance(res, dict)
+                                        else {"result": res}
+                                    )
                                     fallback_action = ActionHistory(
                                         action_id=f"{call_id}_fallback_{tool_name}",
                                         role=ActionRole.TOOL,
                                         messages=f"Server executor: fallback {tool_name} for todo {item.id} (confidence: {confidence:.2f})",
                                         action_type=tool_name,
-                                        input={"function_name": tool_name, "arguments": json.dumps({"table_name": table_name, "todo_id": item.id, "is_fallback": True})},
+                                        input={
+                                            "function_name": tool_name,
+                                            "arguments": json.dumps(
+                                                {"table_name": table_name, "todo_id": item.id, "is_fallback": True}
+                                            ),
+                                        },
                                         output=result_payload,
-                                        status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                        status=ActionStatus.SUCCESS
+                                        if getattr(res, "success", 1)
+                                        else ActionStatus.FAILED,
                                     )
                                     success = True
                                 else:
                                     # Fallback to search if no table name found
                                     query_text = tool_params.get("query_text", item.content or "")
                                     res = db_tool.search_table(query_text=query_text, top_n=3)
-                                    result_payload = res.model_dump() if hasattr(res, "model_dump") else dict(res) if isinstance(res, dict) else {"result": res}
+                                    result_payload = (
+                                        res.model_dump()
+                                        if hasattr(res, "model_dump")
+                                        else dict(res)
+                                        if isinstance(res, dict)
+                                        else {"result": res}
+                                    )
                                     fallback_action = ActionHistory(
                                         action_id=f"{call_id}_fallback_search",
                                         role=ActionRole.TOOL,
                                         messages=f"Server executor: fallback search_table (from describe_table) for todo {item.id} (confidence: {confidence:.2f})",
                                         action_type="search_table",
-                                        input={"function_name": "search_table", "arguments": json.dumps({"query_text": query_text, "top_n": 3, "todo_id": item.id, "is_fallback": True})},
+                                        input={
+                                            "function_name": "search_table",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "query_text": query_text,
+                                                    "top_n": 3,
+                                                    "todo_id": item.id,
+                                                    "is_fallback": True,
+                                                }
+                                            ),
+                                        },
                                         output=result_payload,
-                                        status=ActionStatus.SUCCESS if getattr(res, "success", 1) else ActionStatus.FAILED,
+                                        status=ActionStatus.SUCCESS
+                                        if getattr(res, "success", 1)
+                                        else ActionStatus.FAILED,
                                     )
                                     success = True
 
@@ -3528,20 +4045,23 @@ Respond with only the tool name, nothing else."""
                     try:
                         fallback_status = "disabled" if not self.enable_fallback else "no suitable fallback found"
                         note_action = ActionHistory.create_action(
-                                role=ActionRole.SYSTEM,
-                                action_type="thinking",
+                            role=ActionRole.SYSTEM,
+                            action_type="thinking",
                             messages=f"No tool executed for todo {item.id} ({fallback_status}); marking completed",
-                                input_data={"todo_id": item.id},
-                            output={"raw_output": f"No tool matched or executed ({fallback_status}); step marked completed", "emit_chat": True},
-                                status=ActionStatus.SUCCESS,
-                            )
+                            input_data={"todo_id": item.id},
+                            output={
+                                "raw_output": f"No tool matched or executed ({fallback_status}); step marked completed",
+                                "emit_chat": True,
+                            },
+                            status=ActionStatus.SUCCESS,
+                        )
                         if self.action_history_manager:
-                                self.action_history_manager.add_action(note_action)
-                                if self.emit_queue is not None:
-                                    try:
-                                        self.emit_queue.put_nowait(note_action)
-                                    except Exception:
-                                        pass
+                            self.action_history_manager.add_action(note_action)
+                            if self.emit_queue is not None:
+                                try:
+                                    self.emit_queue.put_nowait(note_action)
+                                except Exception:
+                                    pass
                     except Exception as e:
                         logger.debug(f"Failed to emit completion note for todo {item.id}: {e}")
 
@@ -3565,6 +4085,11 @@ Respond with only the tool name, nothing else."""
 
             logger.info("Server executor finished all pending todos")
 
+            # Signal completion to main agent loop for coordination
+            self._all_todos_completed = True
+            self._execution_complete.set()
+            logger.info("Server executor signaled completion to main agent loop")
+
             # Send completion status message
             await self._emit_status_message("✅ **执行完成**\n\n所有计划任务已成功完成！", plan_id="server_batch")
 
@@ -3584,7 +4109,7 @@ Respond with only the tool name, nothing else."""
                     output={"error": str(e)},
                     status=ActionStatus.FAILED,
                     start_time=datetime.now(),
-                    end_time=datetime.now()
+                    end_time=datetime.now(),
                 )
                 if self.action_history_manager:
                     self.action_history_manager.add_action(error_action)
@@ -3598,7 +4123,7 @@ Respond with only the tool name, nothing else."""
             finally:
                 # End execution monitoring
                 if self.monitor.current_execution:
-                    self.monitor.end_execution("failed", str(e) if 'e' in locals() else "Unknown error")
+                    self.monitor.end_execution("failed", str(e) if "e" in locals() else "Unknown error")
 
     async def _emit_plan_update_event(self, todo_id: str = None, status: str = None):
         """
@@ -3609,9 +4134,10 @@ Respond with only the tool name, nothing else."""
             status: Status to set for the todo item
         """
         try:
-            from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
-            import uuid
             import time
+            import uuid
+
+            from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
             todo_list = self.todo_storage.get_todo_list()
             if not todo_list:
@@ -3633,7 +4159,7 @@ Respond with only the tool name, nothing else."""
                 input={"source": "server_executor", "todo_id": todo_id, "status": status},
                 output={"todo_list": todo_list.model_dump()},
                 status=ActionStatus.SUCCESS,
-                start_time=datetime.now()
+                start_time=datetime.now(),
             )
 
             # Add to action history manager
@@ -3718,10 +4244,10 @@ Respond with only the tool name, nothing else."""
         cleaned = content.lower()
         for prefix in prefixes_to_remove:
             if cleaned.startswith(prefix.lower()):
-                cleaned = cleaned[len(prefix):].strip()
+                cleaned = cleaned[len(prefix) :].strip()
 
         # Remove extra whitespace
-        cleaned = ' '.join(cleaned.split())
+        cleaned = " ".join(cleaned.split())
 
         return cleaned
 
@@ -3759,6 +4285,7 @@ Respond with only the tool name, nothing else."""
                 if path:
                     # Basic path validation
                     import os
+
                     if ".." in path or path.startswith("/"):
                         logger.warning(f"Potentially unsafe file path: {path}")
                         validated["path"] = f"output/safe_{hash(path) % 10000}.txt"
@@ -3776,15 +4303,15 @@ Respond with only the tool name, nothing else."""
 
         # Common patterns for table names in Chinese/English text
         patterns = [
-            r'表\s*[\'\"]?(\w+)[\'\"]?',  # 表 'table_name' or 表 table_name
-            r'table\s*[\'\"]?(\w+)[\'\"]?',  # table 'table_name'
-            r'(\w+_table)',  # table_name
-            r'(\w+_fact_\w+)',  # fact tables like dwd_assign_dlr_clue_fact_di
-            r'(\w+_dim_\w+)',  # dimension tables
-            r'(\w+_dws_\w+)',  # summary tables
-            r'(\w+_ads_\w+)',  # application tables
-            r'(\w+_ods_\w+)',  # ods tables
-            r'(\w+_dwd_\w+)',  # dwd tables
+            r"表\s*[\'\"]?(\w+)[\'\"]?",  # 表 'table_name' or 表 table_name
+            r"table\s*[\'\"]?(\w+)[\'\"]?",  # table 'table_name'
+            r"(\w+_table)",  # table_name
+            r"(\w+_fact_\w+)",  # fact tables like dwd_assign_dlr_clue_fact_di
+            r"(\w+_dim_\w+)",  # dimension tables
+            r"(\w+_dws_\w+)",  # summary tables
+            r"(\w+_ads_\w+)",  # application tables
+            r"(\w+_ods_\w+)",  # ods tables
+            r"(\w+_dwd_\w+)",  # dwd tables
         ]
 
         content_lower = todo_content.lower()
@@ -3795,8 +4322,7 @@ Respond with only the tool name, nothing else."""
             # Try to find table name from action history if available
             if self.action_history_manager:
                 for action in reversed(self.action_history_manager.get_actions()):
-                    if (action.action_type == "search_table" and
-                        action.output and isinstance(action.output, dict)):
+                    if action.action_type == "search_table" and action.output and isinstance(action.output, dict):
                         result = action.output.get("result", {})
                         if isinstance(result, dict):
                             metadata = result.get("metadata", [])
@@ -3812,7 +4338,7 @@ Respond with only the tool name, nothing else."""
             matches = re.findall(pattern, todo_content, re.IGNORECASE)
             if matches:
                 # Clean the table name
-                table_name = matches[0].strip('\'"')
+                table_name = matches[0].strip("'\"")
                 # Validate table name format (basic validation)
                 if self._is_valid_table_name(table_name):
                     logger.debug(f"Extracted table name '{table_name}' from todo content")
@@ -3831,8 +4357,11 @@ Respond with only the tool name, nothing else."""
         # Try to extract SQL from action history (previous SQL generation)
         if self.action_history_manager:
             for action in reversed(self.action_history_manager.get_actions()):
-                if (action.role in ("assistant", ActionRole.ASSISTANT) and
-                    action.output and isinstance(action.output, dict)):
+                if (
+                    action.role in ("assistant", ActionRole.ASSISTANT)
+                    and action.output
+                    and isinstance(action.output, dict)
+                ):
                     sql = action.output.get("sql")
                     if sql:
                         return {"sql": sql}
@@ -3847,10 +4376,7 @@ Respond with only the tool name, nothing else."""
     def _extract_write_file_params(self, todo_content: str) -> Dict[str, Any]:
         """Extract file write parameters."""
         # Basic implementation - could be enhanced
-        return {
-            "path": f"output/{todo_content[:50].replace(' ', '_')}.txt",
-            "content": todo_content
-        }
+        return {"path": f"output/{todo_content[:50].replace(' ', '_')}.txt", "content": todo_content}
 
     def _extract_read_file_params(self, todo_content: str) -> Dict[str, Any]:
         """Extract file read parameters."""
@@ -3865,13 +4391,14 @@ Respond with only the tool name, nothing else."""
             return False
 
         # Check for basic SQL injection patterns (simple check)
-        dangerous_patterns = [';', '--', '/*', '*/', 'union', 'select', 'drop', 'delete', 'update', 'insert']
+        dangerous_patterns = [";", "--", "/*", "*/", "union", "select", "drop", "delete", "update", "insert"]
         if any(pattern in table_name.lower() for pattern in dangerous_patterns):
             return False
 
         # Allow alphanumeric, underscore, and some special chars common in table names
         import re
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", table_name):
             return False
 
         return True
@@ -3893,161 +4420,234 @@ Respond with only the tool name, nothing else."""
             # Database Schema Exploration
             "explore_schema": {
                 "patterns": [
-                    r"探索.*表结构", r"查看.*表结构", r"检查.*表结构", r"分析.*表结构",
-                    r"找到.*表", r"查找.*表", r"发现.*表", r"搜索.*表",
-                    r"explore.*table.*structure", r"find.*tables", r"search.*tables",
-                    r"确认.*表名", r"表.*字段", r"字段.*信息", r"table.*columns",
-                    r"数据库.*结构", r"schema.*information", r"table.*list"
+                    r"探索.*表结构",
+                    r"查看.*表结构",
+                    r"检查.*表结构",
+                    r"分析.*表结构",
+                    r"找到.*表",
+                    r"查找.*表",
+                    r"发现.*表",
+                    r"搜索.*表",
+                    r"explore.*table.*structure",
+                    r"find.*tables",
+                    r"search.*tables",
+                    r"确认.*表名",
+                    r"表.*字段",
+                    r"字段.*信息",
+                    r"table.*columns",
+                    r"数据库.*结构",
+                    r"schema.*information",
+                    r"table.*list",
                 ],
                 "tool": "search_table",
                 "confidence": 0.95,
                 "reason": "Database table exploration task",
-                "priority": 1
+                "priority": 1,
             },
-
             # Specific Table Description
             "describe_specific_table": {
                 "patterns": [
-                    r"描述.*表.*[\w_]+", r"检查.*表.*[\w_]+.*定义", r"查看.*表.*[\w_]+.*模式",
-                    r"分析.*表.*[\w_]+.*元数据", r"describe.*table.*[\w_]+",
-                    r"inspect.*table.*[\w_]+.*schema", r"examine.*table.*[\w_]+.*structure",
-                    r"表.*[\w_]+.*详细.*信息", r"表.*[\w_]+.*结构.*详情"
+                    r"描述.*表.*[\w_]+",
+                    r"检查.*表.*[\w_]+.*定义",
+                    r"查看.*表.*[\w_]+.*模式",
+                    r"分析.*表.*[\w_]+.*元数据",
+                    r"describe.*table.*[\w_]+",
+                    r"inspect.*table.*[\w_]+.*schema",
+                    r"examine.*table.*[\w_]+.*structure",
+                    r"表.*[\w_]+.*详细.*信息",
+                    r"表.*[\w_]+.*结构.*详情",
                 ],
                 "tool": "describe_table",
                 "confidence": 0.92,
                 "reason": "Specific table description and metadata analysis",
-                "priority": 1
+                "priority": 1,
             },
-
             # General Table Description
             "describe_table_general": {
                 "patterns": [
-                    r"描述.*表", r"检查.*表.*定义", r"查看.*表.*模式", r"分析.*表.*元数据",
-                    r"describe.*table", r"inspect.*table.*schema", r"examine.*table.*structure",
-                    r"表.*详细.*信息", r"表.*结构.*详情", r"table.*metadata"
+                    r"描述.*表",
+                    r"检查.*表.*定义",
+                    r"查看.*表.*模式",
+                    r"分析.*表.*元数据",
+                    r"describe.*table",
+                    r"inspect.*table.*schema",
+                    r"examine.*table.*structure",
+                    r"表.*详细.*信息",
+                    r"表.*结构.*详情",
+                    r"table.*metadata",
                 ],
                 "tool": "describe_table",
                 "confidence": 0.85,
                 "reason": "General table description and metadata analysis",
-                "priority": 2
+                "priority": 2,
             },
-
             # SQL Query Execution
             "execute_sql": {
                 "patterns": [
-                    r"执行.*查询", r"运行.*sql", r"运行.*查询", r"执行.*语句",
-                    r"execute.*query", r"run.*sql", r"execute.*statement",
-                    r"查询.*结果", r"获取.*数据", r"fetch.*data", r"运行.*select"
+                    r"执行.*查询",
+                    r"运行.*sql",
+                    r"运行.*查询",
+                    r"执行.*语句",
+                    r"execute.*query",
+                    r"run.*sql",
+                    r"execute.*statement",
+                    r"查询.*结果",
+                    r"获取.*数据",
+                    r"fetch.*data",
+                    r"运行.*select",
                 ],
                 "tool": "execute_sql",
                 "confidence": 0.90,
                 "reason": "SQL execution and data retrieval",
-                "priority": 1
+                "priority": 1,
             },
-
             # SQL Query Reading/Analysis
             "read_sql": {
                 "patterns": [
-                    r"读取.*查询", r"分析.*sql", r"查看.*查询.*结果", r"检查.*sql",
-                    r"read.*query", r"analyze.*sql", r"examine.*query.*results"
+                    r"读取.*查询",
+                    r"分析.*sql",
+                    r"查看.*查询.*结果",
+                    r"检查.*sql",
+                    r"read.*query",
+                    r"analyze.*sql",
+                    r"examine.*query.*results",
                 ],
                 "tool": "read_query",
                 "confidence": 0.80,
                 "reason": "SQL query reading and analysis",
-                "priority": 2
+                "priority": 2,
             },
-
             # Business Metrics Analysis
             "analyze_metrics": {
                 "patterns": [
-                    r"分析.*指标", r"查找.*指标", r"查看.*指标", r"搜索.*指标",
-                    r"analyze.*metrics", r"find.*metrics", r"search.*metrics",
-                    r"kpi.*分析", r"performance.*metrics", r"转化率.*分析",
-                    r"收入.*分析", r"销售额.*分析", r"用户.*分析"
+                    r"分析.*指标",
+                    r"查找.*指标",
+                    r"查看.*指标",
+                    r"搜索.*指标",
+                    r"analyze.*metrics",
+                    r"find.*metrics",
+                    r"search.*metrics",
+                    r"kpi.*分析",
+                    r"performance.*metrics",
+                    r"转化率.*分析",
+                    r"收入.*分析",
+                    r"销售额.*分析",
+                    r"用户.*分析",
                 ],
                 "tool": "search_metrics",
                 "confidence": 0.88,
                 "reason": "Business metrics analysis",
-                "priority": 1
+                "priority": 1,
             },
-
             # Reference SQL Search
             "search_reference_sql": {
                 "patterns": [
-                    r"查找.*参考.*sql", r"搜索.*sql.*模板", r"找到.*sql.*例子",
-                    r"find.*reference.*sql", r"search.*sql.*patterns", r"look.*sql.*examples",
-                    r"参考.*查询", r"sql.*样例", r"查询.*模板"
+                    r"查找.*参考.*sql",
+                    r"搜索.*sql.*模板",
+                    r"找到.*sql.*例子",
+                    r"find.*reference.*sql",
+                    r"search.*sql.*patterns",
+                    r"look.*sql.*examples",
+                    r"参考.*查询",
+                    r"sql.*样例",
+                    r"查询.*模板",
                 ],
                 "tool": "search_reference_sql",
                 "confidence": 0.85,
                 "reason": "Reference SQL examples search",
-                "priority": 2
+                "priority": 2,
             },
-
             # File Writing Operations
             "write_file": {
                 "patterns": [
-                    r"写入.*文件", r"保存.*文件", r"创建.*文件", r"生成.*文件",
-                    r"write.*file", r"save.*file", r"create.*file", r"generate.*file",
-                    r"文件.*写入", r"保存.*到.*文件"
+                    r"写入.*文件",
+                    r"保存.*文件",
+                    r"创建.*文件",
+                    r"生成.*文件",
+                    r"write.*file",
+                    r"save.*file",
+                    r"create.*file",
+                    r"generate.*file",
+                    r"文件.*写入",
+                    r"保存.*到.*文件",
                 ],
                 "tool": "write_file",
                 "confidence": 0.82,
                 "reason": "File writing operations",
-                "priority": 1
+                "priority": 1,
             },
-
             # File Reading Operations
             "read_file": {
                 "patterns": [
-                    r"读取.*文件", r"加载.*文件", r"打开.*文件", r"查看.*文件",
-                    r"read.*file", r"load.*file", r"open.*file", r"view.*file",
-                    r"文件.*读取", r"加载.*文件.*内容"
+                    r"读取.*文件",
+                    r"加载.*文件",
+                    r"打开.*文件",
+                    r"查看.*文件",
+                    r"read.*file",
+                    r"load.*file",
+                    r"open.*file",
+                    r"view.*file",
+                    r"文件.*读取",
+                    r"加载.*文件.*内容",
                 ],
                 "tool": "read_file",
                 "confidence": 0.80,
                 "reason": "File reading operations",
-                "priority": 1
+                "priority": 1,
             },
-
             # Domain/Layer Exploration
             "explore_domains": {
                 "patterns": [
-                    r"查看.*领域", r"浏览.*层级", r"探索.*业务.*分类",
-                    r"view.*domains", r"browse.*layers", r"explore.*business.*taxonomy",
-                    r"领域.*结构", r"业务.*层级", r"数据.*分层"
+                    r"查看.*领域",
+                    r"浏览.*层级",
+                    r"探索.*业务.*分类",
+                    r"view.*domains",
+                    r"browse.*layers",
+                    r"explore.*business.*taxonomy",
+                    r"领域.*结构",
+                    r"业务.*层级",
+                    r"数据.*分层",
                 ],
                 "tool": "list_domain_layers_tree",
                 "confidence": 0.78,
                 "reason": "Domain and layer exploration",
-                "priority": 2
+                "priority": 2,
             },
-
             # Time/Temporal Analysis
             "temporal_analysis": {
                 "patterns": [
-                    r"解析.*日期", r"分析.*时间", r"处理.*时间.*范围",
-                    r"parse.*date", r"analyze.*temporal", r"process.*time.*range",
-                    r"日期.*表达式", r"时间.*段", r"时间.*分析"
+                    r"解析.*日期",
+                    r"分析.*时间",
+                    r"处理.*时间.*范围",
+                    r"parse.*date",
+                    r"analyze.*temporal",
+                    r"process.*time.*range",
+                    r"日期.*表达式",
+                    r"时间.*段",
+                    r"时间.*分析",
                 ],
                 "tool": "parse_temporal_expressions",
                 "confidence": 0.75,
                 "reason": "Temporal expression parsing",
-                "priority": 2
+                "priority": 2,
             },
-
             # Current Date/Time Retrieval
             "get_current_time": {
                 "patterns": [
-                    r"获取.*当前.*日期", r"今天.*日期", r"现在.*时间",
-                    r"get.*current.*date", r"today.*date", r"current.*time",
-                    r"当前.*时间", r"今日.*日期"
+                    r"获取.*当前.*日期",
+                    r"今天.*日期",
+                    r"现在.*时间",
+                    r"get.*current.*date",
+                    r"today.*date",
+                    r"current.*time",
+                    r"当前.*时间",
+                    r"今日.*日期",
                 ],
                 "tool": "get_current_date",
                 "confidence": 0.95,
                 "reason": "Current date/time retrieval",
-                "priority": 1
-            }
+                "priority": 1,
+            },
         }
 
         # Check each task type with priority ordering
@@ -4055,14 +4655,17 @@ Respond with only the tool name, nothing else."""
         for task_type, config in task_patterns.items():
             for pattern in config["patterns"]:
                 import re
+
                 if re.search(pattern, text_lower, re.IGNORECASE):
-                    matches.append({
-                        "tool": config["tool"],
-                        "confidence": config["confidence"],
-                        "reason": config["reason"],
-                        "task_type": task_type,
-                        "priority": config["priority"]
-                    })
+                    matches.append(
+                        {
+                            "tool": config["tool"],
+                            "confidence": config["confidence"],
+                            "reason": config["reason"],
+                            "task_type": task_type,
+                            "priority": config["priority"],
+                        }
+                    )
                     break  # Only add each task type once
 
         # Return the highest priority match (lowest priority number)
@@ -4088,7 +4691,9 @@ Respond with only the tool name, nothing else."""
 
         # Analyze context clues
         context_indicators = {
-            "database_focus": sum(1 for word in ["表", "table", "database", "schema", "字段", "column"] if word in text_lower),
+            "database_focus": sum(
+                1 for word in ["表", "table", "database", "schema", "字段", "column"] if word in text_lower
+            ),
             "sql_focus": sum(1 for word in ["sql", "query", "select", "执行", "运行"] if word in text_lower),
             "metrics_focus": sum(1 for word in ["指标", "metrics", "kpi", "转化率", "收入"] if word in text_lower),
             "file_focus": sum(1 for word in ["文件", "file", "保存", "读取"] if word in text_lower),
@@ -4102,19 +4707,17 @@ Respond with only the tool name, nothing else."""
         context_aware_mappings = {
             "database_focus": {
                 "search_table": ["探索", "查找", "找到", "搜索", "explore", "find", "search"],
-                "describe_table": ["描述", "检查", "查看", "分析", "describe", "inspect", "examine"]
+                "describe_table": ["描述", "检查", "查看", "分析", "describe", "inspect", "examine"],
             },
             "sql_focus": {
                 "execute_sql": ["执行", "运行", "查询", "execute", "run", "query"],
-                "read_query": ["读取", "获取", "read", "fetch"]
+                "read_query": ["读取", "获取", "read", "fetch"],
             },
-            "metrics_focus": {
-                "search_metrics": ["指标", "metrics", "kpi", "分析", "analyze"]
-            },
+            "metrics_focus": {"search_metrics": ["指标", "metrics", "kpi", "分析", "analyze"]},
             "file_focus": {
                 "write_file": ["写入", "保存", "创建", "write", "save", "create"],
-                "read_file": ["读取", "加载", "read", "load"]
-            }
+                "read_file": ["读取", "加载", "read", "load"],
+            },
         }
 
         # Apply context-aware scoring
@@ -4142,7 +4745,7 @@ Respond with only the tool name, nothing else."""
                         "tool": tool_name,
                         "confidence": min(0.95, normalized_score),
                         "context": primary_context_type,
-                        "score": score
+                        "score": score,
                     }
 
         return best_match if best_score > 0.3 else None
@@ -4164,7 +4767,7 @@ Respond with only the tool name, nothing else."""
                 "nouns": ["表结构", "表", "字段", "数据库", "数据表", "表清单", "表列表"],
                 "context_indicators": ["有哪些表", "表都有什么", "数据库里有", "表结构是"],
                 "confidence": 0.88,
-                "priority": 1
+                "priority": 1,
             },
             "describe_table": {
                 "primary_verbs": ["描述", "检查", "分析", "查看", "检验", "了解"],
@@ -4172,7 +4775,7 @@ Respond with only the tool name, nothing else."""
                 "nouns": ["表定义", "表模式", "表元数据", "表结构", "字段信息", "表详情"],
                 "context_indicators": ["表长什么样", "表的结构", "字段类型", "表定义是"],
                 "confidence": 0.85,
-                "priority": 1
+                "priority": 1,
             },
             "execute_sql": {
                 "primary_verbs": ["执行", "运行", "查询", "计算"],
@@ -4180,7 +4783,7 @@ Respond with only the tool name, nothing else."""
                 "nouns": ["sql", "查询", "语句", "数据"],
                 "context_indicators": ["运行sql", "执行查询", "计算结果", "查询数据"],
                 "confidence": 0.90,
-                "priority": 1
+                "priority": 1,
             },
             "search_metrics": {
                 "primary_verbs": ["分析", "查看", "查找", "计算", "统计"],
@@ -4188,7 +4791,7 @@ Respond with only the tool name, nothing else."""
                 "nouns": ["指标", "转化率", "收入", "销售额", "kpi", "绩效", "效率"],
                 "context_indicators": ["指标情况", "转化如何", "收入多少", "销售数据"],
                 "confidence": 0.86,
-                "priority": 1
+                "priority": 1,
             },
             "write_file": {
                 "primary_verbs": ["写入", "保存", "创建", "生成", "输出"],
@@ -4196,7 +4799,7 @@ Respond with only the tool name, nothing else."""
                 "nouns": ["文件", "文档", "报告", "结果"],
                 "context_indicators": ["保存到文件", "生成报告", "导出结果", "写入文件"],
                 "confidence": 0.82,
-                "priority": 1
+                "priority": 1,
             },
             "read_file": {
                 "primary_verbs": ["读取", "加载", "打开", "查看"],
@@ -4204,8 +4807,8 @@ Respond with only the tool name, nothing else."""
                 "nouns": ["文件", "文档", "内容", "数据"],
                 "context_indicators": ["读取文件", "查看内容", "加载数据", "打开文件"],
                 "confidence": 0.80,
-                "priority": 1
-            }
+                "priority": 1,
+            },
         }
 
         # Calculate semantic scores for each tool
@@ -4250,6 +4853,7 @@ Respond with only the tool name, nothing else."""
 
             for pattern, expected_tool in semantic_patterns:
                 import re
+
                 if expected_tool == tool_name and re.search(pattern, text_lower):
                     score += 4
                     reasons.append(f"semantic_pattern: {pattern}")
@@ -4257,23 +4861,29 @@ Respond with only the tool name, nothing else."""
             # Calculate confidence based on score and priority
             if score > 0:
                 # Normalize confidence based on maximum possible score
-                max_possible_score = (len(pattern_config["primary_verbs"]) * 2 +
-                                    len(pattern_config["secondary_verbs"]) * 1.5 +
-                                    len(pattern_config["nouns"]) * 1.8 +
-                                    len(pattern_config["context_indicators"]) * 3 + 4)
+                max_possible_score = (
+                    len(pattern_config["primary_verbs"]) * 2
+                    + len(pattern_config["secondary_verbs"]) * 1.5
+                    + len(pattern_config["nouns"]) * 1.8
+                    + len(pattern_config["context_indicators"]) * 3
+                    + 4
+                )
 
-                confidence = min(pattern_config["confidence"],
-                               (score / max_possible_score) * pattern_config["confidence"])
+                confidence = min(
+                    pattern_config["confidence"], (score / max_possible_score) * pattern_config["confidence"]
+                )
 
                 if confidence > 0.65:  # Minimum threshold
-                    candidates.append({
-                        "tool": tool_name,
-                        "confidence": confidence,
-                        "score": score,
-                        "priority": pattern_config["priority"],
-                        "reasons": reasons,
-                        "semantic_analysis": True
-                    })
+                    candidates.append(
+                        {
+                            "tool": tool_name,
+                            "confidence": confidence,
+                            "score": score,
+                            "priority": pattern_config["priority"],
+                            "reasons": reasons,
+                            "semantic_analysis": True,
+                        }
+                    )
 
         # Return the best candidate
         if candidates:
@@ -4283,7 +4893,7 @@ Respond with only the tool name, nothing else."""
                 "confidence": best_candidate["confidence"],
                 "reason": f"Chinese semantic analysis: {'; '.join(best_candidate['reasons'])}",
                 "score": best_candidate["score"],
-                "semantic_analysis": True
+                "semantic_analysis": True,
             }
 
         return None
@@ -4301,98 +4911,98 @@ Respond with only the tool name, nothing else."""
                 "search_table": {
                     "description": "Search for database tables and their schemas",
                     "use_cases": ["explore database structure", "find tables by name", "discover available tables"],
-                    "examples": ["find all tables related to customers", "search for sales tables"]
+                    "examples": ["find all tables related to customers", "search for sales tables"],
                 },
                 "describe_table": {
                     "description": "Get detailed schema information for a specific table",
                     "use_cases": ["examine table structure", "check column definitions", "understand table metadata"],
-                    "examples": ["describe the customer table", "show me the structure of orders table"]
+                    "examples": ["describe the customer table", "show me the structure of orders table"],
                 },
                 "execute_sql": {
                     "description": "Execute SQL queries and return results",
                     "use_cases": ["run data queries", "perform calculations", "retrieve specific data"],
-                    "examples": ["run this SQL query", "execute the analysis query"]
+                    "examples": ["run this SQL query", "execute the analysis query"],
                 },
                 "read_query": {
                     "description": "Execute read-only SQL queries for data retrieval",
                     "use_cases": ["fetch data", "analyze datasets", "perform read operations"],
-                    "examples": ["get customer data", "retrieve sales records"]
+                    "examples": ["get customer data", "retrieve sales records"],
                 },
                 "search_metrics": {
                     "description": "Search for business metrics and KPIs",
                     "use_cases": ["find performance indicators", "locate business metrics", "analyze KPIs"],
-                    "examples": ["find conversion rate metrics", "search for sales KPIs"]
+                    "examples": ["find conversion rate metrics", "search for sales KPIs"],
                 },
                 "search_reference_sql": {
                     "description": "Find example SQL queries and patterns",
                     "use_cases": ["find similar queries", "get SQL examples", "learn query patterns"],
-                    "examples": ["find SQL examples for joins", "search for aggregation queries"]
+                    "examples": ["find SQL examples for joins", "search for aggregation queries"],
                 },
                 "write_file": {
                     "description": "Write content to files",
                     "use_cases": ["save results", "create reports", "export data"],
-                    "examples": ["save results to file", "create a report"]
+                    "examples": ["save results to file", "create a report"],
                 },
                 "read_file": {
                     "description": "Read content from files",
                     "use_cases": ["load data", "import content", "read documents"],
-                    "examples": ["read the configuration file", "load the data file"]
+                    "examples": ["read the configuration file", "load the data file"],
                 },
                 "list_directory": {
                     "description": "List files and directories",
                     "use_cases": ["explore file system", "find files", "browse directories"],
-                    "examples": ["list files in directory", "show me the contents"]
+                    "examples": ["list files in directory", "show me the contents"],
                 },
                 "list_domain_layers_tree": {
                     "description": "Explore business domain structure and data layers",
                     "use_cases": ["understand data organization", "explore business domains", "view data hierarchy"],
-                    "examples": ["show business domains", "explore data layers"]
+                    "examples": ["show business domains", "explore data layers"],
                 },
                 "parse_temporal_expressions": {
                     "description": "Parse and understand date/time expressions",
                     "use_cases": ["analyze time periods", "parse date ranges", "understand temporal data"],
-                    "examples": ["parse this date expression", "analyze time periods"]
+                    "examples": ["parse this date expression", "analyze time periods"],
                 },
                 "get_current_date": {
                     "description": "Get the current date and time",
                     "use_cases": ["get today's date", "current timestamp", "now time"],
-                    "examples": ["what is today's date", "current time"]
+                    "examples": ["what is today's date", "current time"],
                 },
                 "check_semantic_model_exists": {
                     "description": "Check if semantic models are available",
                     "use_cases": ["verify model availability", "find semantic definitions"],
-                    "examples": ["check semantic model", "find available models"]
+                    "examples": ["check semantic model", "find available models"],
                 },
                 "check_metric_exists": {
                     "description": "Verify if specific metrics exist",
                     "use_cases": ["validate metric availability", "check metric definitions"],
-                    "examples": ["does this metric exist", "check metric availability"]
+                    "examples": ["does this metric exist", "check metric availability"],
                 },
                 "generate_sql_summary_id": {
                     "description": "Generate identifiers for SQL queries",
                     "use_cases": ["create query IDs", "generate summary identifiers"],
-                    "examples": ["generate SQL summary ID"]
+                    "examples": ["generate SQL summary ID"],
                 },
                 "todo_write": {
                     "description": "Create and manage task lists (todos)",
                     "use_cases": ["create task plans", "manage workflows", "organize tasks"],
-                    "examples": ["create a task list", "plan the work"]
+                    "examples": ["create a task list", "plan the work"],
                 },
                 "todo_update": {
                     "description": "Update task status in todo lists",
                     "use_cases": ["mark tasks complete", "update progress", "change task status"],
-                    "examples": ["mark task as done", "update task status"]
+                    "examples": ["mark task as done", "update task status"],
                 },
                 "todo_read": {
                     "description": "Read and display task lists",
                     "use_cases": ["view current tasks", "check progress", "review plans"],
-                    "examples": ["show my tasks", "check task status"]
+                    "examples": ["show my tasks", "check task status"],
                 },
                 "report": {
                     "description": "Generate comprehensive reports",
                     "use_cases": ["create final reports", "summarize results", "produce documentation"],
-                    "examples": ["generate final report", "create summary report"]
-                }
+                    "examples": ["generate final report", "create summary report"],
+                },
             }
 
             # Analyze task context
@@ -4429,16 +5039,16 @@ Do not include any explanation or additional text.
 TOOL:"""
 
             # Use async call if available
-            if hasattr(self.model, 'generate_async'):
+            if hasattr(self.model, "generate_async"):
                 response = asyncio.run(self.model.generate_async(prompt, max_tokens=15, temperature=0.1))
             else:
                 response = self.model.generate(prompt, max_tokens=15, temperature=0.1)
 
-            if response and hasattr(response, 'content'):
+            if response and hasattr(response, "content"):
                 tool_name = response.content.strip().lower()
                 # Clean up response (remove extra text if any)
                 tool_name = tool_name.split()[0] if tool_name.split() else tool_name
-                tool_name = tool_name.strip('.:')
+                tool_name = tool_name.strip(".:")
 
                 # Validate response
                 available_tools = set(self.keyword_map.keys())
@@ -4513,7 +5123,7 @@ TOOL:"""
             "primary_focus": primary_focus,
             "action_type": action_type,
             "data_type": data_type,
-            "expected_output": expected_output
+            "expected_output": expected_output,
         }
 
     def _enhanced_intelligent_inference(self, text: str) -> Optional[str]:
@@ -4528,27 +5138,34 @@ TOOL:"""
         # Priority-based inference rules
         inference_rules = [
             # High priority: Database exploration
-            (lambda t: any(word in t for word in ["探索", "查找", "找到", "搜索", "explore", "find", "search"]) and
-                      any(word in t for word in ["表", "table", "database", "schema"]),
-             "search_table", 0.8),
-
+            (
+                lambda t: any(word in t for word in ["探索", "查找", "找到", "搜索", "explore", "find", "search"])
+                and any(word in t for word in ["表", "table", "database", "schema"]),
+                "search_table",
+                0.8,
+            ),
             # High priority: Table description
-            (lambda t: any(word in t for word in ["描述", "检查", "分析", "describe", "inspect", "analyze"]) and
-                      any(word in t for word in ["表", "table", "schema", "structure"]),
-             "describe_table", 0.75),
-
+            (
+                lambda t: any(word in t for word in ["描述", "检查", "分析", "describe", "inspect", "analyze"])
+                and any(word in t for word in ["表", "table", "schema", "structure"]),
+                "describe_table",
+                0.75,
+            ),
             # Medium priority: SQL execution
-            (lambda t: any(word in t for word in ["执行", "运行", "execute", "run"]) and
-                      any(word in t for word in ["sql", "查询", "query"]),
-             "execute_sql", 0.7),
-
+            (
+                lambda t: any(word in t for word in ["执行", "运行", "execute", "run"])
+                and any(word in t for word in ["sql", "查询", "query"]),
+                "execute_sql",
+                0.7,
+            ),
             # Medium priority: Metrics
-            (lambda t: any(word in t for word in ["指标", "metrics", "kpi", "转化率"]),
-             "search_metrics", 0.7),
-
+            (lambda t: any(word in t for word in ["指标", "metrics", "kpi", "转化率"]), "search_metrics", 0.7),
             # Low priority: File operations
-            (lambda t: any(word in t for word in ["文件", "写入", "保存", "读取", "file", "write", "save", "read"]),
-             "write_file", 0.6),
+            (
+                lambda t: any(word in t for word in ["文件", "写入", "保存", "读取", "file", "write", "save", "read"]),
+                "write_file",
+                0.6,
+            ),
         ]
 
         for condition, tool, confidence in inference_rules:
