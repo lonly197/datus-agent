@@ -214,6 +214,73 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
         await self.emit_queue.put(error_event)
 
+    def _validate_sql_syntax_comprehensive(self, sql: str) -> dict:
+        """Comprehensive SQL syntax validation."""
+        try:
+            import sqlglot
+
+            # Basic syntax check
+            parsed = sqlglot.parse_one(sql)
+
+            # Additional checks
+            issues = []
+
+            # Check for incomplete statements
+            has_main_operation = any(isinstance(node, (sqlglot.exp.Select, sqlglot.exp.Insert,
+                                                      sqlglot.exp.Update, sqlglot.exp.Delete))
+                                    for node in parsed.walk())
+            if not has_main_operation:
+                issues.append("SQL statement appears incomplete - missing main operation (SELECT/INSERT/UPDATE/DELETE)")
+
+            # Check for table references
+            tables = [str(table) for table in parsed.find_all(sqlglot.exp.Table)]
+            if not tables:
+                issues.append("No table references found in SQL")
+
+            # Check for potentially problematic patterns
+            upper_sql = sql.upper()
+            if "SELECT *" in upper_sql and len(tables) > 0:
+                # This is actually allowed, just log it for review
+                logger.info("SELECT * detected - will be flagged in review")
+
+            return {
+                "valid": len(issues) == 0,
+                "error": "; ".join(issues) if issues else None,
+                "tables_found": tables,
+                "parsed_ast": str(parsed),
+                "sql_length": len(sql)
+            }
+
+        except Exception as e:
+            return {
+                "valid": False,
+                "error": f"SQL parsing failed: {str(e)}",
+                "tables_found": [],
+                "parsed_ast": None,
+                "sql_length": len(sql)
+            }
+
+    def _analyze_tool_failure_impact(self, tool_name: str, result: dict) -> str:
+        """Analyze the impact of a tool failure on SQL review quality."""
+        if result.get("success", False):
+            return "无影响 - 工具执行成功"
+
+        error_msg = result.get("error", "").lower()
+
+        if tool_name == "describe_table":
+            return "表结构分析受限，可能无法准确评估字段类型、索引使用和分区策略"
+        elif tool_name == "get_table_ddl":
+            return "DDL信息缺失，表设计审查和约束检查能力下降"
+        elif tool_name == "read_query":
+            if "syntax" in error_msg:
+                return "语法验证失败，SQL正确性检查受限"
+            else:
+                return "查询执行失败，性能评估依赖理论分析"
+        elif tool_name == "search_external_knowledge":
+            return "规则检索失败，使用通用最佳实践而非StarRocks 3.3特定规范"
+        else:
+            return f"工具{tool_name}执行失败，具体影响需进一步分析"
+
     def setup_input(self, workflow: Workflow) -> dict:
         """
         Setup chat input from workflow context.
@@ -457,10 +524,25 @@ class ChatAgenticNode(GenSQLAgenticNode):
         # 发送预检执行计划事件
         await self._send_preflight_plan_update(workflow, required_tools)
 
-        # ========== SQL Syntax Validation Check ==========
+        # ========== Enhanced SQL Validation ==========
         # Extract and validate SQL syntax BEFORE executing any tools
         task = workflow.task
         sql_query = self._extract_sql_from_task(task.task)
+
+        # Perform comprehensive SQL validation
+        sql_validation_result = self._validate_sql_syntax_comprehensive(sql_query)
+        if not sql_validation_result["valid"]:
+            # Send syntax error event
+            await self._send_syntax_error_event(sql_query, sql_validation_result["error"])
+
+            # Continue with partial execution but mark the issue
+            logger.warning(f"SQL syntax issues detected: {sql_validation_result['error']}")
+            # Store validation results for context injection
+            workflow.metadata["sql_validation_result"] = sql_validation_result
+        else:
+            logger.info("SQL syntax validation passed")
+            workflow.metadata["sql_validation_result"] = sql_validation_result
+        # ========== END Enhanced SQL Validation ==========
 
         # Perform syntax validation
         is_valid, error_message = self._validate_sql_syntax(sql_query, task.task)
@@ -707,6 +789,20 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     workflow.metadata["fail_safe_annotation"] = fail_safe_annotation
                     logger.info("Generated fail-safe report annotation due to preflight tool failures")
 
+        # Prepare preflight results for LLM context
+        preflight_results_for_llm = []
+        for tool_name, result in tool_results.items():
+            impact_analysis = self._analyze_tool_failure_impact(tool_name, result)
+            preflight_results_for_llm.append({
+                "tool_name": tool_name,
+                "success": result.get("success", False),
+                "error": result.get("error", ""),
+                "impact_analysis": impact_analysis
+            })
+
+        # Inject preflight results into workflow for LLM access
+        workflow.metadata["preflight_results"] = preflight_results_for_llm
+
         logger.info(f"Preflight tool execution completed: {'SUCCESS' if all_success else 'PARTIAL_SUCCESS'}")
         if preflight_summary:
             logger.info(f"Preflight summary: {preflight_summary}")
@@ -720,7 +816,10 @@ class ChatAgenticNode(GenSQLAgenticNode):
             # Check cache first for cacheable operations
             cache_key_params = {"catalog": catalog, "database": database, "schema": schema}
 
-            if tool_name == "describe_table" and table_names:
+            if tool_name == "describe_table":
+                if not table_names:
+                    return {"success": False, "error": "No table names found in SQL query"}
+
                 # Check cache first
                 table_name = table_names[0]
                 cache_key_params["table_name"] = table_name
@@ -731,10 +830,16 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         logger.info(f"Cache hit for {tool_name} on table {table_name}")
                         return cached_result
 
-                # Execute the tool
-                result = self.db_func_tool.describe_table(
-                    table_name=table_name, catalog=catalog, database=database, schema_name=schema
-                )
+                # Execute the tool with explicit parameters
+                try:
+                    result = self.db_func_tool.describe_table(
+                        table_name=table_name,
+                        catalog=catalog or "default_catalog",  # Provide default catalog
+                        database=database or "",  # Allow empty but explicit
+                        schema_name=schema or ""  # Allow empty but explicit
+                    )
+                except Exception as e:
+                    return {"success": False, "error": f"describe_table execution failed: {str(e)}"}
                 result_dict = (
                     result.__dict__
                     if hasattr(result, "__dict__")
@@ -834,7 +939,10 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
                 return result_dict
 
-            elif tool_name == "get_table_ddl" and table_names:
+            elif tool_name == "get_table_ddl":
+                if not table_names:
+                    return {"success": False, "error": "No table names found in SQL query"}
+
                 # Check cache first
                 table_name = table_names[0]
                 cache_key_params["table_name"] = table_name
@@ -845,10 +953,16 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         logger.info(f"Cache hit for {tool_name} on table {table_name}")
                         return cached_result
 
-                # Get DDL for the first table
-                result = self.db_func_tool.get_table_ddl(
-                    table_name=table_name, catalog=catalog, database=database, schema_name=schema
-                )
+                # Get DDL for the first table with explicit parameters
+                try:
+                    result = self.db_func_tool.get_table_ddl(
+                        table_name=table_name,
+                        catalog=catalog or "default_catalog",  # Provide default catalog
+                        database=database or "",  # Allow empty but explicit
+                        schema_name=schema or ""  # Allow empty but explicit
+                    )
+                except Exception as e:
+                    return {"success": False, "error": f"get_table_ddl execution failed: {str(e)}"}
                 result_dict = (
                     result.__dict__
                     if hasattr(result, "__dict__")
@@ -874,22 +988,61 @@ class ChatAgenticNode(GenSQLAgenticNode):
             return {"success": False, "error": str(e)}
 
     def _extract_sql_from_task(self, task_text: str) -> str:
-        """Extract SQL query from task text."""
-        # Simple extraction - look for SQL between triple backticks or SELECT statements
+        """Extract SQL query from task text with improved logic."""
         import re
 
-        # Try to find SQL in backticks first
+        # 1. Try to find SQL in backticks first (highest priority)
         sql_match = re.search(r"```\s*sql\s*(.*?)\s*```", task_text, re.DOTALL | re.IGNORECASE)
         if sql_match:
             return sql_match.group(1).strip()
 
-        # Try to find SELECT statement
+        # 2. Look for "待审查SQL：" or "SQL：" patterns (common in Chinese interfaces)
+        sql_prefix_match = re.search(r"(?:待审查SQL|SQL)[:：]\s*(.+?)(?:\n|$)", task_text, re.IGNORECASE)
+        if sql_prefix_match:
+            candidate_sql = sql_prefix_match.group(1).strip()
+            # Validate it's actually SQL by checking for SELECT keyword
+            if candidate_sql.upper().startswith('SELECT'):
+                return candidate_sql
+
+        # 3. Try to find complete SQL statements with better boundary detection
+        # Look for SELECT ... FROM pattern followed by semicolon or end of string
+        select_pattern = r"SELECT\s+.*?(?:FROM\s+\w+.*?)(?:;|\s*$)"
+        select_match = re.search(select_pattern, task_text, re.DOTALL | re.IGNORECASE)
+        if select_match:
+            sql_candidate = select_match.group(0).strip()
+            # Additional validation: ensure it doesn't contain Chinese characters inappropriately
+            if not self._contains_invalid_mixed_content(sql_candidate):
+                return sql_candidate
+
+        # 4. Fallback: original logic but with validation
         select_match = re.search(r"(SELECT\s+.*?);", task_text, re.DOTALL | re.IGNORECASE)
         if select_match:
-            return select_match.group(1).strip()
+            sql_candidate = select_match.group(1).strip()
+            if not self._contains_invalid_mixed_content(sql_candidate):
+                return sql_candidate
 
-        # Fallback: return the entire task text
+        # 5. Final fallback: return the entire task text
         return task_text.strip()
+
+    def _contains_invalid_mixed_content(self, sql: str) -> bool:
+        """Check if SQL contains invalid mixed content (Chinese explanations mixed with SQL)."""
+        # Check for Chinese characters in SQL keywords area
+        chinese_chars = re.findall(r'[\u4e00-\u9fff]', sql[:50])  # First 50 chars
+        if len(chinese_chars) > 3:  # Too many Chinese chars suggest mixed content
+            return True
+
+        # Check for explanation patterns mixed with SQL
+        invalid_patterns = [
+            r'SELECT\s+.*禁止.*分区裁剪',  # Specific pattern from the error
+            r'SELECT\s+.*等\)',  # Chinese closing parenthesis
+            r'SELECT\s+.*规范等',  # Another pattern from logs
+        ]
+
+        for pattern in invalid_patterns:
+            if re.search(pattern, sql, re.IGNORECASE):
+                return True
+
+        return False
 
     def _parse_table_names_from_sql(self, sql: str) -> list:
         """Parse table names from SQL query using sqlglot."""

@@ -35,6 +35,35 @@ You are a professional SQL quality review expert responsible for comprehensive q
    - 生成优化后的SQL代码
    - 说明优化效果和预期收益
 
+## 数据可用性说明
+
+{% if preflight_results %}
+### 预检工具执行结果
+{% for tool_result in preflight_results %}
+- **{{ tool_result.tool_name }}**: {{ "✅ 成功" if tool_result.success else "❌ 失败" }}
+  {% if not tool_result.success %}
+  - 失败原因: {{ tool_result.error }}
+  - 对审查的影响: {{ tool_result.impact_analysis }}
+  {% endif %}
+{% endfor %}
+
+### 数据完整性评估
+{% if preflight_results|selectattr('success')|list|length < preflight_results|length %}
+⚠️ **数据完整性受限**: 部分预检工具执行失败，审查结论基于有限信息。
+
+**影响分析**:
+- 表结构信息不完整时，字段类型和索引分析受限
+- DDL信息缺失时，表设计审查能力下降
+- SQL执行失败时，性能评估依赖理论分析
+- 规则检索失败时，使用通用最佳实践而非特定版本规则
+
+**审查策略调整**:
+- 优先识别可确认的问题（如SELECT *使用）
+- 对无法验证的项目明确标注"需进一步确认"
+- 提供更保守的优化建议
+{% endif %}
+{% endif %}
+
 ## 审查工具使用
 
 你可以使用以下工具来辅助审查：
