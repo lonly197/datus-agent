@@ -160,7 +160,9 @@ class ContextSearchTools:
         if not self._show_ext_knowledge():
             return []
         try:
-            return self.ext_knowledge_store.search_all_knowledge()
+            all_knowledge = self.ext_knowledge_store.search_all_knowledge()
+            # Convert pyarrow table to list of dicts
+            return all_knowledge.to_pylist()
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.warning("Failed to collect external knowledge taxonomy: %s", exc)
             return []
@@ -257,17 +259,8 @@ class ContextSearchTools:
             # Convert pyarrow table to list of dicts
             results = []
             if len(search_results) > 0:
-                for result in search_results:
-                    results.append(
-                        {
-                            "terminology": result.get("terminology", ""),
-                            "explanation": result.get("explanation", ""),
-                            "domain": result.get("domain", ""),
-                            "layer1": result.get("layer1", ""),
-                            "layer2": result.get("layer2", ""),
-                            "created_at": result.get("created_at", ""),
-                        }
-                    )
+                # Use to_pylist() to properly convert pyarrow table to list of dicts
+                results = search_results.to_pylist()
 
             logger.debug(f"Found {len(results)} external knowledge entries for query: {query_text}")
             return FuncToolResult(success=1, error=None, result=results)

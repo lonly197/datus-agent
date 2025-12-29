@@ -586,7 +586,7 @@ class DatusAPIService:
                 "workflow": "chat_agentic",  # 不使用plan模式
                 "plan_mode": False,
                 "auto_execute_plan": False,
-                "system_prompt": "sql_review_system",  # 专门的SQL审查提示词
+                "system_prompt": "sql_review",  # 专门的SQL审查提示词（会自动添加_system后缀）
                 "output_format": "markdown"  # 指定输出格式
             }
         elif task_type == "data_analysis":
@@ -649,7 +649,7 @@ class DatusAPIService:
             workflow_metadata = {
                 "plan_mode": task_config["plan_mode"],
                 "auto_execute_plan": task_config["auto_execute_plan"],
-                "system_prompt": task_config["system_prompt"],
+                "system_prompt": task_config["system_prompt"].replace("_system", "") if task_config["system_prompt"].endswith("_system") else task_config["system_prompt"],
                 "output_format": task_config["output_format"],
                 "task_type": task_type,
                 "prompt": request.prompt,
