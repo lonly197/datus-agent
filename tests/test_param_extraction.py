@@ -140,7 +140,7 @@ def main():
 
     # Test case 1: Original problematic content
     test_content_1 = "Sub-question: 探索数据库中的表结构，找到试驾表和线索表 | Expected: 确认表名、字段名和关联关系"
-    print(f"Test 1 - Original problematic content:")
+    print("Test 1 - Original problematic content:")
     print(f"Input: {test_content_1}")
     params_1 = extractor._extract_tool_parameters("describe_table", test_content_1)
     print(f"Output: {params_1}")

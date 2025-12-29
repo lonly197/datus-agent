@@ -20,7 +20,7 @@ class TestIntentDetection:
 
         # Chinese SQL generation query
         result = detector.detect_sql_intent_by_keyword("从 ODS 试驾表和线索表关联，统计每个月'首次试驾'到'下定'的平均转化周期")
-        assert result[0] == True  # Should detect SQL intent
+        assert result[0] is True  # Should detect SQL intent
         assert "试驾" in result[1]["keyword_matches"]
         assert "线索" in result[1]["keyword_matches"]
 
@@ -29,7 +29,7 @@ class TestIntentDetection:
         detector = IntentDetector()
 
         result = detector.detect_sql_intent_by_keyword("审查以下SQL：SELECT * FROM dwd_assign_dlr_clue_fact_di")
-        assert result[0] == True
+        assert result[0] is True
         assert "sql" in result[1]["keyword_matches"]
         assert "审查" in result[1]["keyword_matches"]
 
@@ -38,14 +38,14 @@ class TestIntentDetection:
         detector = IntentDetector()
 
         result = detector.detect_sql_intent_by_keyword("What is the weather today?")
-        assert result[0] == False
+        assert result[0] is False
 
     def test_sql_pattern_detection(self):
         """Test SQL pattern detection."""
         detector = IntentDetector()
 
         result = detector.detect_sql_intent_by_keyword("SELECT user_id, name FROM users WHERE status = 'active'")
-        assert result[0] == True
+        assert result[0] is True
         assert len(result[1]["pattern_matches"]) > 0
 
     @pytest.mark.asyncio
@@ -200,7 +200,7 @@ class TestAutoInjectionIntegration:
             tool_names = [tool.__name__ for tool in available_tools]
 
             assert "search_external_knowledge" in str(available_tools)
-            assert tools.has_ext_knowledge == True
+            assert tools.has_ext_knowledge is True
 
     def test_empty_knowledge_store(self):
         """Test behavior when external knowledge store is empty."""
@@ -217,7 +217,7 @@ class TestAutoInjectionIntegration:
 
             tools = ContextSearchTools(mock_config)
 
-            assert tools.has_ext_knowledge == False
+            assert tools.has_ext_knowledge is False
 
             # External knowledge search should not be available
             available_tools = tools.available_tools()

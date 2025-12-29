@@ -12,7 +12,7 @@ to automatically inject relevant external knowledge when front-end omits ext_kno
 import asyncio
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from datus.utils.loggings import get_logger
 

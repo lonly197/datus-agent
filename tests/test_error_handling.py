@@ -213,7 +213,7 @@ async def test_tool_error_handling():
     print(f"  Auto-fix available: {result.get('auto_fix_available', False)}")
     print(f"  Has fixed SQL: {'fixed_sql' in result}")
     if "fixed_sql" in result:
-        print(f"  Original: 'SELEC * FROM users'")
+        print("  Original: 'SELEC * FROM users'")
         print(f"  Fixed: '{result['fixed_sql']}'")
     print()
 

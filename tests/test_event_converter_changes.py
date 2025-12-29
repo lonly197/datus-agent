@@ -221,7 +221,7 @@ def test_is_internal_todo_update():
     )
     result1 = _is_internal_todo_update(action1)
     print(f"Test 1 - server_call_ action_id: {result1} (expected: True)")
-    assert result1 == True, f"Expected True, got {result1}"
+    assert result1 is True, f"Expected True, got {result1}"
 
     # Test case 2: Server executor message
     action2 = MockActionHistory(
@@ -232,7 +232,7 @@ def test_is_internal_todo_update():
     )
     result2 = _is_internal_todo_update(action2)
     print(f"Test 2 - Server executor message: {result2} (expected: True)")
-    assert result2 == True, f"Expected True, got {result2}"
+    assert result2 is True, f"Expected True, got {result2}"
 
     # Test case 3: Server executor todo_in_progress message
     action3 = MockActionHistory(
@@ -243,7 +243,7 @@ def test_is_internal_todo_update():
     )
     result3 = _is_internal_todo_update(action3)
     print(f"Test 3 - Server executor todo_in_progress: {result3} (expected: True)")
-    assert result3 == True, f"Expected True, got {result3}"
+    assert result3 is True, f"Expected True, got {result3}"
 
     # Test case 4: Normal action
     action4 = MockActionHistory(
@@ -251,7 +251,7 @@ def test_is_internal_todo_update():
     )
     result4 = _is_internal_todo_update(action4)
     print(f"Test 4 - Normal action: {result4} (expected: False)")
-    assert result4 == False, f"Expected False, got {result4}"
+    assert result4 is False, f"Expected False, got {result4}"
 
     # Test case 5: Non-todo_update action
     action5 = MockActionHistory(
@@ -262,7 +262,7 @@ def test_is_internal_todo_update():
     )
     result5 = _is_internal_todo_update(action5)
     print(f"Test 5 - Non-todo_update action: {result5} (expected: False)")
-    assert result5 == False, f"Expected False, got {result5}"
+    assert result5 is False, f"Expected False, got {result5}"
 
     print("✓ _is_internal_todo_update tests passed")
 

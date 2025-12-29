@@ -8,7 +8,6 @@ import asyncio
 import hashlib
 import json
 import re
-import statistics
 import time
 import uuid
 from collections import defaultdict, deque
@@ -2615,9 +2614,6 @@ Respond with only the tool name, nothing else."""
     ) -> Optional[Tuple[Any, bool]]:
         """Execute a fallback tool when the primary tool fails."""
         try:
-            # Import tools here to avoid circular imports
-            from datus.tools.func_tool import db_tools
-
             # Get database tool instance (this assumes we have access to it)
             # In practice, this would need to be passed as a parameter
             db_tool = getattr(self, "_db_tool", None)
@@ -3102,7 +3098,7 @@ Respond with only the tool name, nothing else."""
 
                             # Send status message about starting search
                             await self._emit_status_message(
-                                f"🔍 **正在搜索数据库表**\n\n查找包含关键词的表结构和信息...", getattr(self, "plan_id", None)
+                                "🔍 **正在搜索数据库表**\n\n查找包含关键词的表结构和信息...", getattr(self, "plan_id", None)
                             )
 
                             # Execute with error handling and recovery
@@ -3314,18 +3310,18 @@ Respond with only the tool name, nothing else."""
                                     suggestions = error_info.get("suggestions", [])
 
                                     if error_type == ErrorType.SYNTAX_ERROR:
-                                        friendly_msg = f"❌ **SQL语法错误**\n\n查询语句存在语法问题，已自动尝试修复。如有疑问，请检查SQL语句结构。"
+                                        friendly_msg = "❌ **SQL语法错误**\n\n查询语句存在语法问题，已自动尝试修复。如有疑问，请检查SQL语句结构。"
                                     elif error_type == ErrorType.TABLE_NOT_FOUND:
-                                        friendly_msg = f"❌ **表不存在**\n\n查询的表在数据库中不存在。请检查表名是否正确。"
+                                        friendly_msg = "❌ **表不存在**\n\n查询的表在数据库中不存在。请检查表名是否正确。"
                                     elif error_type == ErrorType.PERMISSION_DENIED:
-                                        friendly_msg = f"❌ **权限不足**\n\n没有执行此查询的权限。请联系数据库管理员。"
+                                        friendly_msg = "❌ **权限不足**\n\n没有执行此查询的权限。请联系数据库管理员。"
                                     elif error_type == ErrorType.TIMEOUT:
-                                        friendly_msg = f"⚠️ **查询超时**\n\n查询执行时间过长，可能需要优化查询条件。"
+                                        friendly_msg = "⚠️ **查询超时**\n\n查询执行时间过长，可能需要优化查询条件。"
                                     else:
-                                        friendly_msg = f"❌ **查询执行失败**\n\n执行过程中遇到问题，系统已记录详细信息。"
+                                        friendly_msg = "❌ **查询执行失败**\n\n执行过程中遇到问题，系统已记录详细信息。"
 
                                     if suggestions:
-                                        friendly_msg += f"\n\n💡 **建议解决方法**:\n" + "\n".join(
+                                        friendly_msg += "\n\n💡 **建议解决方法**:\n" + "\n".join(
                                             f"• {s}" for s in suggestions[:3]
                                         )
 
@@ -4336,7 +4332,6 @@ Respond with only the tool name, nothing else."""
             status: Status to set for the todo item
         """
         try:
-            import time
             import uuid
 
             from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
@@ -4486,8 +4481,6 @@ Respond with only the tool name, nothing else."""
                 path = params.get("path", "")
                 if path:
                     # Basic path validation
-                    import os
-
                     if ".." in path or path.startswith("/"):
                         logger.warning(f"Potentially unsafe file path: {path}")
                         validated["path"] = f"output/safe_{hash(path) % 10000}.txt"
@@ -4547,7 +4540,7 @@ Respond with only the tool name, nothing else."""
                     return {"table_name": table_name}
 
         # Fallback: if no table name found, this might be a search operation
-        logger.debug(f"No table name found in todo content, falling back to search operation")
+        logger.debug("No table name found in todo content, falling back to search operation")
         return {"query_text": todo_content}
 
     def _extract_search_table_params(self, todo_content: str) -> Dict[str, Any]:
@@ -4856,8 +4849,6 @@ Respond with only the tool name, nothing else."""
         matches = []
         for task_type, config in task_patterns.items():
             for pattern in config["patterns"]:
-                import re
-
                 if re.search(pattern, text_lower, re.IGNORECASE):
                     matches.append(
                         {
@@ -5054,8 +5045,6 @@ Respond with only the tool name, nothing else."""
             ]
 
             for pattern, expected_tool in semantic_patterns:
-                import re
-
                 if expected_tool == tool_name and re.search(pattern, text_lower):
                     score += 4
                     reasons.append(f"semantic_pattern: {pattern}")

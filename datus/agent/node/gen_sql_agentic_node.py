@@ -10,7 +10,6 @@ SQL generation with support for limited context, enhanced template variables,
 and flexible configuration through agent.yml.
 """
 
-import re
 from typing import Any, AsyncGenerator, Dict, Optional, Union
 
 from datus.agent.node.agentic_node import AgenticNode
@@ -934,7 +933,7 @@ class GenSQLAgenticNode(AgenticNode):
                 json_content = json_match.group(1).strip()
                 logger.debug(f"Extracted JSON content from markdown block: {json_content[:200]}...")
             else:
-                logger.debug(f"No JSON markdown block found in content, trying raw JSON parsing")
+                logger.debug("No JSON markdown block found in content, trying raw JSON parsing")
 
             # Parse the JSON content
             parsed = llm_result2json(json_content, expected_type=dict)

@@ -17,7 +17,6 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 
 from datus.agent.agent import Agent
 from datus.configuration.agent_config_loader import load_agent_config
@@ -1296,7 +1295,7 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
                         if isinstance(created_ts, str):
                             try:
                                 created_ts = datetime.fromisoformat(created_ts.replace("Z", "+00:00")).timestamp()
-                            except:
+                            except (ValueError, TypeError):
                                 continue
 
                         if created_ts > cutoff_time:

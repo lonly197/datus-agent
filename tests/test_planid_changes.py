@@ -52,7 +52,7 @@ class MockEventConverter:
                     parsed = json.loads(input_data["arguments"])
                     if isinstance(parsed, dict):
                         return parsed.get("todo_id") or parsed.get("todoId")
-                except:
+                except (json.JSONDecodeError, TypeError, ValueError):
                     pass
 
             # Direct check

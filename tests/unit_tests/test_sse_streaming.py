@@ -303,7 +303,7 @@ class TestSSEStreaming:
             try:
                 async for event in generate_sse_stream(self.sample_request, "test_client"):
                     events.append(event)
-            except:
+            except Exception:
                 pass  # Expected to handle errors gracefully
 
             # Should have error event
