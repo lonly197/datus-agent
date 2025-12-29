@@ -1666,37 +1666,47 @@ Provide your reasoning and any recommendations. If this requires tool calls, you
                 logger.error(f"LLM reasoning: model.generate failed for todo {item.id}: {e}")
                 return None
 
-            if response:
-                logger.info(f"LLM reasoning: response has content attr: {hasattr(response, 'content')}")
-                if hasattr(response, "content"):
-                    logger.info(f"LLM reasoning: content length: {len(response.content) if response.content else 0}")
+            # Normalize response into a text string for downstream parsing.
+            response_text = None
+            try:
+                # If the model wrapper returns a dict-like with 'content', prefer that.
+                if isinstance(response, dict) and "content" in response:
+                    response_text = response.get("content") or ""
+                # Some adapters return plain strings
+                elif isinstance(response, str):
+                    response_text = response
+                # Some response objects may expose a .content attribute
+                elif hasattr(response, "content"):
+                    response_text = getattr(response, "content") or ""
                 else:
-                    logger.info(
-                        f"LLM reasoning: response attrs: {[attr for attr in dir(response) if not attr.startswith('_')]}"
-                    )
-            else:
-                logger.warning(f"LLM reasoning: response is None for todo {item.id}")
+                    # Fallback to stringifying the response
+                    response_text = str(response) if response is not None else None
+            except Exception as e:
+                logger.debug(f"LLM reasoning: failed to normalize response for todo {item.id}: {e}")
+                response_text = None
 
-            if response and hasattr(response, "content"):
+            logger.info(f"LLM reasoning: normalized response type: {type(response_text)}, length: {len(response_text) if response_text else 0}")
+
+            if response_text and isinstance(response_text, str) and response_text.strip():
                 reasoning_result = {
                     "reasoning_type": item.reasoning_type,
-                    "response": response.content.strip(),
+                    "response": response_text.strip(),
                     "context_used": len(context_actions),
                     "sql": None,  # May be extracted from response if present
                     "tool_calls": None,  # May be populated if LLM suggests tools
                 }
 
-                # Try to extract SQL if present in response
+                # Try to extract SQL if present in response_text
                 import re
 
-                sql_match = re.search(r"```sql\s*(.*?)\s*```", response.content, re.DOTALL | re.IGNORECASE)
+                sql_match = re.search(r"```sql\s*(.*?)\s*```", response_text, re.DOTALL | re.IGNORECASE)
                 if sql_match:
                     reasoning_result["sql"] = sql_match.group(1).strip()
 
                 # Try to parse tool calls if LLM suggests them (JSON format)
                 try:
-                    # Look for JSON-like tool call suggestions in response
-                    json_match = re.search(r'\{.*?"tool_calls".*?\}', response.content, re.DOTALL)
+                    # Look for JSON-like tool call suggestions in response_text
+                    json_match = re.search(r'\{.*?"tool_calls".*?\}', response_text, re.DOTALL)
                     if json_match:
                         tool_calls_data = json.loads(json_match.group(0))
                         if "tool_calls" in tool_calls_data:

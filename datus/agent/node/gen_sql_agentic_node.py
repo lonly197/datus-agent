@@ -965,8 +965,36 @@ class GenSQLAgenticNode(AgenticNode):
                     output_text = output_text.replace("\\n", "\n").replace('\\"', '"').replace("\\'", "'")
 
                 return sql, output_text
+            # If we could not parse JSON, attempt a tolerant fallback on raw content
+            # Treat the original content string as explanation and try to extract SQL code blocks or SELECT statements.
+            try:
+                raw_text = content if isinstance(content, str) else str(content)
+                # 1) Try to extract fenced SQL code blocks
+                import re
 
-            return None, None
+                sql_block = None
+                sql_match = re.search(r"```sql\s*(.*?)\s*```", raw_text, re.DOTALL | re.IGNORECASE)
+                if sql_match:
+                    sql_block = sql_match.group(1).strip()
+                else:
+                    # 2) Try generic fenced block
+                    generic_match = re.search(r"```\s*(.*?)\s*```", raw_text, re.DOTALL | re.IGNORECASE)
+                    if generic_match:
+                        candidate = generic_match.group(1).strip()
+                        # If the fenced block looks like SQL, use it
+                        if candidate.strip().upper().startswith(("SELECT", "WITH", "INSERT", "UPDATE", "DELETE")):
+                            sql_block = candidate
+                # 3) Try to find the first SELECT ...; occurrence as a last resort
+                if not sql_block:
+                    select_match = re.search(r"(?s)(SELECT\s.+?;)", raw_text, re.IGNORECASE)
+                    if select_match:
+                        sql_block = select_match.group(1).strip()
+
+                output_text = raw_text
+                return (sql_block, output_text)
+            except Exception as e:
+                logger.debug(f"Fallback parsing failed: {e}")
+                return None, None
         except Exception as e:
             logger.warning(f"Failed to extract SQL and output from response: {e}")
             return None, None

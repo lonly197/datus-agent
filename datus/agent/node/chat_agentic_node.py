@@ -487,6 +487,31 @@ class ChatAgenticNode(GenSQLAgenticNode):
             logger.debug(f"Final response_content: '{response_content}' (length: {len(response_content)})")
             logger.debug(f"Final sql_content: {sql_content[:100] if sql_content else 'None'}...")
 
+            # If we're in plan mode and no SQL was produced, attempt a final-summary fallback:
+            # synthesize a final JSON report from the completed action history.
+            if getattr(user_input, "plan_mode", False) and not sql_content:
+                try:
+                    actions_list = action_history_manager.get_actions() if action_history_manager else []
+                    actions_summary = "\n".join(f"- {a.action_type}: {a.messages}" for a in actions_list[-20:])  # limit to last 20
+                    fallback_prompt = (
+                        "Plan-mode fallback: All todos appear to have completed but no final SQL/report was produced.\n"
+                        "Based on the action history and tool outputs below, produce a final JSON object with keys "
+                        "'sql' and 'explanation'. The 'sql' value should contain the final SQL statement (string), "
+                        "and 'explanation' should summarize the review and optimizations.\n\n"
+                        f"Action history (latest first):\n{actions_summary}\n\n"
+                        "Return only a JSON object or a JSON code block."
+                    )
+                    logger.info("Attempting final-summary fallback to synthesize final SQL/report")
+                    fallback_resp = await asyncio.to_thread(self.model.generate, fallback_prompt, max_tokens=1500, temperature=0.0)
+                    if isinstance(fallback_resp, str) and fallback_resp.strip():
+                        extracted_sql2, extracted_output2 = self._extract_sql_and_output_from_response({"content": fallback_resp})
+                        if extracted_sql2:
+                            sql_content = sql_content or extracted_sql2
+                        if extracted_output2:
+                            response_content = response_content or extracted_output2
+                except Exception as e:
+                    logger.warning(f"Final-summary fallback failed: {e}")
+
             # Extract token usage from final actions using our new approach
             # With our streaming token fix, only the final assistant action will have accurate usage
             final_actions = action_history_manager.get_actions()
