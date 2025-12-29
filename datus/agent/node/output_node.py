@@ -26,7 +26,30 @@ class OutputNode(Node):
             yield action
 
     def setup_input(self, workflow: Workflow) -> Dict:
-        sql_context = workflow.get_last_sqlcontext()
+        # Get SQL context if available, otherwise handle plan mode gracefully
+        sql_context = None
+        try:
+            sql_context = workflow.get_last_sqlcontext()
+        except Exception:
+            # No SQL context - may be analysis/review task without SQL execution
+            logger.info("No SQL context available, treating as non-SQL-execution task")
+
+        # Handle both SQL execution and analysis/review tasks
+        gen_sql = ""
+        sql_result = ""
+        row_count = 0
+        error = None
+
+        if sql_context:
+            gen_sql = sql_context.sql_query or ""
+            sql_result = sql_context.sql_return or ""
+            row_count = sql_context.row_count or 0
+            error = sql_context.sql_error
+        # If no SQL context, check if this is plan mode (analysis task)
+        elif workflow.metadata.get("plan_mode"):
+            # For plan mode without SQL execution, the response is in action history
+            logger.info("Plan mode without SQL execution - output will use chat response")
+
         # normally last node of workflow
         next_input = OutputInput(
             finished=True,
@@ -34,13 +57,13 @@ class OutputNode(Node):
             task=workflow.get_task(),
             database_name=workflow.task.database_name,
             output_dir=workflow.task.output_dir,
-            gen_sql=sql_context.sql_query or "",
-            sql_result=sql_context.sql_return or "",
-            row_count=sql_context.row_count or 0,
+            gen_sql=gen_sql,
+            sql_result=sql_result,
+            row_count=row_count,
             table_schemas=workflow.context.table_schemas,
             metrics=workflow.context.metrics,
             external_knowledge=workflow.task.external_knowledge,
-            error=sql_context.sql_error,
+            error=error,
         )
         self.input = next_input
         return {"success": True, "message": "Output appears valid", "suggestions": [next_input]}

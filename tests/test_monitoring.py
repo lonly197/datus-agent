@@ -4,18 +4,19 @@ Test script for monitoring and observability features.
 """
 
 import asyncio
-import sys
 import os
+import sys
 import time
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath('.'))
+sys.path.insert(0, os.path.abspath("."))
+
+import json
 
 # Define monitoring components locally to avoid import issues
 import time
-import json
 from collections import defaultdict, deque
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 
 class ExecutionMonitor:
@@ -42,14 +43,16 @@ class ExecutionMonitor:
         }
 
         # Tool-specific metrics
-        self.tool_metrics = defaultdict(lambda: {
-            "calls": 0,
-            "successes": 0,
-            "failures": 0,
-            "avg_execution_time": 0,
-            "total_execution_time": 0,
-            "errors": defaultdict(int)
-        })
+        self.tool_metrics = defaultdict(
+            lambda: {
+                "calls": 0,
+                "successes": 0,
+                "failures": 0,
+                "avg_execution_time": 0,
+                "total_execution_time": 0,
+                "errors": defaultdict(int),
+            }
+        )
 
         # Real-time monitoring data
         self.active_operations = {}
@@ -65,7 +68,7 @@ class ExecutionMonitor:
             "todos": [],
             "tools_used": set(),
             "events": [],
-            "metrics": {}
+            "metrics": {},
         }
         self.start_time = time.time()
         print(f"📊 Started monitoring execution {execution_id}")
@@ -78,13 +81,15 @@ class ExecutionMonitor:
         end_time = time.time()
         duration = end_time - self.current_execution["start_time"]
 
-        self.current_execution.update({
-            "end_time": end_time,
-            "duration": duration,
-            "status": status,
-            "error_message": error_message,
-            "final_metrics": self._calculate_execution_metrics()
-        })
+        self.current_execution.update(
+            {
+                "end_time": end_time,
+                "duration": duration,
+                "status": status,
+                "error_message": error_message,
+                "final_metrics": self._calculate_execution_metrics(),
+            }
+        )
 
         # Update global metrics
         self.metrics["total_executions"] += 1
@@ -99,13 +104,15 @@ class ExecutionMonitor:
         self.execution_history.append(self.current_execution.copy())
 
         # Update performance trends
-        self.performance_trends.append({
-            "timestamp": end_time,
-            "duration": duration,
-            "todos_count": len(self.current_execution["todos"]),
-            "tools_used": len(self.current_execution["tools_used"]),
-            "status": status
-        })
+        self.performance_trends.append(
+            {
+                "timestamp": end_time,
+                "duration": duration,
+                "todos_count": len(self.current_execution["todos"]),
+                "tools_used": len(self.current_execution["tools_used"]),
+                "status": status,
+            }
+        )
 
         print(f"📊 Ended monitoring execution {self.current_execution['id']}: {status} in {duration:.2f}s")
         self.current_execution = None
@@ -122,14 +129,16 @@ class ExecutionMonitor:
             "start_time": time.time(),
             "status": "in_progress",
             "tools_used": [],
-            "events": []
+            "events": [],
         }
         self.current_execution["todos"].append(todo_record)
         self.active_operations[todo_id] = todo_record
 
         print(f"📝 Started todo {todo_id}: {content[:30]}...")
 
-    def record_todo_end(self, todo_id: str, status: str = "completed", result: Optional[Any] = None, error: Optional[str] = None):
+    def record_todo_end(
+        self, todo_id: str, status: str = "completed", result: Optional[Any] = None, error: Optional[str] = None
+    ):
         """Record the end of a todo execution."""
         if not self.current_execution or todo_id not in self.active_operations:
             return
@@ -138,13 +147,15 @@ class ExecutionMonitor:
         todo_record = self.active_operations[todo_id]
         start_time = todo_record["start_time"]
 
-        todo_record.update({
-            "end_time": end_time,
-            "duration": end_time - start_time,
-            "status": status,
-            "result": result,
-            "error": error
-        })
+        todo_record.update(
+            {
+                "end_time": end_time,
+                "duration": end_time - start_time,
+                "status": status,
+                "result": result,
+                "error": error,
+            }
+        )
 
         del self.active_operations[todo_id]
 
@@ -164,15 +175,22 @@ class ExecutionMonitor:
                     "tool_name": tool_name,
                     "params": params,
                     "start_time": start_time,
-                    "status": "in_progress"
+                    "status": "in_progress",
                 }
                 todo["tools_used"].append(tool_call)
                 break
 
         print(f"🔧 Started {tool_name} for todo {todo_id}")
 
-    def record_tool_result(self, tool_name: str, todo_id: str, success: bool, execution_time: float,
-                          result: Optional[Any] = None, error: Optional[str] = None):
+    def record_tool_result(
+        self,
+        tool_name: str,
+        todo_id: str,
+        success: bool,
+        execution_time: float,
+        result: Optional[Any] = None,
+        error: Optional[str] = None,
+    ):
         """Record a tool call result."""
         if not self.current_execution:
             return
@@ -195,14 +213,16 @@ class ExecutionMonitor:
             if todo["id"] == todo_id:
                 for tool_call in todo["tools_used"]:
                     if tool_call["tool_name"] == tool_name and tool_call["status"] == "in_progress":
-                        tool_call.update({
-                            "end_time": time.time(),
-                            "execution_time": execution_time,
-                            "success": success,
-                            "result": result,
-                            "error": error,
-                            "status": "completed" if success else "failed"
-                        })
+                        tool_call.update(
+                            {
+                                "end_time": time.time(),
+                                "execution_time": execution_time,
+                                "success": success,
+                                "result": result,
+                                "error": error,
+                                "status": "completed" if success else "failed",
+                            }
+                        )
                         break
                 break
 
@@ -218,7 +238,9 @@ class ExecutionMonitor:
         """Record batch optimization."""
         self.metrics["batch_optimizations"] += 1
         savings = original_count - optimized_count
-        print(f"⚡ Batch optimization ({optimization_type}): {original_count} → {optimized_count} (saved {savings} operations)")
+        print(
+            f"⚡ Batch optimization ({optimization_type}): {original_count} → {optimized_count} (saved {savings} operations)"
+        )
 
     def record_error_recovery(self, strategy: str, success: bool):
         """Record error recovery attempt."""
@@ -247,7 +269,7 @@ class ExecutionMonitor:
             "total_tools_called": total_tools,
             "total_execution_time": total_execution_time,
             "avg_todo_duration": total_execution_time / total_todos if total_todos > 0 else 0,
-            "tools_used": list(self.current_execution["tools_used"])
+            "tools_used": list(self.current_execution["tools_used"]),
         }
 
     def get_monitoring_report(self) -> Dict[str, Any]:
@@ -260,19 +282,21 @@ class ExecutionMonitor:
         report = {
             "summary": {
                 "total_executions": self.metrics["total_executions"],
-                "success_rate": self.metrics["successful_executions"] / self.metrics["total_executions"] if self.metrics["total_executions"] > 0 else 0,
+                "success_rate": self.metrics["successful_executions"] / self.metrics["total_executions"]
+                if self.metrics["total_executions"] > 0
+                else 0,
                 "total_todos_processed": self.metrics["total_todos_processed"],
                 "cache_hit_rate": cache_hit_rate,
                 "batch_optimizations": self.metrics["batch_optimizations"],
-                "error_recoveries": self.metrics["error_recoveries"]
+                "error_recoveries": self.metrics["error_recoveries"],
             },
             "current_status": {
                 "active_operations": len(self.active_operations),
-                "active_operation_details": list(self.active_operations.keys())
+                "active_operation_details": list(self.active_operations.keys()),
             },
             "tool_performance": dict(self.tool_metrics),
             "recent_executions": recent_executions,
-            "performance_trends": list(self.performance_trends)[-20:]  # Last 20 data points
+            "performance_trends": list(self.performance_trends)[-20:],  # Last 20 data points
         }
 
         return report
@@ -300,7 +324,9 @@ class ExecutionMonitor:
                 if metrics["calls"] > 0:
                     success_rate = metrics["successes"] / metrics["calls"]
                     avg_time = metrics["avg_execution_time"]
-                    lines.append(f"  {tool_name}: {metrics['calls']} calls, {success_rate:.1%} success, {avg_time:.2f}ms avg")
+                    lines.append(
+                        f"  {tool_name}: {metrics['calls']} calls, {success_rate:.1%} success, {avg_time:.2f}ms avg"
+                    )
 
             return "\n".join(lines)
         else:
@@ -346,11 +372,13 @@ class ExecutionMonitor:
         else:
             dashboard_lines.append("║                              No tool data available                        ║")
 
-        dashboard_lines.extend([
-            "╠══════════════════════════════════════════════════════════════════════════════╣",
-            "║                             📈 RECENT PERFORMANCE TREND                      ║",
-            "╠══════════════════════════════════════════════════════════════════════════════╣",
-        ])
+        dashboard_lines.extend(
+            [
+                "╠══════════════════════════════════════════════════════════════════════════════╣",
+                "║                             📈 RECENT PERFORMANCE TREND                      ║",
+                "╠══════════════════════════════════════════════════════════════════════════════╣",
+            ]
+        )
 
         # Add performance trend (last 5 executions)
         trends = report["performance_trends"][-5:]
@@ -359,22 +387,22 @@ class ExecutionMonitor:
                 duration = trend.get("duration", 0)
                 todos = trend.get("todos_count", 0)
                 status_icon = "✅" if trend.get("status") == "completed" else "❌"
-                dashboard_lines.append(
-                    ".1f"
-                )
+                dashboard_lines.append(".1f")
         else:
             dashboard_lines.append("║                              No recent executions                          ║")
 
-        dashboard_lines.extend([
-            "╚══════════════════════════════════════════════════════════════════════════════╝",
-            "",
-            "💡 Tips:",
-            ".1%",
-            f"   • {summary['batch_optimizations']} batch optimizations saved computational resources",
-            f"   • {summary['error_recoveries']} successful error recoveries improved reliability",
-            "",
-            "Use monitor.export_monitoring_data('json') for detailed JSON export"
-        ])
+        dashboard_lines.extend(
+            [
+                "╚══════════════════════════════════════════════════════════════════════════════╝",
+                "",
+                "💡 Tips:",
+                ".1%",
+                f"   • {summary['batch_optimizations']} batch optimizations saved computational resources",
+                f"   • {summary['error_recoveries']} successful error recoveries improved reliability",
+                "",
+                "Use monitor.export_monitoring_data('json') for detailed JSON export",
+            ]
+        )
 
         return "\n".join(dashboard_lines)
 
@@ -489,7 +517,7 @@ async def test_performance_dashboard():
     dashboard = monitor.generate_performance_dashboard()
     print("✅ Generated performance dashboard")
     print("📊 Dashboard preview (first 10 lines):")
-    lines = dashboard.split('\n')[:10]
+    lines = dashboard.split("\n")[:10]
     for line in lines:
         print(f"   {line}")
 
@@ -526,6 +554,7 @@ async def main():
     except Exception as e:
         print(f"❌ Test failed with error: {e}")
         import traceback
+
         traceback.print_exc()
 
 

@@ -3,11 +3,12 @@
 Test script for improved tool matching functionality.
 """
 
-import sys
 import os
+import sys
 
 # Add the project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 
 # Mock the required components for testing
 class MockPlanModeHooks:
@@ -40,10 +41,10 @@ class MockPlanModeHooks:
         cleaned = content.lower()
         for prefix in prefixes_to_remove:
             if cleaned.startswith(prefix.lower()):
-                cleaned = cleaned[len(prefix):].strip()
+                cleaned = cleaned[len(prefix) :].strip()
 
         # Remove extra whitespace
-        cleaned = ' '.join(cleaned.split())
+        cleaned = " ".join(cleaned.split())
 
         return cleaned
 
@@ -61,19 +62,20 @@ class MockPlanModeHooks:
                 "tool": "search_table",
                 "confidence": 0.95,
                 "reason": "Database table exploration task",
-                "priority": 1
+                "priority": 1,
             },
             "describe_table": {
                 "patterns": [r"描述.*表", r"检查.*表.*定义"],
                 "tool": "describe_table",
                 "confidence": 0.90,
                 "reason": "Table description and metadata analysis",
-                "priority": 1
-            }
+                "priority": 1,
+            },
         }
 
         # Check each task type
         import re
+
         for task_type, config in task_patterns.items():
             for pattern in config["patterns"]:
                 if re.search(pattern, text_lower, re.IGNORECASE):
@@ -81,7 +83,7 @@ class MockPlanModeHooks:
                         "tool": config["tool"],
                         "confidence": config["confidence"],
                         "reason": config["reason"],
-                        "task_type": task_type
+                        "task_type": task_type,
                     }
 
         return None
@@ -105,10 +107,7 @@ class MockPlanModeHooks:
 
         # Enhanced keyword matching with context awareness
         context_aware_mappings = {
-            "database_focus": {
-                "search_table": ["探索", "查找", "找到", "搜索"],
-                "describe_table": ["描述", "检查", "查看"]
-            }
+            "database_focus": {"search_table": ["探索", "查找", "找到", "搜索"], "describe_table": ["描述", "检查", "查看"]}
         }
 
         # Apply context-aware scoring
@@ -136,7 +135,7 @@ class MockPlanModeHooks:
                         "tool": tool_name,
                         "confidence": min(0.95, normalized_score),
                         "context": primary_context,
-                        "score": score
+                        "score": score,
                     }
 
         return best_match if best_score > 0.3 else None
@@ -148,11 +147,7 @@ class MockPlanModeHooks:
 
         # Simple Chinese pattern recognition for testing
         chinese_patterns = {
-            "search_table": {
-                "verbs": ["探索", "查找", "找到", "搜索"],
-                "nouns": ["表结构", "表", "字段", "数据库"],
-                "confidence": 0.85
-            }
+            "search_table": {"verbs": ["探索", "查找", "找到", "搜索"], "nouns": ["表结构", "表", "字段", "数据库"], "confidence": 0.85}
         }
 
         for tool_name, pattern_config in chinese_patterns.items():
@@ -160,15 +155,13 @@ class MockPlanModeHooks:
             noun_matches = sum(1 for noun in pattern_config["nouns"] if noun in text)
 
             if verb_matches > 0 and noun_matches > 0:
-                confidence = min(pattern_config["confidence"],
-                               (verb_matches + noun_matches) / (len(pattern_config["verbs"]) + len(pattern_config["nouns"])))
+                confidence = min(
+                    pattern_config["confidence"],
+                    (verb_matches + noun_matches) / (len(pattern_config["verbs"]) + len(pattern_config["nouns"])),
+                )
 
                 if confidence > 0.6:
-                    return {
-                        "tool": tool_name,
-                        "confidence": confidence,
-                        "reason": "Chinese semantic pattern matching"
-                    }
+                    return {"tool": tool_name, "confidence": confidence, "reason": "Chinese semantic pattern matching"}
 
         return None
 
@@ -185,12 +178,18 @@ class MockPlanModeHooks:
 
         # Priority-based inference rules
         inference_rules = [
-            (lambda t: any(word in t for word in ["探索", "查找", "找到", "搜索"]) and
-                      any(word in t for word in ["表", "table", "database"]),
-             "search_table", 0.8),
-            (lambda t: any(word in t for word in ["描述", "检查", "分析"]) and
-                      any(word in t for word in ["表", "table", "schema"]),
-             "describe_table", 0.75),
+            (
+                lambda t: any(word in t for word in ["探索", "查找", "找到", "搜索"])
+                and any(word in t for word in ["表", "table", "database"]),
+                "search_table",
+                0.8,
+            ),
+            (
+                lambda t: any(word in t for word in ["描述", "检查", "分析"])
+                and any(word in t for word in ["表", "table", "schema"]),
+                "describe_table",
+                0.75,
+            ),
         ]
 
         for condition, tool, confidence in inference_rules:
@@ -210,18 +209,18 @@ class MockPlanModeHooks:
 
         # Tier 1: Task Intent Classification
         intent_result = self._classify_task_intent(cleaned_text)
-        if intent_result and intent_result['confidence'] > 0.8:
-            return intent_result['tool']
+        if intent_result and intent_result["confidence"] > 0.8:
+            return intent_result["tool"]
 
         # Tier 2: Enhanced Context-Aware Keyword Matching
         context_match = self._match_keywords_with_context(cleaned_text)
-        if context_match and context_match['confidence'] > 0.7:
-            return context_match['tool']
+        if context_match and context_match["confidence"] > 0.7:
+            return context_match["tool"]
 
         # Tier 3: Semantic Understanding for Chinese Tasks
         semantic_match = self._semantic_chinese_matching(cleaned_text)
         if semantic_match:
-            return semantic_match['tool']
+            return semantic_match["tool"]
 
         # Tier 4: LLM reasoning fallback
         llm_match = self._enhanced_llm_reasoning(cleaned_text)
@@ -234,6 +233,7 @@ class MockPlanModeHooks:
             return inference_match
 
         return None
+
 
 def test_original_problem_case():
     """Test the original problematic case from the logs."""
@@ -256,6 +256,7 @@ def test_original_problem_case():
 
     print()
 
+
 def test_various_cases():
     """Test various task descriptions."""
     print("=== Testing Various Cases ===")
@@ -277,6 +278,7 @@ def test_various_cases():
 
     print()
 
+
 def test_preprocessing():
     """Test text preprocessing."""
     print("=== Testing Text Preprocessing ===")
@@ -295,6 +297,7 @@ def test_preprocessing():
 
     print()
 
+
 def main():
     print("Testing Improved Tool Matching Functionality")
     print("=" * 50)
@@ -304,6 +307,7 @@ def main():
     test_various_cases()
 
     print("🎉 Tool matching improvement tests completed!")
+
 
 if __name__ == "__main__":
     main()

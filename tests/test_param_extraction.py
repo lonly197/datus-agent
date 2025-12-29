@@ -3,9 +3,9 @@
 Test script for parameter extraction optimization.
 """
 
+import os
 import re
 import sys
-import os
 
 # Add the project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -13,12 +13,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Copy the parameter extraction logic for testing
 DEFAULT_PLAN_EXECUTOR_KEYWORD_MAP = {
     "describe_table": [
-        "describe table", "检查表结构", "inspect table schema", "查看表结构",
-        "examine table structure", "分析表结构", "describe table structure",
-        "检查表定义", "查看表模式", "analyze table structure", "分析表元数据",
-        "表定义", "表模式", "表元数据", "表字段"
+        "describe table",
+        "检查表结构",
+        "inspect table schema",
+        "查看表结构",
+        "examine table structure",
+        "分析表结构",
+        "describe table structure",
+        "检查表定义",
+        "查看表模式",
+        "analyze table structure",
+        "分析表元数据",
+        "表定义",
+        "表模式",
+        "表元数据",
+        "表字段",
     ],
 }
+
 
 class TestParamExtraction:
     def __init__(self):
@@ -44,10 +56,10 @@ class TestParamExtraction:
         cleaned = content.lower()
         for prefix in prefixes_to_remove:
             if cleaned.startswith(prefix.lower()):
-                cleaned = cleaned[len(prefix):].strip()
+                cleaned = cleaned[len(prefix) :].strip()
 
         # Remove extra whitespace
-        cleaned = ' '.join(cleaned.split())
+        cleaned = " ".join(cleaned.split())
 
         return cleaned
 
@@ -57,12 +69,12 @@ class TestParamExtraction:
             return False
 
         # Check for basic SQL injection patterns (simple check)
-        dangerous_patterns = [';', '--', '/*', '*/', 'union', 'select', 'drop', 'delete', 'update', 'insert']
+        dangerous_patterns = [";", "--", "/*", "*/", "union", "select", "drop", "delete", "update", "insert"]
         if any(pattern in table_name.lower() for pattern in dangerous_patterns):
             return False
 
         # Allow alphanumeric, underscore, and some special chars common in table names
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", table_name):
             return False
 
         return True
@@ -73,15 +85,15 @@ class TestParamExtraction:
 
         # Common patterns for table names in Chinese/English text
         patterns = [
-            r'表\s*[\'\"]?(\w+)[\'\"]?',  # 表 'table_name' or 表 table_name
-            r'table\s*[\'\"]?(\w+)[\'\"]?',  # table 'table_name'
-            r'(\w+_table)',  # table_name
-            r'(\w+_fact_\w+)',  # fact tables like dwd_assign_dlr_clue_fact_di
-            r'(\w+_dim_\w+)',  # dimension tables
-            r'(\w+_dws_\w+)',  # summary tables
-            r'(\w+_ads_\w+)',  # application tables
-            r'(\w+_ods_\w+)',  # ods tables
-            r'(\w+_dwd_\w+)',  # dwd tables
+            r"表\s*[\'\"]?(\w+)[\'\"]?",  # 表 'table_name' or 表 table_name
+            r"table\s*[\'\"]?(\w+)[\'\"]?",  # table 'table_name'
+            r"(\w+_table)",  # table_name
+            r"(\w+_fact_\w+)",  # fact tables like dwd_assign_dlr_clue_fact_di
+            r"(\w+_dim_\w+)",  # dimension tables
+            r"(\w+_dws_\w+)",  # summary tables
+            r"(\w+_ads_\w+)",  # application tables
+            r"(\w+_ods_\w+)",  # ods tables
+            r"(\w+_dwd_\w+)",  # dwd tables
         ]
 
         content_lower = todo_content.lower()
@@ -91,7 +103,7 @@ class TestParamExtraction:
             matches = re.findall(pattern, todo_content, re.IGNORECASE)
             if matches:
                 # Clean the table name
-                table_name = matches[0].strip('\'"')
+                table_name = matches[0].strip("'\"")
                 # Validate table name format (basic validation)
                 if self._is_valid_table_name(table_name):
                     print(f"Extracted table name '{table_name}' from todo content")
@@ -118,6 +130,7 @@ class TestParamExtraction:
         except Exception as e:
             print(f"Failed to extract parameters for tool {tool_name}: {e}")
             return {"query_text": cleaned_content}
+
 
 def main():
     print("Testing parameter extraction optimization...")
@@ -151,12 +164,7 @@ def main():
     print()
 
     # Test case 4: Different todo formats
-    test_cases = [
-        "检查表结构 user_info",
-        "describe table sales_fact_di",
-        "查看表字段 customer_dim",
-        "分析表结构：order_table"
-    ]
+    test_cases = ["检查表结构 user_info", "describe table sales_fact_di", "查看表字段 customer_dim", "分析表结构：order_table"]
 
     print("Test 4 - Different todo formats:")
     for i, test_content in enumerate(test_cases, 1):
@@ -166,6 +174,7 @@ def main():
     print()
 
     print("🎉 All parameter extraction tests completed successfully!")
+
 
 if __name__ == "__main__":
     main()

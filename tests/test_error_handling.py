@@ -4,16 +4,18 @@ Test script for error handling and recovery mechanisms.
 """
 
 import asyncio
-import sys
 import os
 import re
+import sys
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath('.'))
+sys.path.insert(0, os.path.abspath("."))
+
 
 # Define error types locally to avoid import issues
 class ErrorType(str):
     """Error type classifications for better handling."""
+
     NETWORK = "network"
     DATABASE_CONNECTION = "database_connection"
     DATABASE_QUERY = "database_query"
@@ -40,7 +42,7 @@ class ErrorRecoveryStrategy:
             ErrorType.NETWORK,
             ErrorType.DATABASE_CONNECTION,
             ErrorType.TIMEOUT,
-            ErrorType.RESOURCE_EXHAUSTED
+            ErrorType.RESOURCE_EXHAUSTED,
         }
 
         return error_type in retryable_errors and attempt_count < self.max_retries
@@ -63,57 +65,33 @@ class ErrorHandler:
             # Database connection errors
             r"connection.*failed|unable.*connect": {
                 "type": ErrorType.DATABASE_CONNECTION,
-                "suggestions": [
-                    "检查数据库连接配置",
-                    "确认数据库服务正在运行",
-                    "验证网络连接"
-                ]
+                "suggestions": ["检查数据库连接配置", "确认数据库服务正在运行", "验证网络连接"],
             },
             # Table not found errors
             r"table.*not.*found|relation.*does.*exist|doesn't exist": {
                 "type": ErrorType.TABLE_NOT_FOUND,
-                "suggestions": [
-                    "确认表名拼写正确",
-                    "检查数据库schema",
-                    "使用search_table工具查找可用表"
-                ]
+                "suggestions": ["确认表名拼写正确", "检查数据库schema", "使用search_table工具查找可用表"],
             },
             # Column not found errors
             r"column.*not.*found|field.*does.*exist": {
                 "type": ErrorType.COLUMN_NOT_FOUND,
-                "suggestions": [
-                    "检查列名拼写",
-                    "使用describe_table查看表结构",
-                    "确认字段是否存在于表中"
-                ]
+                "suggestions": ["检查列名拼写", "使用describe_table查看表结构", "确认字段是否存在于表中"],
             },
             # Syntax errors
             r"syntax.*error|invalid.*sql": {
                 "type": ErrorType.SYNTAX_ERROR,
-                "suggestions": [
-                    "检查SQL语法",
-                    "确认引号和括号匹配",
-                    "验证SQL语句结构"
-                ]
+                "suggestions": ["检查SQL语法", "确认引号和括号匹配", "验证SQL语句结构"],
             },
             # Permission errors
             r"permission.*denied|access.*denied": {
                 "type": ErrorType.PERMISSION_DENIED,
-                "suggestions": [
-                    "检查数据库权限",
-                    "确认用户有查询权限",
-                    "联系数据库管理员"
-                ]
+                "suggestions": ["检查数据库权限", "确认用户有查询权限", "联系数据库管理员"],
             },
             # Timeout errors
             r"timeout|query.*timed.*out": {
                 "type": ErrorType.TIMEOUT,
-                "suggestions": [
-                    "简化查询条件",
-                    "添加适当的索引",
-                    "考虑分批处理大数据"
-                ]
-            }
+                "suggestions": ["简化查询条件", "添加适当的索引", "考虑分批处理大数据"],
+            },
         }
 
     def classify_error(self, error_message: str):
@@ -137,7 +115,7 @@ class ErrorHandler:
             "error_message": error_message,
             "suggestions": suggestions,
             "can_retry": self.recovery_strategy.should_retry(error_type, attempt_count),
-            "retry_delay": 0.0
+            "retry_delay": 0.0,
         }
 
         if result["can_retry"]:
@@ -163,10 +141,10 @@ class ErrorHandler:
         fixed_sql = sql_query.strip()
 
         # Fix missing semicolon
-        if not fixed_sql.endswith(';') and not fixed_sql.upper().strip().startswith('SELECT'):
+        if not fixed_sql.endswith(";") and not fixed_sql.upper().strip().startswith("SELECT"):
             # Only add semicolon if it seems to be a complete statement
             if len(fixed_sql.split()) > 3:  # Basic heuristic
-                fixed_sql += ';'
+                fixed_sql += ";"
 
         # Fix common quote issues
         error_lower = error_message.lower()
@@ -234,7 +212,7 @@ async def test_tool_error_handling():
     print(f"  Error type: {result['error_type']}")
     print(f"  Auto-fix available: {result.get('auto_fix_available', False)}")
     print(f"  Has fixed SQL: {'fixed_sql' in result}")
-    if 'fixed_sql' in result:
+    if "fixed_sql" in result:
         print(f"  Original: 'SELEC * FROM users'")
         print(f"  Fixed: '{result['fixed_sql']}'")
     print()
@@ -275,6 +253,7 @@ async def main():
     except Exception as e:
         print(f"❌ Test failed with error: {e}")
         import traceback
+
         traceback.print_exc()
 
 

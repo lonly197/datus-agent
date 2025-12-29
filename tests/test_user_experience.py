@@ -4,16 +4,18 @@ Test script for user experience improvements.
 """
 
 import asyncio
-import sys
 import os
+import sys
 import time
-from typing import Dict, Any, Optional
 from enum import Enum
+from typing import Any, Dict, Optional
+
 
 # Define test components locally to avoid import issues
 class DeepResearchEventType(str, Enum):
     Chat = "chat"
     SqlExecutionProgress = "sql_execution_progress"
+
 
 class BaseEvent:
     def __init__(self, id: str, timestamp: int, event: DeepResearchEventType, planId: Optional[str] = None):
@@ -22,13 +24,27 @@ class BaseEvent:
         self.event = event
         self.planId = planId
 
+
 class ChatEvent(BaseEvent):
-    def __init__(self, id: str, timestamp: int, event: DeepResearchEventType, content: str, planId: Optional[str] = None):
+    def __init__(
+        self, id: str, timestamp: int, event: DeepResearchEventType, content: str, planId: Optional[str] = None
+    ):
         super().__init__(id, timestamp, event, planId)
         self.content = content
 
+
 class SqlExecutionProgressEvent(BaseEvent):
-    def __init__(self, id: str, timestamp: int, event: DeepResearchEventType, sqlQuery: str, progress: float, currentStep: str, elapsedTime: Optional[int] = None, planId: Optional[str] = None):
+    def __init__(
+        self,
+        id: str,
+        timestamp: int,
+        event: DeepResearchEventType,
+        sqlQuery: str,
+        progress: float,
+        currentStep: str,
+        elapsedTime: Optional[int] = None,
+        planId: Optional[str] = None,
+    ):
         super().__init__(id, timestamp, event, planId)
         self.sqlQuery = sqlQuery
         self.progress = progress
@@ -42,10 +58,10 @@ class MockEmitQueue:
 
     async def put(self, event):
         self.events.append(event)
-        event_type = getattr(event, 'event', 'unknown')
-        content = getattr(event, 'content', 'N/A')
-        progress = getattr(event, 'progress', None)
-        step = getattr(event, 'currentStep', None)
+        event_type = getattr(event, "event", "unknown")
+        content = getattr(event, "content", "N/A")
+        progress = getattr(event, "progress", None)
+        step = getattr(event, "currentStep", None)
 
         if progress is not None:
             print(f"📤 Emitted {event_type}: {step} ({progress:.1%})")
@@ -67,7 +83,7 @@ class MockPlanModeHooks:
                 sqlQuery="SELECT * FROM test_table",
                 progress=progress,
                 currentStep=message,
-                elapsedTime=int(time.time() * 1000) % 1000
+                elapsedTime=int(time.time() * 1000) % 1000,
             )
             await self.emit_queue.put(progress_event)
         except Exception as e:
@@ -81,7 +97,7 @@ class MockPlanModeHooks:
                 timestamp=int(time.time() * 1000),
                 event=DeepResearchEventType.Chat,
                 content=message,
-                planId=plan_id
+                planId=plan_id,
             )
             await self.emit_queue.put(status_event)
         except Exception as e:
@@ -101,7 +117,7 @@ async def test_progress_events():
     print(f"✅ Emitted {len(hooks.emit_queue.events)} progress events")
 
     # Check event types
-    progress_events = [e for e in hooks.emit_queue.events if hasattr(e, 'progress')]
+    progress_events = [e for e in hooks.emit_queue.events if hasattr(e, "progress")]
     print(f"   - Progress events: {len(progress_events)}")
 
     print()
@@ -120,15 +136,15 @@ async def test_status_messages():
     print(f"✅ Emitted {len(hooks.emit_queue.events)} status messages")
 
     # Check event types
-    chat_events = [e for e in hooks.emit_queue.events if getattr(e, 'event', None) == DeepResearchEventType.Chat]
+    chat_events = [e for e in hooks.emit_queue.events if getattr(e, "event", None) == DeepResearchEventType.Chat]
     print(f"   - Chat events: {len(chat_events)}")
 
     # Check message content
     for event in chat_events:
-        content = getattr(event, 'content', '')
-        if '开始执行' in content:
+        content = getattr(event, "content", "")
+        if "开始执行" in content:
             print("   ✓ Start message contains expected content")
-        if '完成' in content:
+        if "完成" in content:
             print("   ✓ Completion message contains expected content")
 
     print()
@@ -162,7 +178,7 @@ async def test_error_messages():
         "Permission denied for user",
         "Syntax error near 'SELEC'",
         "Query timed out after 30 seconds",
-        "Unknown error occurred"
+        "Unknown error occurred",
     ]
 
     for error_msg in test_errors:
@@ -192,7 +208,7 @@ async def test_sql_progress_simulation():
         event=DeepResearchEventType.SqlExecutionProgress,
         sqlQuery=sql_query,
         progress=0.0,
-        currentStep="准备执行SQL查询"
+        currentStep="准备执行SQL查询",
     )
     await queue.put(start_event)
 
@@ -205,7 +221,7 @@ async def test_sql_progress_simulation():
         sqlQuery=sql_query,
         progress=0.3,
         currentStep="正在解析查询",
-        elapsedTime=10
+        elapsedTime=10,
     )
     await queue.put(progress1)
 
@@ -217,7 +233,7 @@ async def test_sql_progress_simulation():
         sqlQuery=sql_query,
         progress=0.7,
         currentStep="正在执行数据库查询",
-        elapsedTime=25
+        elapsedTime=25,
     )
     await queue.put(progress2)
 
@@ -255,6 +271,7 @@ async def main():
     except Exception as e:
         print(f"❌ Test failed with error: {e}")
         import traceback
+
         traceback.print_exc()
 
 

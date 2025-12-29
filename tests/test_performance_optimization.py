@@ -4,17 +4,17 @@ Test script for performance optimization features.
 """
 
 import asyncio
-import sys
 import os
+import sys
 import time
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath('.'))
+sys.path.insert(0, os.path.abspath("."))
 
 # Define optimization classes locally to avoid import issues
 import hashlib
 import json
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class QueryCache:
@@ -28,7 +28,7 @@ class QueryCache:
     def _get_cache_key(self, tool_name: str, **kwargs) -> str:
         """Generate a deterministic cache key for the query."""
         # Normalize kwargs by sorting keys and excluding non-deterministic parameters
-        cache_params = {k: v for k, v in kwargs.items() if k not in ['todo_id', 'call_id']}
+        cache_params = {k: v for k, v in kwargs.items() if k not in ["todo_id", "call_id"]}
         sorted_params = json.dumps(cache_params, sort_keys=True)
         key_content = f"{tool_name}:{sorted_params}"
         return hashlib.md5(key_content.encode()).hexdigest()
@@ -39,9 +39,9 @@ class QueryCache:
 
         if cache_key in self.cache:
             entry = self.cache[cache_key]
-            if time.time() - entry['timestamp'] < self.ttl_seconds:
+            if time.time() - entry["timestamp"] < self.ttl_seconds:
                 print(f"Cache hit for {tool_name} with key {cache_key}")
-                return entry['result']
+                return entry["result"]
 
             # Remove expired entry
             del self.cache[cache_key]
@@ -54,13 +54,10 @@ class QueryCache:
 
         # Implement LRU eviction if cache is full
         if len(self.cache) >= self.max_size:
-            oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k]['timestamp'])
+            oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k]["timestamp"])
             del self.cache[oldest_key]
 
-        self.cache[cache_key] = {
-            'result': result,
-            'timestamp': time.time()
-        }
+        self.cache[cache_key] = {"result": result, "timestamp": time.time()}
 
         print(f"Cached result for {tool_name} with key {cache_key}")
 
@@ -99,7 +96,7 @@ class ToolBatchProcessor:
         # Group by similar query patterns
         query_groups = {}
         for todo_item, params in batch:
-            query_text = params.get('query_text', '').lower().strip()
+            query_text = params.get("query_text", "").lower().strip()
 
             # Find the most specific query (longest common prefix)
             found_group = False
@@ -123,7 +120,7 @@ class ToolBatchProcessor:
                 optimized_batch.extend(items)
             else:
                 # For multiple similar queries, use the one with highest top_n
-                best_item = max(items, key=lambda x: x[1].get('top_n', 5))
+                best_item = max(items, key=lambda x: x[1].get("top_n", 5))
                 optimized_batch.append(best_item)
                 print(f"Optimized search_table batch: consolidated {len(items)} similar queries into 1")
 
@@ -139,7 +136,7 @@ class ToolBatchProcessor:
         unique_batch = []
 
         for todo_item, params in batch:
-            table_name = params.get('table_name', '').lower().strip()
+            table_name = params.get("table_name", "").lower().strip()
             if table_name and table_name not in seen_tables:
                 seen_tables.add(table_name)
                 unique_batch.append((todo_item, params))
@@ -170,10 +167,7 @@ async def test_query_cache():
     print(f"Cache miss test: {'✓ PASS' if miss_result is None else '❌ FAIL'}")
 
     # Test cache expiration (simulate by setting old timestamp)
-    cache.cache["test_key"] = {
-        'result': test_data,
-        'timestamp': time.time() - 120  # 2 minutes ago, should expire
-    }
+    cache.cache["test_key"] = {"result": test_data, "timestamp": time.time() - 120}  # 2 minutes ago, should expire
     expired_result = cache.get("describe_table", table_name="test_key")
     print(f"Cache expiration test: {'✓ PASS' if expired_result is None else '❌ FAIL'}")
 
@@ -278,6 +272,7 @@ async def main():
     except Exception as e:
         print(f"❌ Test failed with error: {e}")
         import traceback
+
         traceback.print_exc()
 
 

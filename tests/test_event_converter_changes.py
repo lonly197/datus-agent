@@ -3,14 +3,15 @@
 Test script to validate the event converter changes.
 """
 
-import sys
-import os
 import json
-from datetime import datetime
+import os
+import sys
 import uuid
+from datetime import datetime
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 
 # Mock the missing dependencies to allow import
 class MockActionHistory:
@@ -24,22 +25,34 @@ class MockActionHistory:
         self.status = status
         self.start_time = datetime.now()
 
+
 class MockActionRole:
     ASSISTANT = "assistant"
     TOOL = "tool"
 
+
 class MockActionStatus:
     SUCCESS = "success"
 
+
 # Mock the logger
 class MockLogger:
-    def debug(self, msg): pass
-    def info(self, msg): pass
-    def warning(self, msg): pass
-    def error(self, msg): pass
+    def debug(self, msg):
+        pass
+
+    def info(self, msg):
+        pass
+
+    def warning(self, msg):
+        pass
+
+    def error(self, msg):
+        pass
+
 
 # Mock json and other imports that might be needed
-sys.modules['datus.utils.loggings'] = type('MockModule', (), {'get_logger': lambda x: MockLogger()})()
+sys.modules["datus.utils.loggings"] = type("MockModule", (), {"get_logger": lambda x: MockLogger()})()
+
 
 # Import the specific methods we need by copying them
 def _try_parse_json_like(obj):
@@ -53,8 +66,10 @@ def _try_parse_json_like(obj):
             return None
     return None
 
+
 def _extract_plan_from_output(output):
     """Copy of the method from event_converter.py"""
+
     def try_parse(obj):
         if isinstance(obj, dict):
             return obj
@@ -89,6 +104,7 @@ def _extract_plan_from_output(output):
                 if isinstance(item, (dict, list, str)):
                     stack.append(item)
     return {}
+
 
 # Test the event converter functions
 def test_extract_todo_id():
@@ -140,7 +156,7 @@ def test_extract_todo_id():
         role=MockActionRole.TOOL,
         messages="test",
         action_type="tool_call",
-        input_data={"arguments": json.dumps({"todo_id": "test_todo_123"})}
+        input_data={"arguments": json.dumps({"todo_id": "test_todo_123"})},
     )
     result1 = _extract_todo_id_from_action(action1)
     print(f"Test 1 - todo_id in arguments: {result1} (expected: test_todo_123)")
@@ -152,7 +168,7 @@ def test_extract_todo_id():
         role=MockActionRole.TOOL,
         messages="test",
         action_type="plan_update",
-        output={"updated_item": {"id": "plan_todo_456"}}
+        output={"updated_item": {"id": "plan_todo_456"}},
     )
     result2 = _extract_todo_id_from_action(action2)
     print(f"Test 2 - plan_update with updated_item: {result2} (expected: plan_todo_456)")
@@ -164,13 +180,14 @@ def test_extract_todo_id():
         role=MockActionRole.TOOL,
         messages="test",
         action_type="plan_update",
-        output={"todo_list": {"items": [{"id": "single_todo_789"}]}}
+        output={"todo_list": {"items": [{"id": "single_todo_789"}]}},
     )
     result3 = _extract_todo_id_from_action(action3)
     print(f"Test 3 - plan_update with single item todo_list: {result3} (expected: single_todo_789)")
     assert result3 == "single_todo_789", f"Expected single_todo_789, got {result3}"
 
     print("✓ _extract_todo_id_from_action tests passed")
+
 
 def test_is_internal_todo_update():
     print("Testing _is_internal_todo_update...")
@@ -190,20 +207,17 @@ def test_is_internal_todo_update():
                 return True
             # Additionally, check if the message indicates it's an internal update
             if action.messages and (
-                "Server executor: starting todo" in action.messages or
-                "Server executor: todo_in_progress" in action.messages or
-                "Server executor: todo_completed" in action.messages or
-                "Server executor: todo_complete failed" in action.messages
+                "Server executor: starting todo" in action.messages
+                or "Server executor: todo_in_progress" in action.messages
+                or "Server executor: todo_completed" in action.messages
+                or "Server executor: todo_complete failed" in action.messages
             ):
                 return True
         return False
 
     # Test case 1: server_call_ action_id
     action1 = MockActionHistory(
-        action_id="server_call_abc123",
-        role=MockActionRole.TOOL,
-        messages="test",
-        action_type="todo_update"
+        action_id="server_call_abc123", role=MockActionRole.TOOL, messages="test", action_type="todo_update"
     )
     result1 = _is_internal_todo_update(action1)
     print(f"Test 1 - server_call_ action_id: {result1} (expected: True)")
@@ -214,7 +228,7 @@ def test_is_internal_todo_update():
         action_id="normal_action",
         role=MockActionRole.TOOL,
         messages="Server executor: starting todo",
-        action_type="todo_update"
+        action_type="todo_update",
     )
     result2 = _is_internal_todo_update(action2)
     print(f"Test 2 - Server executor message: {result2} (expected: True)")
@@ -225,7 +239,7 @@ def test_is_internal_todo_update():
         action_id="another_action",
         role=MockActionRole.TOOL,
         messages="Server executor: todo_in_progress",
-        action_type="todo_update"
+        action_type="todo_update",
     )
     result3 = _is_internal_todo_update(action3)
     print(f"Test 3 - Server executor todo_in_progress: {result3} (expected: True)")
@@ -233,10 +247,7 @@ def test_is_internal_todo_update():
 
     # Test case 4: Normal action
     action4 = MockActionHistory(
-        action_id="normal_action",
-        role=MockActionRole.TOOL,
-        messages="User requested update",
-        action_type="todo_update"
+        action_id="normal_action", role=MockActionRole.TOOL, messages="User requested update", action_type="todo_update"
     )
     result4 = _is_internal_todo_update(action4)
     print(f"Test 4 - Normal action: {result4} (expected: False)")
@@ -247,13 +258,14 @@ def test_is_internal_todo_update():
         action_id="server_call_xyz",
         role=MockActionRole.TOOL,
         messages="Server executor: starting todo",
-        action_type="search_table"
+        action_type="search_table",
     )
     result5 = _is_internal_todo_update(action5)
     print(f"Test 5 - Non-todo_update action: {result5} (expected: False)")
     assert result5 == False, f"Expected False, got {result5}"
 
     print("✓ _is_internal_todo_update tests passed")
+
 
 if __name__ == "__main__":
     try:
@@ -263,5 +275,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ Test failed: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

@@ -3,30 +3,37 @@
 Test script to validate the plan hooks fixes.
 """
 
-import sys
-import os
 import asyncio
+import os
+import sys
 import uuid
 from datetime import datetime
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+
 # Mock the missing dependencies
 class MockConsole:
-    def print(self, *args, **kwargs): pass
+    def print(self, *args, **kwargs):
+        pass
+
 
 class MockSession:
     pass
 
+
 class MockActionHistoryManager:
     def __init__(self):
         self.actions = []
+
     def add_action(self, action):
         self.actions.append(action)
 
+
 class MockAgentConfig:
     pass
+
 
 # Test the _emit_plan_update_event method
 def test_emit_plan_update_event():
@@ -39,6 +46,7 @@ def test_emit_plan_update_event():
     class TestPlanHooks:
         def __init__(self):
             from datus.tools.func_tool.plan_tools import SessionTodoStorage
+
             self.todo_storage = MockTodoStorage()
             self.action_history_manager = MockActionHistoryManager()
             self.emit_queue = asyncio.Queue()
@@ -60,7 +68,7 @@ def test_emit_plan_update_event():
                     input={"source": "server_executor", "todo_id": todo_id, "status": status},
                     output={"todo_list": todo_list.model_dump()},
                     status=ActionStatus.SUCCESS,
-                    start_time=datetime.now()
+                    start_time=datetime.now(),
                 )
 
                 # Add to action history manager
@@ -84,9 +92,11 @@ def test_emit_plan_update_event():
     class MockTodoStorage:
         def get_todo_list(self):
             from datus.tools.func_tool.plan_tools import TodoList
+
             todo_list = TodoList()
             # Add a test todo
             from datus.tools.func_tool.plan_tools import TodoItem, TodoStatus
+
             todo_list.add_item("Test todo", TodoStatus.PENDING)
             return todo_list
 
@@ -107,8 +117,10 @@ def test_emit_plan_update_event():
 
     # Run the async test
     import asyncio
+
     result = asyncio.run(run_test())
     return result
+
 
 # Test call_id definition
 def test_call_id_definition():
@@ -122,6 +134,7 @@ def test_call_id_definition():
     print(f"✓ action_id generated: {test_action_id}")
 
     return True
+
 
 if __name__ == "__main__":
     try:
@@ -143,5 +156,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ Test failed with exception: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

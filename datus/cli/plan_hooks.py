@@ -1178,6 +1178,41 @@ class TaskTypeClassifier:
         if not task_content:
             return cls.HYBRID
 
+        content_lower = task_content.lower()
+
+        # === NEW: SQL review tool-first patterns ===
+        # These patterns indicate database tool usage even with analysis keywords
+        # Check these BEFORE general analysis keywords to prioritize tool execution
+        sql_review_tool_patterns = [
+            # Table structure requires describe_table
+            "检查表结构",
+            "表结构",
+            "列信息",
+            "分区",
+            "分区键",
+            "describe table",
+            "表字段",
+            "表定义",
+            "表schema",
+            # Execution plan requires execute_sql
+            "执行计划",
+            "explain",
+            "查询计划",
+            "执行路径",
+            # Verification requires execute_sql
+            "验证业务逻辑",
+            "数据一致性",
+            "运行sql",
+            "执行sql",
+            "运行查询",
+            "执行查询",
+        ]
+
+        # Check for explicit tool patterns first
+        for pattern in sql_review_tool_patterns:
+            if pattern in content_lower:
+                return cls.HYBRID  # Hybrid: analysis + tool execution
+
         analysis_keywords = [
             "分析",
             "检查",
@@ -1227,7 +1262,6 @@ class TaskTypeClassifier:
             "编写",
         ]
 
-        content_lower = task_content.lower()
         analysis_score = sum(1 for kw in analysis_keywords if kw in content_lower)
         tool_score = sum(1 for kw in tool_keywords if kw in content_lower)
 
@@ -1236,6 +1270,8 @@ class TaskTypeClassifier:
             return cls.TOOL_EXECUTION
 
         # 特殊规则：如果明确提到"分析"、"检查"、"评估"等，优先归类为LLM分析
+        # NOTE: This check comes AFTER sql_review_tool_patterns, so specific database
+        # operation patterns will be caught first and classified as HYBRID
         if any(phrase in content_lower for phrase in ["sql审查", "sql检查", "sql分析", "sql优化"]):
             return cls.LLM_ANALYSIS
 
