@@ -233,7 +233,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         self, conversation_summary: Optional[str] = None, prompt_version: Optional[str] = None
     ) -> str:
         """
-        Get the system prompt for this chat node, using plan_mode_system when plan mode is active.
+        Get the system prompt for this chat node, supporting task-specific prompts and plan mode.
 
         Args:
             conversation_summary: Optional summary from previous conversation compact
@@ -242,6 +242,24 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Returns:
             System prompt string loaded from the appropriate template
         """
+        # First, check if a task-specific system prompt is specified in workflow metadata
+        task_system_prompt = None
+        if self.workflow and hasattr(self.workflow, "metadata"):
+            task_system_prompt = self.workflow.metadata.get("system_prompt")
+
+        if task_system_prompt:
+            # Use task-specific system prompt from workflow metadata
+            original_system_prompt = self.node_config.get("system_prompt")
+            self.node_config["system_prompt"] = task_system_prompt
+            try:
+                return super()._get_system_prompt(conversation_summary, prompt_version)
+            finally:
+                # Restore original system prompt
+                if original_system_prompt is not None:
+                    self.node_config["system_prompt"] = original_system_prompt
+                else:
+                    self.node_config.pop("system_prompt", None)
+
         # Check if plan mode is active by looking at workflow metadata or node state
         is_plan_mode = getattr(self, "plan_mode_active", False)
 

@@ -554,6 +554,60 @@ class DatusAPIService:
                 recorded_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             )
 
+    def _identify_task_type(self, task_text: str) -> str:
+        """识别任务类型"""
+        task_lower = task_text.lower()
+
+        # SQL审查任务特征
+        review_keywords = [
+            "审查", "review", "检查", "check", "审核", "audit",
+            "质量", "quality", "评估", "evaluate", "分析sql", "analyze sql"
+        ]
+        if any(keyword in task_lower for keyword in review_keywords):
+            return "sql_review"
+
+        # 数据分析任务特征
+        analysis_keywords = [
+            "分析", "analysis", "对比", "compare", "趋势", "trend",
+            "统计", "statistics", "汇总", "summary", "报告", "report"
+        ]
+        if any(keyword in task_lower for keyword in analysis_keywords):
+            return "data_analysis"
+
+        # 默认Text2SQL
+        return "text2sql"
+
+    def _configure_task_processing(self, task_type: str, request: ChatResearchRequest) -> dict:
+        """根据任务类型配置处理参数"""
+
+        if task_type == "sql_review":
+            # SQL审查：不使用plan模式，使用专门的审查提示词
+            return {
+                "workflow": "chat_agentic",  # 不使用plan模式
+                "plan_mode": False,
+                "auto_execute_plan": False,
+                "system_prompt": "sql_review_system",  # 专门的SQL审查提示词
+                "output_format": "markdown"  # 指定输出格式
+            }
+        elif task_type == "data_analysis":
+            # 数据分析：使用plan模式
+            return {
+                "workflow": "chat_agentic_plan",
+                "plan_mode": True,
+                "auto_execute_plan": True,
+                "system_prompt": "plan_mode",
+                "output_format": "json"
+            }
+        else:  # text2sql
+            # Text2SQL：标准模式
+            return {
+                "workflow": "chat_agentic",
+                "plan_mode": False,
+                "auto_execute_plan": False,
+                "system_prompt": "chat_system",
+                "output_format": "json"
+            }
+
     async def run_chat_research_stream(
         self, request: ChatResearchRequest, client_id: str = None
     ) -> AsyncGenerator[str, None]:
@@ -565,8 +619,12 @@ class DatusAPIService:
             # Get agent for the namespace
             agent = self.get_agent(request.namespace)
 
-            # Create SQL task with appropriate workflow based on plan mode
-            workflow_name = "chat_agentic_plan" if request.plan_mode else "chat_agentic"
+            # 智能识别任务类型并配置处理参数
+            task_type = self._identify_task_type(request.task)
+            task_config = self._configure_task_processing(task_type, request)
+
+            # 使用任务配置的工作流名称
+            workflow_name = task_config["workflow"]
             sql_task = await self._create_sql_task(
                 RunWorkflowRequest(
                     workflow=workflow_name,
@@ -589,8 +647,11 @@ class DatusAPIService:
 
             # Enable plan mode in workflow metadata
             workflow_metadata = {
-                "plan_mode": request.plan_mode if request.plan_mode is not None else True,
-                "auto_execute_plan": request.auto_execute_plan if request.auto_execute_plan is not None else False,
+                "plan_mode": task_config["plan_mode"],
+                "auto_execute_plan": task_config["auto_execute_plan"],
+                "system_prompt": task_config["system_prompt"],
+                "output_format": task_config["output_format"],
+                "task_type": task_type,
                 "prompt": request.prompt,
                 "prompt_mode": request.prompt_mode,
             }
