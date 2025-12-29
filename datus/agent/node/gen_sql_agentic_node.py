@@ -915,6 +915,8 @@ class GenSQLAgenticNode(AgenticNode):
             Tuple of (sql_string, output_string) - both can be None if not found
         """
         try:
+            import re
+
             from datus.utils.json_utils import llm_result2json
 
             content = output.get("content", "")
@@ -970,8 +972,6 @@ class GenSQLAgenticNode(AgenticNode):
             try:
                 raw_text = content if isinstance(content, str) else str(content)
                 # 1) Try to extract fenced SQL code blocks
-                import re
-
                 sql_block = None
                 sql_match = re.search(r"```sql\s*(.*?)\s*```", raw_text, re.DOTALL | re.IGNORECASE)
                 if sql_match:
