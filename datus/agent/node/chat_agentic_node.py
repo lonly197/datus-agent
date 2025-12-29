@@ -51,9 +51,16 @@ class ExecutionStatus:
         """Mark syntax validation result."""
         self.syntax_validation_passed = passed
 
-    def add_tool_execution(self, tool_name: str, success: bool):
-        """Add tool execution record."""
-        self.tools_executed.append({"tool": tool_name, "success": success, "timestamp": time.time()})
+    def add_tool_execution(self, tool_name: str, success: bool, execution_time: float = None, error_type: str = None):
+        """Add tool execution record with enhanced metadata."""
+        record = {
+            "tool": tool_name,
+            "success": success,
+            "timestamp": time.time(),
+            "execution_time": execution_time,
+            "error_type": error_type
+        }
+        self.tools_executed.append(record)
 
     def add_error(self, error_type: str, error_msg: str):
         """Add error record."""
@@ -213,6 +220,70 @@ class ChatAgenticNode(GenSQLAgenticNode):
         )
 
         await self.emit_queue.put(error_event)
+
+    async def _send_permission_error_event(self, sql_query, error):
+        """发送权限错误事件"""
+        if not hasattr(self, "emit_queue") or not self.emit_queue:
+            return
+
+        error_event = ErrorEvent(
+            id=f"permission_error_{int(time.time() * 1000)}",
+            timestamp=int(time.time() * 1000),
+            event=DeepResearchEventType.ERROR,
+            error=f"数据库权限错误: {error}",
+        )
+
+        await self.emit_queue.put(error_event)
+
+    async def _send_timeout_error_event(self, sql_query, error):
+        """发送超时错误事件"""
+        if not hasattr(self, "emit_queue") or not self.emit_queue:
+            return
+
+        error_event = ErrorEvent(
+            id=f"timeout_error_{int(time.time() * 1000)}",
+            timestamp=int(time.time() * 1000),
+            event=DeepResearchEventType.ERROR,
+            error=f"SQL执行超时: {error}",
+        )
+
+        await self.emit_queue.put(error_event)
+
+    async def _send_table_not_found_error_event(self, table_name, error):
+        """发送表不存在错误事件"""
+        if not hasattr(self, "emit_queue") or not self.emit_queue:
+            return
+
+        error_event = ErrorEvent(
+            id=f"table_not_found_{int(time.time() * 1000)}",
+            timestamp=int(time.time() * 1000),
+            event=DeepResearchEventType.ERROR,
+            error=f"表不存在错误 - {table_name}: {error}",
+        )
+
+        await self.emit_queue.put(error_event)
+
+    async def _dispatch_error_event(self, error_type: str, sql_query: str, error_desc: str, tool_name: str, table_names: list):
+        """根据错误类型分发相应的事件"""
+        try:
+            if error_type == "permission_error":
+                await self._send_permission_error_event(sql_query, error_desc)
+            elif error_type == "timeout_error":
+                await self._send_timeout_error_event(sql_query, error_desc)
+            elif error_type == "table_not_found":
+                table_name = table_names[0] if table_names else "unknown_table"
+                await self._send_table_not_found_error_event(table_name, error_desc)
+            elif error_type == "connection_error":
+                await self._send_db_connection_error_event(sql_query, error_desc)
+            # 对于其他错误类型，可以添加默认处理或忽略
+            # elif error_type == "syntax_error":
+            #     await self._send_syntax_error_event(sql_query, error_desc)
+            # elif error_type == "unknown_error":
+            #     # 可以选择不发送事件或发送通用错误事件
+
+        except Exception as e:
+            # 错误事件发送失败不应该影响主要流程
+            logger.warning(f"Failed to dispatch error event for {error_type}: {e}")
 
     def _validate_sql_syntax_comprehensive(self, sql: str) -> dict:
         """Comprehensive SQL syntax validation."""
@@ -698,11 +769,14 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 await self._update_preflight_plan_status(workflow, tool_name, success)
 
                 # 更新执行状态跟踪
-                self.execution_status.add_tool_execution(tool_name, success)
+                self.execution_status.add_tool_execution(tool_name, success, execution_time, error_type if not success else None)
                 if not success:
                     error_desc = result.get("error", "Unknown error")
                     error_type = self._classify_error_type(error_desc, tool_name)
                     self.execution_status.add_error(error_type, error_desc)
+
+                    # 根据错误类型发送相应的事件
+                    await self._dispatch_error_event(error_type, sql_query, error_desc, tool_name, table_names)
 
                 # Record in monitor
                 if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
