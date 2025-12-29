@@ -532,7 +532,8 @@ class DBFuncTool:
                 return FuncToolResult(result={"table_exists": False, "suggestions": [], "available_tables": []})
 
             # Check if table exists (case-insensitive)
-            table_names_lower = {t.get("name", "").lower(): t.get("name") for t in tables}
+            # tables is a List[str], convert to dict format for consistent processing
+            table_names_lower = {t.lower(): t for t in tables}
             exists = table_name.lower() in table_names_lower
 
             # Suggest similar table names if not found
@@ -548,7 +549,7 @@ class DBFuncTool:
                 result={
                     "table_exists": exists,
                     "suggestions": suggestions,
-                    "available_tables": [t.get("name") for t in tables][:20],  # Limit for performance
+                    "available_tables": list(tables)[:20],  # Limit for performance
                 }
             )
 

@@ -689,7 +689,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 table_existence[table_name] = check_result
 
                 # Check for missing tables and log warnings
-                if not check_result.get("success") or not check_result.get("result", {}).get("table_exists", True):
+                if check_result is None:
+                    logger.warning(f"Table existence check failed for '{table_name}' - check_result is None")
+                elif not check_result.get("success") or not check_result.get("result", {}).get("table_exists", True):
                     suggestions = check_result.get("result", {}).get("suggestions", [])
                     if suggestions:
                         logger.warning(f"Table '{table_name}' not found. Did you mean: {', '.join(suggestions)}?")
