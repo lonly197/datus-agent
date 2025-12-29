@@ -365,7 +365,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 # Update action with result
                 success = result.get("success", False)
                 tool_action.status = ActionStatus.SUCCESS if success else ActionStatus.FAILED
-                tool_action.output_data = result
+                tool_action.output = result
                 tool_action.messages = f"Preflight tool {tool_name}: {'SUCCESS' if success else 'FAILED'}"
 
                 # Record in monitor
@@ -403,7 +403,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 # Update action with error
                 if "tool_action" in locals():
                     tool_action.status = ActionStatus.FAILED
-                    tool_action.output_data = {"success": False, "error": str(e)}
+                    tool_action.output = {"success": False, "error": str(e)}
                     tool_action.messages = f"Preflight tool {tool_name} failed: {str(e)}"
 
         # End preflight monitoring
