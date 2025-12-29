@@ -22,9 +22,11 @@ __all__ = [
     "GenSQLAgenticNode",
     "ChatAgenticNode",
     "CompareAgenticNode",
+    "ExecutionEventManager",
     "Node",
 ]
 
+from datus.agent.node.execution_event_manager import ExecutionEventManager
 from datus.agent.node.node import Node
 
 from .begin_node import BeginNode

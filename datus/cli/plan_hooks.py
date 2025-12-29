@@ -1625,8 +1625,30 @@ class PlanModeHooks(AgentHooks):
         self.action_history_manager = action_history_manager
         # Optional agent_config to instantiate DB/Filesystem tools when executing todos
         self.agent_config = agent_config
-        # Optional emit queue to stream ActionHistory produced by hooks back to node
+        # Optional emit queue to stream ActionHistory produced by hooks back to node (deprecated, use execution_event_manager)
         self.emit_queue = emit_queue
+        # Unified execution event manager
+        self.execution_event_manager = None
+        # Current execution ID for unified event manager
+        self.current_execution_id = None
+
+    def set_execution_event_manager(self, event_manager, execution_id: str):
+        """Set the unified execution event manager."""
+        self.execution_event_manager = event_manager
+        self.current_execution_id = execution_id
+
+    async def _emit_action(self, action):
+        """Emit action using the appropriate method."""
+        if self.execution_event_manager and self.current_execution_id:
+            # Use unified execution event manager
+            if hasattr(self.execution_event_manager, "_event_queue"):
+                await self.execution_event_manager._event_queue.put(action)
+        elif self.emit_queue:
+            # Fallback to legacy emit_queue
+            await self._emit_action(action)
+        elif self.action_history_manager:
+            # Fallback to action history manager
+            self.action_history_manager.add_action(action)
         # Executor task handle
         self._executor_task = None
         # Completion signaling for coordination between server executor and main agent loop
@@ -2760,7 +2782,7 @@ Respond with only the tool name, nothing else."""
                     event=DeepResearchEventType.Chat,
                     content=message,
                 )
-                await self.emit_queue.put(status_event)
+                await self._emit_action(status_event)
                 logger.debug(f"Emitted status message: {message}")
         except Exception as e:
             logger.debug(f"Failed to emit status message: {e}")
@@ -2837,7 +2859,7 @@ Respond with only the tool name, nothing else."""
                         self.action_history_manager.add_action(complete_action_db)
                         if self.emit_queue is not None:
                             try:
-                                self.emit_queue.put_nowait(complete_action_db)
+                                await self._emit_action(complete_action_db)
                             except Exception as e:
                                 logger.debug(f"emit_queue put failed: {e}")
 
@@ -2883,7 +2905,7 @@ Respond with only the tool name, nothing else."""
                 self.action_history_manager.add_action(complete_action_db)
                 if self.emit_queue is not None:
                     try:
-                        self.emit_queue.put_nowait(complete_action_db)
+                        await self._emit_action(complete_action_db)
                     except Exception as e:
                         logger.debug(f"emit_queue put failed: {e}")
 
@@ -2926,7 +2948,7 @@ Respond with only the tool name, nothing else."""
                         self.action_history_manager.add_action(complete_action_db)
                         if self.emit_queue is not None:
                             try:
-                                self.emit_queue.put_nowait(complete_action_db)
+                                await self._emit_action(complete_action_db)
                             except Exception as e:
                                 logger.debug(f"emit_queue put failed: {e}")
 
@@ -2972,7 +2994,7 @@ Respond with only the tool name, nothing else."""
                 self.action_history_manager.add_action(complete_action_db)
                 if self.emit_queue is not None:
                     try:
-                        self.emit_queue.put_nowait(complete_action_db)
+                        await self._emit_action(complete_action_db)
                     except Exception as e:
                         logger.debug(f"emit_queue put failed: {e}")
 
@@ -3141,7 +3163,7 @@ Respond with only the tool name, nothing else."""
                             self.action_history_manager.add_action(note_action)
                             if self.emit_queue is not None:
                                 try:
-                                    self.emit_queue.put_nowait(note_action)
+                                    await self._emit_action(note_action)
                                 except Exception:
                                     pass
                     except Exception as e:
@@ -3181,7 +3203,7 @@ Respond with only the tool name, nothing else."""
                                 self.action_history_manager.add_action(reasoning_action)
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(reasoning_action)
+                                        await self._emit_action(reasoning_action)
                                     except Exception as e:
                                         logger.debug(f"emit_queue put failed for reasoning action: {e}")
 
@@ -3260,7 +3282,7 @@ Respond with only the tool name, nothing else."""
                                 self.action_history_manager.add_action(complete_action_db)
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(complete_action_db)
+                                        await self._emit_action(complete_action_db)
                                     except Exception as e:
                                         logger.debug(f"emit_queue put failed for complete_action_db: {e}")
                             executed_any = True
@@ -3301,7 +3323,7 @@ Respond with only the tool name, nothing else."""
                                 )
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(sql_start_event)
+                                        await self._emit_action(sql_start_event)
                                         logger.debug(f"Emitted SQL execution start event for query: {sql_text[:50]}...")
                                     except Exception as e:
                                         logger.debug(f"Failed to emit SQL start event: {e}")
@@ -3318,7 +3340,7 @@ Respond with only the tool name, nothing else."""
                                 )
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(sql_progress_event)
+                                        await self._emit_action(sql_progress_event)
                                         logger.debug("Emitted SQL execution progress: preparing")
                                     except Exception as e:
                                         logger.debug(f"Failed to emit SQL progress event: {e}")
@@ -3342,7 +3364,7 @@ Respond with only the tool name, nothing else."""
                                 )
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(sql_progress_event2)
+                                        await self._emit_action(sql_progress_event2)
                                         logger.debug("Emitted SQL execution progress: executing")
                                     except Exception as e:
                                         logger.debug(f"Failed to emit SQL progress event: {e}")
@@ -3382,7 +3404,7 @@ Respond with only the tool name, nothing else."""
                                     )
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(sql_result_event)
+                                            await self._emit_action(sql_result_event)
                                             logger.debug(
                                                 f"Emitted SQL execution result event: {sql_result_event.rowCount} rows in {execution_time_ms}ms"
                                             )
@@ -3410,7 +3432,7 @@ Respond with only the tool name, nothing else."""
                                     )
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(sql_error_event)
+                                            await self._emit_action(sql_error_event)
                                             logger.debug(f"Emitted enhanced SQL execution error event: {error_msg}")
                                         except Exception as e:
                                             logger.debug(f"Failed to emit SQL error event: {e}")
@@ -3453,7 +3475,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(complete_action_db)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(complete_action_db)
+                                            await self._emit_action(complete_action_db)
                                         except Exception as e:
                                             logger.debug(f"emit_queue put failed for complete_action_db: {e}")
 
@@ -3537,8 +3559,8 @@ Respond with only the tool name, nothing else."""
                                 self.action_history_manager.add_action(output_gen_action)
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(complete_action_report)
-                                        self.emit_queue.put_nowait(output_gen_action)
+                                        await self._emit_action(complete_action_report)
+                                        await self._emit_action(output_gen_action)
                                     except Exception as e:
                                         logger.debug(f"emit_queue put failed for report actions: {e}")
                             executed_any = True
@@ -3646,7 +3668,7 @@ Respond with only the tool name, nothing else."""
                                 self.action_history_manager.add_action(complete_action_db)
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(complete_action_db)
+                                        await self._emit_action(complete_action_db)
                                     except Exception as e:
                                         logger.debug(f"emit_queue put failed for complete_action_db: {e}")
                             executed_any = True
@@ -3699,7 +3721,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(complete_action_db)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(complete_action_db)
+                                            await self._emit_action(complete_action_db)
                                         except Exception as e:
                                             logger.debug(f"emit_queue put failed for complete_action_db: {e}")
                                 executed_any = True
@@ -3731,7 +3753,7 @@ Respond with only the tool name, nothing else."""
                                 self.action_history_manager.add_action(complete_action_db)
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(complete_action_db)
+                                        await self._emit_action(complete_action_db)
                                     except Exception as e:
                                         logger.debug(f"emit_queue put failed for complete_action_db: {e}")
                             executed_any = True
@@ -3763,7 +3785,7 @@ Respond with only the tool name, nothing else."""
                                 self.action_history_manager.add_action(complete_action_db)
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(complete_action_db)
+                                        await self._emit_action(complete_action_db)
                                     except Exception as e:
                                         logger.debug(f"emit_queue put failed for complete_action_db: {e}")
                             executed_any = True
@@ -3785,7 +3807,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -3809,7 +3831,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -3833,7 +3855,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -3857,7 +3879,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -3881,7 +3903,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -3905,7 +3927,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -3941,7 +3963,7 @@ Respond with only the tool name, nothing else."""
                                 self.action_history_manager.add_action(complete_action_fs)
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(complete_action_fs)
+                                        await self._emit_action(complete_action_fs)
                                     except Exception as e:
                                         logger.debug(f"emit_queue put failed for complete_action_fs: {e}")
                                 executed_any = True
@@ -3963,7 +3985,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -3987,7 +4009,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -4011,7 +4033,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -4035,7 +4057,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -4059,7 +4081,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(note_action)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(note_action)
+                                            await self._emit_action(note_action)
                                         except Exception:
                                             pass
                                 executed_any = True
@@ -4103,7 +4125,7 @@ Respond with only the tool name, nothing else."""
                                 self.action_history_manager.add_action(tool_call_action)
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(tool_call_action)
+                                        await self._emit_action(tool_call_action)
                                     except Exception as e:
                                         logger.debug(f"emit_queue put failed for tool call action: {e}")
 
@@ -4164,7 +4186,7 @@ Respond with only the tool name, nothing else."""
                                     self.action_history_manager.add_action(routing_note)
                                     if self.emit_queue is not None:
                                         try:
-                                            self.emit_queue.put_nowait(routing_note)
+                                            await self._emit_action(routing_note)
                                         except Exception:
                                             pass
                             except Exception as e:
@@ -4342,7 +4364,7 @@ Respond with only the tool name, nothing else."""
                                 self.action_history_manager.add_action(fallback_action)
                                 if self.emit_queue is not None:
                                     try:
-                                        self.emit_queue.put_nowait(fallback_action)
+                                        await self._emit_action(fallback_action)
                                     except Exception as e:
                                         logger.debug(f"emit_queue put failed for fallback action: {e}")
                             executed_any = True
@@ -4367,7 +4389,7 @@ Respond with only the tool name, nothing else."""
                             self.action_history_manager.add_action(note_action)
                             if self.emit_queue is not None:
                                 try:
-                                    self.emit_queue.put_nowait(note_action)
+                                    await self._emit_action(note_action)
                                 except Exception:
                                     pass
                     except Exception as e:
@@ -4423,7 +4445,7 @@ Respond with only the tool name, nothing else."""
                     self.action_history_manager.add_action(error_action)
                     if self.emit_queue is not None:
                         try:
-                            self.emit_queue.put_nowait(error_action)
+                            await self._emit_action(error_action)
                         except Exception as emit_e:
                             logger.debug(f"Failed to emit server executor error event: {emit_e}")
             except Exception as inner_e:
@@ -4476,7 +4498,7 @@ Respond with only the tool name, nothing else."""
             # Emit to queue if available
             if self.emit_queue is not None:
                 try:
-                    self.emit_queue.put_nowait(plan_update_action)
+                    await self._emit_action(plan_update_action)
                     logger.debug(f"Emitted plan_update event for todo {todo_id}")
                 except Exception as e:
                     logger.debug(f"Failed to emit plan_update event: {e}")

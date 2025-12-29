@@ -12,17 +12,13 @@ import asyncio
 import time
 from typing import AsyncGenerator, Optional, override
 
+from datus.agent.node.execution_event_manager import (
+    ExecutionEventManager,
+    SQLReviewExecutionMode,
+    create_execution_mode,
+)
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 from datus.agent.workflow import Workflow
-from datus.api.models import (
-    DeepResearchEventType,
-    ErrorEvent,
-    PlanUpdateEvent,
-    TodoItem,
-    TodoStatus,
-    ToolCallEvent,
-    ToolCallResultEvent,
-)
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.chat_agentic_node_models import ChatNodeInput, ChatNodeResult
@@ -32,39 +28,6 @@ from datus.tools.func_tool import ContextSearchTools, DBFuncTool
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
-
-
-class ExecutionStatus:
-    """Execution status tracker for preflight and main execution."""
-
-    def __init__(self):
-        self.preflight_completed = False
-        self.syntax_validation_passed = False
-        self.tools_executed = []
-        self.errors_encountered = []
-
-    def mark_preflight_complete(self, success: bool):
-        """Mark preflight execution as completed."""
-        self.preflight_completed = True
-
-    def mark_syntax_validation(self, passed: bool):
-        """Mark syntax validation result."""
-        self.syntax_validation_passed = passed
-
-    def add_tool_execution(self, tool_name: str, success: bool, execution_time: float = None, error_type: str = None):
-        """Add tool execution record with enhanced metadata."""
-        record = {
-            "tool": tool_name,
-            "success": success,
-            "timestamp": time.time(),
-            "execution_time": execution_time,
-            "error_type": error_type
-        }
-        self.tools_executed.append(record)
-
-    def add_error(self, error_type: str, error_msg: str):
-        """Add error record."""
-        self.errors_encountered.append({"type": error_type, "message": error_msg, "timestamp": time.time()})
 
 
 class ChatAgenticNode(GenSQLAgenticNode):
@@ -113,177 +76,12 @@ class ChatAgenticNode(GenSQLAgenticNode):
         # Initialize action_history_manager attribute for plan mode support
         self.action_history_manager = None
 
-        # Initialize execution status tracker
-        self.execution_status = ExecutionStatus()
+        # Initialize unified execution event manager
+        self.execution_event_manager = None
 
         logger.debug(
             f"ChatAgenticNode initialized: {self.agent_config.current_namespace} {self.agent_config.current_database}"
         )
-
-    async def _send_preflight_plan_update(self, workflow, tool_sequence):
-        """发送预检执行计划"""
-        if not hasattr(self, "emit_queue") or not self.emit_queue:
-            return
-
-        todos = []
-        for i, tool_name in enumerate(tool_sequence):
-            todos.append(
-                TodoItem(id=f"preflight_{tool_name}_{i}", content=f"执行预检工具: {tool_name}", status=TodoStatus.PENDING)
-            )
-
-        plan_event = PlanUpdateEvent(
-            id=f"plan_preflight_{int(time.time() * 1000)}",
-            timestamp=int(time.time() * 1000),
-            event=DeepResearchEventType.PLAN_UPDATE,
-            todos=todos,
-        )
-
-        await self.emit_queue.put(plan_event)
-
-    async def _send_tool_call_event(self, tool_name, tool_call_id, input_data):
-        """发送工具调用事件"""
-        if not hasattr(self, "emit_queue") or not self.emit_queue:
-            return
-
-        call_event = ToolCallEvent(
-            id=f"call_{tool_call_id}",
-            timestamp=int(time.time() * 1000),
-            event=DeepResearchEventType.TOOL_CALL,
-            toolCallId=tool_call_id,
-            toolName=tool_name,
-            input=input_data,
-        )
-
-        await self.emit_queue.put(call_event)
-
-    async def _send_tool_call_result_event(self, tool_call_id, result, execution_time, cache_hit):
-        """发送工具调用结果事件"""
-        if not hasattr(self, "emit_queue") or not self.emit_queue:
-            return
-
-        result_event = ToolCallResultEvent(
-            id=f"result_{tool_call_id}",
-            timestamp=int(time.time() * 1000),
-            event=DeepResearchEventType.TOOL_CALL_RESULT,
-            toolCallId=tool_call_id,
-            data={**result, "execution_time": execution_time, "cache_hit": cache_hit},
-            error=not result.get("success", False),
-        )
-
-        await self.emit_queue.put(result_event)
-
-    async def _update_preflight_plan_status(self, workflow, tool_name, success):
-        """更新预检计划状态"""
-        if not hasattr(self, "emit_queue") or not self.emit_queue:
-            return
-
-        # 查找对应的todo项并更新状态
-        todo_id = f"preflight_{tool_name}_0"  # 简化处理，实际需要更精确的匹配
-        status = TodoStatus.COMPLETED if success else TodoStatus.ERROR
-
-        todo = TodoItem(id=todo_id, content=f"执行预检工具: {tool_name}", status=status)
-
-        update_event = PlanUpdateEvent(
-            id=f"plan_update_{tool_name}_{int(time.time() * 1000)}",
-            planId=todo_id,
-            timestamp=int(time.time() * 1000),
-            event=DeepResearchEventType.PLAN_UPDATE,
-            todos=[todo],
-        )
-
-        await self.emit_queue.put(update_event)
-
-    async def _send_syntax_error_event(self, sql_query, error):
-        """发送SQL语法错误事件"""
-        if not hasattr(self, "emit_queue") or not self.emit_queue:
-            return
-
-        error_event = ErrorEvent(
-            id=f"syntax_error_{int(time.time() * 1000)}",
-            timestamp=int(time.time() * 1000),
-            event=DeepResearchEventType.ERROR,
-            error=f"SQL语法错误: {error}",
-        )
-
-        await self.emit_queue.put(error_event)
-
-    async def _send_db_connection_error_event(self, sql_query, error):
-        """发送数据库连接错误事件"""
-        if not hasattr(self, "emit_queue") or not self.emit_queue:
-            return
-
-        error_event = ErrorEvent(
-            id=f"db_error_{int(time.time() * 1000)}",
-            timestamp=int(time.time() * 1000),
-            event=DeepResearchEventType.ERROR,
-            error=f"数据库连接错误: {error}",
-        )
-
-        await self.emit_queue.put(error_event)
-
-    async def _send_permission_error_event(self, sql_query, error):
-        """发送权限错误事件"""
-        if not hasattr(self, "emit_queue") or not self.emit_queue:
-            return
-
-        error_event = ErrorEvent(
-            id=f"permission_error_{int(time.time() * 1000)}",
-            timestamp=int(time.time() * 1000),
-            event=DeepResearchEventType.ERROR,
-            error=f"数据库权限错误: {error}",
-        )
-
-        await self.emit_queue.put(error_event)
-
-    async def _send_timeout_error_event(self, sql_query, error):
-        """发送超时错误事件"""
-        if not hasattr(self, "emit_queue") or not self.emit_queue:
-            return
-
-        error_event = ErrorEvent(
-            id=f"timeout_error_{int(time.time() * 1000)}",
-            timestamp=int(time.time() * 1000),
-            event=DeepResearchEventType.ERROR,
-            error=f"SQL执行超时: {error}",
-        )
-
-        await self.emit_queue.put(error_event)
-
-    async def _send_table_not_found_error_event(self, table_name, error):
-        """发送表不存在错误事件"""
-        if not hasattr(self, "emit_queue") or not self.emit_queue:
-            return
-
-        error_event = ErrorEvent(
-            id=f"table_not_found_{int(time.time() * 1000)}",
-            timestamp=int(time.time() * 1000),
-            event=DeepResearchEventType.ERROR,
-            error=f"表不存在错误 - {table_name}: {error}",
-        )
-
-        await self.emit_queue.put(error_event)
-
-    async def _dispatch_error_event(self, error_type: str, sql_query: str, error_desc: str, tool_name: str, table_names: list):
-        """根据错误类型分发相应的事件"""
-        try:
-            if error_type == "permission_error":
-                await self._send_permission_error_event(sql_query, error_desc)
-            elif error_type == "timeout_error":
-                await self._send_timeout_error_event(sql_query, error_desc)
-            elif error_type == "table_not_found":
-                table_name = table_names[0] if table_names else "unknown_table"
-                await self._send_table_not_found_error_event(table_name, error_desc)
-            elif error_type == "connection_error":
-                await self._send_db_connection_error_event(sql_query, error_desc)
-            # 对于其他错误类型，可以添加默认处理或忽略
-            # elif error_type == "syntax_error":
-            #     await self._send_syntax_error_event(sql_query, error_desc)
-            # elif error_type == "unknown_error":
-            #     # 可以选择不发送事件或发送通用错误事件
-
-        except Exception as e:
-            # 错误事件发送失败不应该影响主要流程
-            logger.warning(f"Failed to dispatch error event for {error_type}: {e}")
 
     def _validate_sql_syntax_comprehensive(self, sql: str) -> dict:
         """Comprehensive SQL syntax validation."""
@@ -297,9 +95,10 @@ class ChatAgenticNode(GenSQLAgenticNode):
             issues = []
 
             # Check for incomplete statements
-            has_main_operation = any(isinstance(node, (sqlglot.exp.Select, sqlglot.exp.Insert,
-                                                      sqlglot.exp.Update, sqlglot.exp.Delete))
-                                    for node in parsed.walk())
+            has_main_operation = any(
+                isinstance(node, (sqlglot.exp.Select, sqlglot.exp.Insert, sqlglot.exp.Update, sqlglot.exp.Delete))
+                for node in parsed.walk()
+            )
             if not has_main_operation:
                 issues.append("SQL statement appears incomplete - missing main operation (SELECT/INSERT/UPDATE/DELETE)")
 
@@ -319,7 +118,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 "error": "; ".join(issues) if issues else None,
                 "tables_found": tables,
                 "parsed_ast": str(parsed),
-                "sql_length": len(sql)
+                "sql_length": len(sql),
             }
 
         except Exception as e:
@@ -328,7 +127,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 "error": f"SQL parsing failed: {str(e)}",
                 "tables_found": [],
                 "parsed_ast": None,
-                "sql_length": len(sql)
+                "sql_length": len(sql),
             }
 
     def _analyze_tool_failure_impact(self, tool_name: str, result: dict) -> str:
@@ -570,7 +369,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         self._rebuild_tools()
 
     async def run_preflight_tools(
-        self, workflow, action_history_manager: ActionHistoryManager
+        self, workflow, action_history_manager: ActionHistoryManager = None, execution_id: str = None
     ) -> AsyncGenerator[ActionHistory, None]:
         """
         Execute required preflight tools before main LLM processing.
@@ -585,6 +384,13 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Raises:
             ValueError: If SQL syntax validation fails
         """
+        # Use execution event manager if provided, otherwise fall back to action_history_manager
+        event_manager = (
+            self.execution_event_manager
+            if hasattr(self, "execution_event_manager") and self.execution_event_manager
+            else None
+        )
+
         required_tools = workflow.metadata.get("required_tool_sequence", [])
         if not required_tools:
             logger.debug("No required tool sequence specified, skipping preflight")
@@ -592,8 +398,11 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
         logger.info(f"Starting preflight tool execution: {required_tools}")
 
-        # 发送预检执行计划事件
-        await self._send_preflight_plan_update(workflow, required_tools)
+        # Send preflight plan update if using event manager
+        if event_manager and execution_id:
+            await event_manager.update_execution_status(
+                execution_id, "planning", f"Executing preflight tools: {required_tools}"
+            )
 
         # ========== Enhanced SQL Validation ==========
         # Extract and validate SQL syntax BEFORE executing any tools
@@ -603,8 +412,14 @@ class ChatAgenticNode(GenSQLAgenticNode):
         # Perform comprehensive SQL validation
         sql_validation_result = self._validate_sql_syntax_comprehensive(sql_query)
         if not sql_validation_result["valid"]:
-            # Send syntax error event
-            await self._send_syntax_error_event(sql_query, sql_validation_result["error"])
+            # Record syntax error if using event manager
+            if event_manager and execution_id:
+                await event_manager.record_llm_interaction(
+                    execution_id,
+                    "syntax_validation",
+                    f"Validate SQL: {sql_query}",
+                    error=sql_validation_result["error"],
+                )
 
             # Continue with partial execution but mark the issue
             logger.warning(f"SQL syntax issues detected: {sql_validation_result['error']}")
@@ -619,12 +434,16 @@ class ChatAgenticNode(GenSQLAgenticNode):
         is_valid, error_message = self._validate_sql_syntax(sql_query, task.task)
 
         if not is_valid:
-            # 记录语法验证失败状态
-            self.execution_status.mark_syntax_validation(False)
-            self.execution_status.add_error("syntax_error", error_message)
+            # Record syntax validation failure
+            if hasattr(self, "execution_status") and self.execution_status:
+                self.execution_status.mark_syntax_validation(False)
+                self.execution_status.add_error("syntax_error", error_message)
 
-            # 发送语法错误事件
-            await self._send_syntax_error_event(sql_query, error_message)
+            # Record error if using event manager
+            if event_manager and execution_id:
+                await event_manager.record_llm_interaction(
+                    execution_id, "syntax_validation", f"Validate SQL: {sql_query}", error=error_message
+                )
 
             # Create error action for syntax validation failure
             error_action = ActionHistory.create_action(
@@ -715,19 +534,21 @@ class ChatAgenticNode(GenSQLAgenticNode):
             try:
                 logger.info(f"Executing preflight tool: {tool_name}")
 
-                # 发送工具调用开始事件
-                await self._send_tool_call_event(
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                    input_data={
-                        "tool_name": tool_name,
-                        "sql_query": sql_query,
-                        "table_names": table_names,
-                        "catalog": catalog,
-                        "database": database,
-                        "schema": schema,
-                    },
-                )
+                # Record tool call start if using event manager
+                if event_manager and execution_id:
+                    await event_manager.record_tool_execution(
+                        execution_id,
+                        tool_name,
+                        tool_call_id,
+                        {
+                            "tool_name": tool_name,
+                            "sql_query": sql_query,
+                            "table_names": table_names,
+                            "catalog": catalog,
+                            "database": database,
+                            "schema": schema,
+                        },
+                    )
 
                 # Create action for tool execution
                 tool_action = ActionHistory.create_action(
@@ -762,23 +583,38 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 tool_action.output = result
                 tool_action.messages = f"Preflight tool {tool_name}: {'SUCCESS' if success else 'FAILED'}"
 
-                # 发送工具调用结果事件
-                await self._send_tool_call_result_event(
-                    tool_call_id=tool_call_id, result=result, execution_time=execution_time, cache_hit=cache_hit
-                )
-
-                # 更新执行计划状态
-                await self._update_preflight_plan_status(workflow, tool_name, success)
+                # Record tool result if using event manager
+                if event_manager and execution_id:
+                    await event_manager.record_tool_execution(
+                        execution_id,
+                        tool_name,
+                        tool_call_id,
+                        {
+                            "tool_name": tool_name,
+                            "sql_query": sql_query,
+                            "table_names": table_names,
+                            "catalog": catalog,
+                            "database": database,
+                            "schema": schema,
+                        },
+                        result=result,
+                        execution_time=execution_time,
+                    )
 
                 # 更新执行状态跟踪
-                self.execution_status.add_tool_execution(tool_name, success, execution_time, error_type if not success else None)
+                self.execution_status.add_tool_execution(
+                    tool_name, success, execution_time, error_type if not success else None
+                )
                 if not success:
                     error_desc = result.get("error", "Unknown error")
                     error_type = self._classify_error_type(error_desc, tool_name)
                     self.execution_status.add_error(error_type, error_desc)
 
-                    # 根据错误类型发送相应的事件
-                    await self._dispatch_error_event(error_type, sql_query, error_desc, tool_name, table_names)
+                    # Record error if using event manager
+                    if event_manager and execution_id:
+                        await event_manager.record_llm_interaction(
+                            execution_id, "tool_error", f"Tool {tool_name} failed", error=error_desc
+                        )
 
                 # Record in monitor
                 if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
@@ -811,9 +647,21 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
                     logger.warning(f"Preflight tool {tool_name} failed ({error_type}): {error_desc}")
 
-                    # 如果是数据库连接错误，发送专门的错误事件
+                    # 如果是数据库连接错误，创建错误事件
                     if error_type == "database_connection":
-                        await self._send_db_connection_error_event(sql_query, error_desc)
+                        error_action = ActionHistory.create_action(
+                            role=ActionRole.TOOL,
+                            action_type="db_connection_error",
+                            messages=f"Database connection failed: {error_desc}",
+                            input_data={
+                                "sql_query": sql_query,
+                                "error": error_desc,
+                                "error_type": error_type
+                            },
+                            status=ActionStatus.FAILED,
+                        )
+                        action_history_manager.add_action(error_action)
+                        yield error_action
 
                     # Log recovery suggestions
                     if recovery_suggestions:
@@ -826,16 +674,24 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 logger.error(f"Preflight tool {tool_name} execution error: {e}")
                 all_success = False
 
-                # 发送工具调用失败结果事件
-                await self._send_tool_call_result_event(
-                    tool_call_id=tool_call_id,
-                    result={"success": False, "error": str(e)},
-                    execution_time=execution_time,
-                    cache_hit=False,
+                # 创建工具调用失败结果事件
+                error_result_action = ActionHistory.create_action(
+                    role=ActionRole.TOOL,
+                    action_type=f"preflight_{tool_name}_result",
+                    messages=f"Preflight tool {tool_name} failed: {str(e)}",
+                    input_data={
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "execution_time": execution_time,
+                        "cache_hit": False
+                    },
+                    output={"success": False, "error": str(e)},
+                    status=ActionStatus.FAILED,
                 )
+                action_history_manager.add_action(error_result_action)
+                yield error_result_action
 
-                # 更新执行计划状态为失败
-                await self._update_preflight_plan_status(workflow, tool_name, False)
+                # 更新执行计划状态为失败 (通过error action体现)
 
                 # Record error in monitor
                 if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
@@ -869,12 +725,14 @@ class ChatAgenticNode(GenSQLAgenticNode):
         preflight_results_for_llm = []
         for tool_name, result in tool_results.items():
             impact_analysis = self._analyze_tool_failure_impact(tool_name, result)
-            preflight_results_for_llm.append({
-                "tool_name": tool_name,
-                "success": result.get("success", False),
-                "error": result.get("error", ""),
-                "impact_analysis": impact_analysis
-            })
+            preflight_results_for_llm.append(
+                {
+                    "tool_name": tool_name,
+                    "success": result.get("success", False),
+                    "error": result.get("error", ""),
+                    "impact_analysis": impact_analysis,
+                }
+            )
 
         # Inject preflight results into workflow for LLM access
         workflow.metadata["preflight_results"] = preflight_results_for_llm
@@ -912,7 +770,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         table_name=table_name,
                         catalog=catalog or "default_catalog",  # Provide default catalog
                         database=database or "",  # Allow empty but explicit
-                        schema_name=schema or ""  # Allow empty but explicit
+                        schema_name=schema or "",  # Allow empty but explicit
                     )
                 except Exception as e:
                     return {"success": False, "error": f"describe_table execution failed: {str(e)}"}
@@ -1035,7 +893,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         table_name=table_name,
                         catalog=catalog or "default_catalog",  # Provide default catalog
                         database=database or "",  # Allow empty but explicit
-                        schema_name=schema or ""  # Allow empty but explicit
+                        schema_name=schema or "",  # Allow empty but explicit
                     )
                 except Exception as e:
                     return {"success": False, "error": f"get_table_ddl execution failed: {str(e)}"}
@@ -1077,7 +935,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         if sql_prefix_match:
             candidate_sql = sql_prefix_match.group(1).strip()
             # Validate it's actually SQL by checking for SELECT keyword
-            if candidate_sql.upper().startswith('SELECT'):
+            if candidate_sql.upper().startswith("SELECT"):
                 return candidate_sql
 
         # 3. Try to find complete SQL statements with better boundary detection
@@ -1103,15 +961,15 @@ class ChatAgenticNode(GenSQLAgenticNode):
     def _contains_invalid_mixed_content(self, sql: str) -> bool:
         """Check if SQL contains invalid mixed content (Chinese explanations mixed with SQL)."""
         # Check for Chinese characters in SQL keywords area
-        chinese_chars = re.findall(r'[\u4e00-\u9fff]', sql[:50])  # First 50 chars
+        chinese_chars = re.findall(r"[\u4e00-\u9fff]", sql[:50])  # First 50 chars
         if len(chinese_chars) > 3:  # Too many Chinese chars suggest mixed content
             return True
 
         # Check for explanation patterns mixed with SQL
         invalid_patterns = [
-            r'SELECT\s+.*禁止.*分区裁剪',  # Specific pattern from the error
-            r'SELECT\s+.*等\)',  # Chinese closing parenthesis
-            r'SELECT\s+.*规范等',  # Another pattern from logs
+            r"SELECT\s+.*禁止.*分区裁剪",  # Specific pattern from the error
+            r"SELECT\s+.*等\)",  # Chinese closing parenthesis
+            r"SELECT\s+.*规范等",  # Another pattern from logs
         ]
 
         for pattern in invalid_patterns:
@@ -1423,11 +1281,81 @@ class ChatAgenticNode(GenSQLAgenticNode):
         if not action_history_manager:
             action_history_manager = ActionHistoryManager()
 
+        # Initialize unified execution event manager
+        self.execution_event_manager = ExecutionEventManager(action_history_manager)
+
         # Get input from self.input (set by setup_input or directly)
         if not self.input:
             raise ValueError("Chat input not set. Call setup_input() first or set self.input directly.")
 
         user_input = self.input
+
+        # Determine execution scenario
+        scenario = self._determine_execution_scenario(user_input)
+        logger.info(f"Detected execution scenario: {scenario}")
+
+        # Create execution context and mode
+        from datus.agent.node.execution_event_manager import ExecutionContext
+
+        execution_context = ExecutionContext(
+            scenario=scenario,
+            task_data={"task": user_input.user_message, "input": user_input},
+            agent_config=self.agent_config,
+            model=self.model,
+            workflow_metadata=getattr(self.workflow, "metadata", {}) if self.workflow else {},
+        )
+
+        execution_mode = create_execution_mode(scenario, self.execution_event_manager, execution_context, self)
+
+        # Execute using unified execution mode
+        async for action in execution_mode.execute():
+            yield action
+
+        # Yield any remaining events from the event manager
+        async for event in self.execution_event_manager.get_events_stream():
+            yield event
+
+    def _determine_execution_scenario(self, user_input) -> str:
+        """
+        Determine the execution scenario based on input content.
+
+        Args:
+            user_input: User input data
+
+        Returns:
+            str: Execution scenario ("text2sql", "sql_review", "data_analysis", "smart_query", "deep_analysis")
+        """
+        message = user_input.user_message.lower() if hasattr(user_input, "user_message") else str(user_input).lower()
+
+        # Check for SQL review keywords
+        sql_review_keywords = ["审查", "review", "检查", "check", "评估", "evaluate", "质量", "quality"]
+        if any(keyword in message for keyword in sql_review_keywords):
+            # Check for SQL content
+            if "select" in message or "from" in message or "```sql" in message:
+                return "sql_review"
+
+        # Check for data analysis keywords
+        analysis_keywords = ["分析", "analysis", "统计", "statistics", "趋势", "trend", "对比", "compare"]
+        if any(keyword in message for keyword in analysis_keywords):
+            return "data_analysis"
+
+        # Check for smart query keywords
+        smart_query_keywords = ["智能查询", "smart query", "推荐", "recommend", "建议", "suggest"]
+        if any(keyword in message for keyword in smart_query_keywords):
+            return "smart_query"
+
+        # Check for deep analysis keywords
+        deep_analysis_keywords = ["深度分析", "deep analysis", "深入研究", "detailed analysis"]
+        if any(keyword in message for keyword in deep_analysis_keywords):
+            return "deep_analysis"
+
+        # Default to text2sql for SQL-related queries
+        sql_keywords = ["select", "insert", "update", "delete", "create", "alter", "drop"]
+        if any(keyword in message for keyword in sql_keywords):
+            return "text2sql"
+
+        # Default fallback
+        return "data_analysis"
 
         # Execute preflight tools if required (for sql_review tasks)
         if hasattr(self, "workflow") and self.workflow:
@@ -1453,6 +1381,10 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     )
                     # Enable caching and batching for preflight
                     self.plan_hooks.enable_query_caching = True
+                    # Set execution event manager if available
+                    if hasattr(self, "execution_event_manager") and self.execution_event_manager:
+                        execution_id = f"preflight_{int(time.time() * 1000)}"
+                        self.plan_hooks.set_execution_event_manager(self.execution_event_manager, execution_id)
                     self.plan_hooks.enable_batch_processing = True
 
             try:
@@ -1510,6 +1442,10 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 model=self.model,  # Pass model for LLM reasoning fallback
                 auto_injected_knowledge=auto_injected_knowledge,
             )
+            # Set execution event manager if available
+            if hasattr(self, "execution_event_manager") and self.execution_event_manager:
+                execution_id = f"plan_mode_{int(time.time() * 1000)}"
+                self.plan_hooks.set_execution_event_manager(self.execution_event_manager, execution_id)
 
         # Create initial action
         action_type = "plan_mode_interaction" if is_plan_mode else "chat_interaction"
