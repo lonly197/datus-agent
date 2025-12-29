@@ -589,30 +589,26 @@ class ChatAgenticNode(GenSQLAgenticNode):
         return task_text.strip()
 
     def _parse_table_names_from_sql(self, sql: str) -> list:
-        """Parse table names from SQL query."""
+        """Parse table names from SQL query using sqlglot."""
         import re
 
-        import sqlparse
+        import sqlglot
+        from sqlglot import exp
 
         try:
-            # Use sqlparse to extract table names
-            parsed = sqlparse.parse(sql)[0]
+            # Use sqlglot to extract table names (sqlglot is already a dependency)
+            parsed = sqlglot.parse_one(sql)
             tables = []
 
-            for token in parsed.flatten():
-                if token.ttype is None and token.value.upper() in ["FROM", "JOIN", "INTO", "UPDATE"]:
-                    # Find the next identifier token
-                    next_token = parsed.token_next(token)
-                    while next_token and (
-                        next_token.ttype in (sqlparse.tokens.Whitespace, sqlparse.tokens.Punctuation)
-                        or next_token.value.upper() in ["SELECT", "WHERE", "GROUP", "ORDER", "HAVING"]
-                    ):
-                        next_token = parsed.token_next(next_token)
-
-                    if next_token and not next_token.ttype:
-                        table_name = next_token.value.strip("`").split(".")[-1]  # Get last part after dots
-                        if table_name and table_name not in tables:
-                            tables.append(table_name)
+            for table in parsed.find_all(exp.Table):
+                # Get the table name - sqlglot stores this in the table object
+                # For simple table names, table.name works directly
+                # For qualified names (schema.table), we need to get the last part
+                if hasattr(table, "name") and table.name:
+                    # Remove backticks and get the last part for qualified names
+                    table_name = table.name.replace("`", "").split(".")[-1].strip()
+                    if table_name and table_name not in tables:
+                        tables.append(table_name)
 
             return tables
 
