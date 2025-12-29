@@ -261,10 +261,56 @@ class DatusAPIService:
             logger.warning(f"Failed to parse CSV data: {e}")
             return []
 
-    def _generate_task_id(self, client_id: str) -> str:
-        """Generate task ID using client_id and timestamp."""
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    def _generate_task_id(self, client_id: str, prefix: str = "") -> str:
+        """Generate task ID using client_id, optional prefix and timestamp."""
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        if prefix:
+            return f"{prefix}_{client_id}_{timestamp}"
         return f"{client_id}_{timestamp}"
+
+    async def _validate_task_id_uniqueness(self, task_id: str, current_client: str) -> None:
+        """Validate that the task_id is unique for the current client.
+
+        Raises:
+            HTTPException: If task_id already exists for this client
+        """
+        # Check running tasks
+        running_task = await self.get_running_task(task_id)
+        if running_task:
+            # Check if it's owned by the same client
+            task_client = running_task.meta.get("client") if running_task.meta else None
+            if task_client == current_client:
+                raise HTTPException(
+                    status_code=409, detail=f"Task {task_id} already exists and is running for client {current_client}"
+                )
+            else:
+                raise HTTPException(status_code=409, detail=f"Task {task_id} already exists for different client")
+
+        # Check completed tasks in database (last 24 hours)
+        if self.task_store:
+            task_data = self.task_store.get_task(task_id)
+            if task_data:
+                # Check if task was created by same client recently
+                task_client = task_data.get("client")
+                if task_client == current_client:
+                    created_at = task_data.get("created_at")
+                    if created_at:
+                        # Convert to timestamp if needed
+                        if isinstance(created_at, str):
+                            try:
+                                created_ts = datetime.fromisoformat(created_at.replace("Z", "+00:00")).timestamp()
+                            except (ValueError, TypeError):
+                                created_ts = 0
+                        else:
+                            created_ts = created_at
+
+                        # Check if task was created within last 24 hours
+                        cutoff_time = datetime.now().timestamp() - (24 * 60 * 60)
+                        if created_ts > cutoff_time:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=f"Task {task_id} was recently executed by client {current_client}. Please use a different task_id.",
+                            )
 
     def get_agent(self, namespace: str) -> Agent:
         """Get or create an agent for the specified namespace."""
@@ -1176,6 +1222,17 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
         try:
             logger.info(f"Workflow request from client: {current_client}, mode: {req.mode}")
 
+            # Generate or validate task_id (use frontend messageId if provided)
+            if req.task_id:
+                # Validate uniqueness for frontend-provided task_id
+                await service._validate_task_id_uniqueness(req.task_id, current_client)
+                task_id = req.task_id
+                logger.info(f"Using frontend-provided task_id: {task_id}")
+            else:
+                # Generate new task_id if not provided
+                task_id = service._generate_task_id(current_client)
+                logger.info(f"Generated new task_id: {task_id}")
+
             # Check if client accepts server-sent events for async mode
             if req.mode == Mode.ASYNC:
                 accept_header = request.headers.get("accept", "")
@@ -1185,7 +1242,6 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
                     )
 
                 # Create and register the streaming task
-                task_id = req.task_id or service._generate_task_id(current_client)
                 stream_task = asyncio.create_task(service._run_streaming_workflow_task(req, current_client, task_id))
                 await service.register_running_task(
                     task_id,
@@ -1205,7 +1261,6 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
                 )
             else:
                 # Synchronous mode - run in background task for cancellation support
-                task_id = req.task_id or service._generate_task_id(current_client)
                 sync_task = asyncio.create_task(service._run_sync_workflow_task(req, current_client, task_id))
                 await service.register_running_task(
                     task_id,
@@ -1238,8 +1293,18 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
             if "text/event-stream" not in accept_header:
                 raise HTTPException(status_code=400, detail="Accept header must include 'text/event-stream'")
 
+            # Generate or validate task_id (use frontend messageId if provided)
+            if req.task_id:
+                # Validate uniqueness for frontend-provided task_id
+                await service._validate_task_id_uniqueness(req.task_id, current_client)
+                task_id = req.task_id
+                logger.info(f"Using frontend-provided task_id: {task_id}")
+            else:
+                # Generate new task_id if not provided
+                task_id = service._generate_task_id(current_client, "research")
+                logger.info(f"Generated new task_id: {task_id}")
+
             # Create and register the streaming task
-            task_id = f"research_{current_client}_{int(time.time())}"
             stream_task = asyncio.create_task(service._run_chat_research_task(req, current_client, task_id))
             await service.register_running_task(
                 task_id,

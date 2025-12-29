@@ -68,6 +68,15 @@ class TokenResponse(BaseModel):
     expires_in: int = Field(..., description="Token expiration time in seconds")
 
 
+class TaskStartResponse(BaseModel):
+    """Response model for task start confirmation."""
+
+    task_id: str = Field(..., description="Confirmed task ID")
+    status: str = Field("accepted", description="Task acceptance status")
+    message: str = Field(..., description="Confirmation message")
+    estimated_start_time: Optional[str] = Field(None, description="Estimated start time")
+
+
 class FeedbackStatus(str, Enum):
     """Feedback status enum."""
 
@@ -95,6 +104,7 @@ class ChatResearchRequest(BaseModel):
 
     namespace: str = Field(..., description="Database namespace")
     task: str = Field(..., description="Natural language task description")
+    task_id: Optional[str] = Field(None, description="Custom task ID for idempotency (frontend messageId)")
     catalog_name: Optional[str] = Field(None, description="Catalog name")
     database_name: Optional[str] = Field(None, description="Database name")
     schema_name: Optional[str] = Field(None, description="Schema name")

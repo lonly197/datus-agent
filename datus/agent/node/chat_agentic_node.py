@@ -18,10 +18,10 @@ from datus.api.models import (
     DeepResearchEventType,
     ErrorEvent,
     PlanUpdateEvent,
-    ToolCallEvent,
-    ToolCallResultEvent,
     TodoItem,
     TodoStatus,
+    ToolCallEvent,
+    ToolCallResultEvent,
 )
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
@@ -53,19 +53,11 @@ class ExecutionStatus:
 
     def add_tool_execution(self, tool_name: str, success: bool):
         """Add tool execution record."""
-        self.tools_executed.append({
-            "tool": tool_name,
-            "success": success,
-            "timestamp": time.time()
-        })
+        self.tools_executed.append({"tool": tool_name, "success": success, "timestamp": time.time()})
 
     def add_error(self, error_type: str, error_msg: str):
         """Add error record."""
-        self.errors_encountered.append({
-            "type": error_type,
-            "message": error_msg,
-            "timestamp": time.time()
-        })
+        self.errors_encountered.append({"type": error_type, "message": error_msg, "timestamp": time.time()})
 
 
 class ChatAgenticNode(GenSQLAgenticNode):
@@ -123,29 +115,27 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
     async def _send_preflight_plan_update(self, workflow, tool_sequence):
         """发送预检执行计划"""
-        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+        if not hasattr(self, "emit_queue") or not self.emit_queue:
             return
 
         todos = []
         for i, tool_name in enumerate(tool_sequence):
-            todos.append(TodoItem(
-                id=f"preflight_{tool_name}_{i}",
-                content=f"执行预检工具: {tool_name}",
-                status=TodoStatus.PENDING
-            ))
+            todos.append(
+                TodoItem(id=f"preflight_{tool_name}_{i}", content=f"执行预检工具: {tool_name}", status=TodoStatus.PENDING)
+            )
 
         plan_event = PlanUpdateEvent(
             id=f"plan_preflight_{int(time.time() * 1000)}",
             timestamp=int(time.time() * 1000),
             event=DeepResearchEventType.PLAN_UPDATE,
-            todos=todos
+            todos=todos,
         )
 
         await self.emit_queue.put(plan_event)
 
     async def _send_tool_call_event(self, tool_name, tool_call_id, input_data):
         """发送工具调用事件"""
-        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+        if not hasattr(self, "emit_queue") or not self.emit_queue:
             return
 
         call_event = ToolCallEvent(
@@ -154,14 +144,14 @@ class ChatAgenticNode(GenSQLAgenticNode):
             event=DeepResearchEventType.TOOL_CALL,
             toolCallId=tool_call_id,
             toolName=tool_name,
-            input=input_data
+            input=input_data,
         )
 
         await self.emit_queue.put(call_event)
 
     async def _send_tool_call_result_event(self, tool_call_id, result, execution_time, cache_hit):
         """发送工具调用结果事件"""
-        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+        if not hasattr(self, "emit_queue") or not self.emit_queue:
             return
 
         result_event = ToolCallResultEvent(
@@ -169,65 +159,57 @@ class ChatAgenticNode(GenSQLAgenticNode):
             timestamp=int(time.time() * 1000),
             event=DeepResearchEventType.TOOL_CALL_RESULT,
             toolCallId=tool_call_id,
-            data={
-                **result,
-                "execution_time": execution_time,
-                "cache_hit": cache_hit
-            },
-            error=not result.get("success", False)
+            data={**result, "execution_time": execution_time, "cache_hit": cache_hit},
+            error=not result.get("success", False),
         )
 
         await self.emit_queue.put(result_event)
 
     async def _update_preflight_plan_status(self, workflow, tool_name, success):
         """更新预检计划状态"""
-        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+        if not hasattr(self, "emit_queue") or not self.emit_queue:
             return
 
         # 查找对应的todo项并更新状态
         todo_id = f"preflight_{tool_name}_0"  # 简化处理，实际需要更精确的匹配
         status = TodoStatus.COMPLETED if success else TodoStatus.ERROR
 
-        todo = TodoItem(
-            id=todo_id,
-            content=f"执行预检工具: {tool_name}",
-            status=status
-        )
+        todo = TodoItem(id=todo_id, content=f"执行预检工具: {tool_name}", status=status)
 
         update_event = PlanUpdateEvent(
             id=f"plan_update_{tool_name}_{int(time.time() * 1000)}",
             planId=todo_id,
             timestamp=int(time.time() * 1000),
             event=DeepResearchEventType.PLAN_UPDATE,
-            todos=[todo]
+            todos=[todo],
         )
 
         await self.emit_queue.put(update_event)
 
     async def _send_syntax_error_event(self, sql_query, error):
         """发送SQL语法错误事件"""
-        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+        if not hasattr(self, "emit_queue") or not self.emit_queue:
             return
 
         error_event = ErrorEvent(
             id=f"syntax_error_{int(time.time() * 1000)}",
             timestamp=int(time.time() * 1000),
             event=DeepResearchEventType.ERROR,
-            error=f"SQL语法错误: {error}"
+            error=f"SQL语法错误: {error}",
         )
 
         await self.emit_queue.put(error_event)
 
     async def _send_db_connection_error_event(self, sql_query, error):
         """发送数据库连接错误事件"""
-        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+        if not hasattr(self, "emit_queue") or not self.emit_queue:
             return
 
         error_event = ErrorEvent(
             id=f"db_error_{int(time.time() * 1000)}",
             timestamp=int(time.time() * 1000),
             event=DeepResearchEventType.ERROR,
-            error=f"数据库连接错误: {error}"
+            error=f"数据库连接错误: {error}",
         )
 
         await self.emit_queue.put(error_event)
@@ -589,7 +571,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         "catalog": catalog,
                         "database": database,
                         "schema": schema,
-                    }
+                    },
                 )
 
                 # Create action for tool execution
@@ -627,10 +609,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
                 # 发送工具调用结果事件
                 await self._send_tool_call_result_event(
-                    tool_call_id=tool_call_id,
-                    result=result,
-                    execution_time=execution_time,
-                    cache_hit=cache_hit
+                    tool_call_id=tool_call_id, result=result, execution_time=execution_time, cache_hit=cache_hit
                 )
 
                 # 更新执行计划状态
@@ -694,7 +673,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     tool_call_id=tool_call_id,
                     result={"success": False, "error": str(e)},
                     execution_time=execution_time,
-                    cache_hit=False
+                    cache_hit=False,
                 )
 
                 # 更新执行计划状态为失败

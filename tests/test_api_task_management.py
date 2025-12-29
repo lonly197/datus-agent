@@ -5,6 +5,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from datus.api.models import ChatResearchRequest, RunWorkflowRequest
 from datus.api.service import DatusAPIService, RunningTask
@@ -119,3 +120,67 @@ class TestTaskManagement:
             task.result()
         except asyncio.CancelledError:
             pass
+
+    @pytest.mark.asyncio
+    async def test_frontend_task_id_support(self, service):
+        """Test that frontend can specify task_id via messageId."""
+
+        # Test task_id validation - should pass for new task_id
+        try:
+            await service._validate_task_id_uniqueness("frontend_msg_123", "test_client")
+        except Exception:
+            pytest.fail("Validation should pass for new task_id")
+
+        # Test task_id validation - should fail for duplicate task_id
+        # First register a task with the same ID
+        task = asyncio.create_task(asyncio.sleep(1))
+        await service.register_running_task("frontend_msg_123", task, {"client": "test_client"})
+
+        # Now validation should fail
+        with pytest.raises(HTTPException) as exc_info:
+            await service._validate_task_id_uniqueness("frontend_msg_123", "test_client")
+
+        assert exc_info.value.status_code == 409
+        assert "already exists and is running" in str(exc_info.value.detail)
+
+        # Clean up
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await service.unregister_running_task("frontend_msg_123")
+
+    @pytest.mark.asyncio
+    async def test_task_id_conflict_detection(self, service):
+        """Test that duplicate task_ids are rejected."""
+
+        # Test with different clients - should fail
+        task = asyncio.create_task(asyncio.sleep(1))
+        await service.register_running_task("duplicate_id", task, {"client": "client1"})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service._validate_task_id_uniqueness("duplicate_id", "client2")
+
+        assert exc_info.value.status_code == 409
+        assert "already exists for different client" in str(exc_info.value.detail)
+
+        # Clean up
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await service.unregister_running_task("duplicate_id")
+
+    def test_generate_task_id_with_prefix(self, service):
+        """Test task ID generation with prefix."""
+
+        task_id = service._generate_task_id("test_client", "research")
+        assert task_id.startswith("research_test_client_")
+        assert len(task_id) > len("research_test_client_")
+
+        # Test without prefix
+        task_id_no_prefix = service._generate_task_id("test_client")
+        assert task_id_no_prefix.startswith("test_client_")
+        assert len(task_id_no_prefix) > len("test_client_")
