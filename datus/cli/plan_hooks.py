@@ -1385,6 +1385,8 @@ class PlanModeHooks(AgentHooks):
             logger.warning(f"No LLM model available for reasoning on todo {item.id}")
             return None
 
+        logger.info(f"LLM reasoning: model available, type: {type(self.model)}")
+
         try:
             # Get recent context (last 5 actions for relevance)
             context_actions = []
@@ -1418,9 +1420,24 @@ Context (recent actions):
 Provide your reasoning and any recommendations. If this requires tool calls, you can suggest them in your response."""
 
             # Execute LLM reasoning
-            response = await asyncio.to_thread(
-                self.model.generate, prompt, max_tokens=500, temperature=0.3
-            )
+            logger.info(f"LLM reasoning: calling model.generate for todo {item.id}")
+            try:
+                response = await asyncio.to_thread(
+                    self.model.generate, prompt, max_tokens=500, temperature=0.3
+                )
+                logger.info(f"LLM reasoning: model.generate returned for todo {item.id}, response type: {type(response)}")
+            except Exception as e:
+                logger.error(f"LLM reasoning: model.generate failed for todo {item.id}: {e}")
+                return None
+
+            if response:
+                logger.info(f"LLM reasoning: response has content attr: {hasattr(response, 'content')}")
+                if hasattr(response, 'content'):
+                    logger.info(f"LLM reasoning: content length: {len(response.content) if response.content else 0}")
+                else:
+                    logger.info(f"LLM reasoning: response attrs: {[attr for attr in dir(response) if not attr.startswith('_')]}")
+            else:
+                logger.warning(f"LLM reasoning: response is None for todo {item.id}")
 
             if response and hasattr(response, 'content'):
                 reasoning_result = {
@@ -2484,14 +2501,22 @@ Respond with only the tool name, nothing else."""
                                 # Execute LLM reasoning
                                 logger.info(f"Server executor: executing LLM reasoning for todo {item.id} (execution_router)")
                                 reasoning_result = await self._execute_llm_reasoning(item)
+                                executed_any = True  # Always mark as executed to avoid infinite loop
                                 if reasoning_result:
-                                    executed_any = True
                                     # Mark as completed
                                     try:
                                         plan_tool._update_todo_status(item.id, "completed")
                                         await self._emit_plan_update_event(item.id, "completed")
+                                        logger.info(f"Server executor: LLM reasoning completed for todo {item.id}")
                                     except Exception as e:
                                         logger.error(f"Failed to mark LLM analysis task as completed {item.id}: {e}")
+                                else:
+                                    logger.warning(f"Server executor: LLM reasoning failed for todo {item.id}, marking as failed")
+                                    try:
+                                        plan_tool._update_todo_status(item.id, "failed")
+                                        await self._emit_plan_update_event(item.id, "failed")
+                                    except Exception as e:
+                                        logger.error(f"Failed to mark LLM analysis task as failed {item.id}: {e}")
                             elif action == "execute_tool":
                                 # Execute tool call through existing logic
                                 logger.info(f"Server executor: executing tool for todo {item.id} (execution_router)")
@@ -3380,14 +3405,22 @@ Respond with only the tool name, nothing else."""
                                 # Execute LLM reasoning
                                 logger.info(f"Server executor: executing LLM reasoning for todo {item.id} (smart routing)")
                                 reasoning_result = await self._execute_llm_reasoning(item)
+                                executed_any = True  # Always mark as executed to avoid infinite loop
                                 if reasoning_result:
-                                    executed_any = True
                                     # Mark as completed
                                     try:
                                         plan_tool._update_todo_status(item.id, "completed")
                                         await self._emit_plan_update_event(item.id, "completed")
+                                        logger.info(f"Server executor: LLM reasoning completed for todo {item.id}")
                                     except Exception as e:
                                         logger.error(f"Failed to mark LLM analysis task as completed {item.id}: {e}")
+                                else:
+                                    logger.warning(f"Server executor: LLM reasoning failed for todo {item.id}, marking as failed")
+                                    try:
+                                        plan_tool._update_todo_status(item.id, "failed")
+                                        await self._emit_plan_update_event(item.id, "failed")
+                                    except Exception as e:
+                                        logger.error(f"Failed to mark LLM analysis task as failed {item.id}: {e}")
 
                             elif action == "execute_tool":
                                 # Execute tool call through existing logic
