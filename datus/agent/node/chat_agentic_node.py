@@ -292,7 +292,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
         self._setup_filesystem_tools()
         self._rebuild_tools()
 
-    async def run_preflight_tools(self, workflow, action_history_manager: ActionHistoryManager) -> bool:
+    async def run_preflight_tools(
+        self, workflow, action_history_manager: ActionHistoryManager
+    ) -> AsyncGenerator[ActionHistory, None]:
         """
         Execute required preflight tools before main LLM processing.
 
@@ -300,15 +302,65 @@ class ChatAgenticNode(GenSQLAgenticNode):
             workflow: The workflow instance
             action_history_manager: Action history manager for logging
 
-        Returns:
-            bool: True if all required tools executed successfully, False otherwise
+        Yields:
+            ActionHistory: Actions generated during preflight execution
+
+        Raises:
+            ValueError: If SQL syntax validation fails
         """
         required_tools = workflow.metadata.get("required_tool_sequence", [])
         if not required_tools:
             logger.debug("No required tool sequence specified, skipping preflight")
-            return True
+            return
 
         logger.info(f"Starting preflight tool execution: {required_tools}")
+
+        # ========== SQL Syntax Validation Check ==========
+        # Extract and validate SQL syntax BEFORE executing any tools
+        task = workflow.task
+        sql_query = self._extract_sql_from_task(task.task)
+
+        # Perform syntax validation
+        is_valid, error_message = self._validate_sql_syntax(sql_query, task.task)
+
+        if not is_valid:
+            # Create error action for syntax validation failure
+            error_action = ActionHistory.create_action(
+                role=ActionRole.SYSTEM,
+                action_type="sql_syntax_validation",
+                messages=f"SQL syntax validation failed: {error_message}",
+                input_data={
+                    "sql_query": sql_query,
+                    "task": task.task,
+                },
+                output={
+                    "success": False,
+                    "error": error_message,
+                    "error_type": "sql_syntax_error",
+                },
+                status=ActionStatus.FAILED,
+            )
+            action_history_manager.add_action(error_action)
+            yield error_action
+
+            # Create workflow completion action with FAILED status
+            complete_action = ActionHistory.create_action(
+                role=ActionRole.SYSTEM,
+                action_type="workflow_completion",
+                messages=f"Task terminated: {error_message}",
+                input={"source": "sql_syntax_validation"},
+                output={"reason": "sql_syntax_error", "error": error_message},
+                status=ActionStatus.FAILED,
+            )
+            action_history_manager.add_action(complete_action)
+            yield complete_action
+
+            # Log termination
+            logger.error(f"SQL syntax validation failed, terminating task: {error_message}")
+
+            # Raise exception to terminate execution
+            raise ValueError(f"SQL syntax error: {error_message}")
+        # ========== END SQL Syntax Validation Check ==========
 
         # Start preflight monitoring if available
         execution_id = f"preflight_{id(workflow)}"
@@ -316,13 +368,11 @@ class ChatAgenticNode(GenSQLAgenticNode):
             self.plan_hooks.monitor.start_preflight(execution_id, required_tools)
 
         # Extract task information for tool parameters
-        task = workflow.task
         catalog = task.catalog_name or ""
         database = task.database_name or ""
         schema = task.schema_name or ""
 
         # Parse SQL to extract table names for tool calls
-        sql_query = self._extract_sql_from_task(task.task)
         table_names = self._parse_table_names_from_sql(sql_query)
 
         all_success = True
@@ -618,6 +668,98 @@ class ChatAgenticNode(GenSQLAgenticNode):
             table_matches = re.findall(r"\bFROM\s+(\w+)", sql, re.IGNORECASE)
             return list(set(table_matches))
 
+    def _validate_sql_syntax(self, sql: str, task_text: str) -> tuple[bool, Optional[str]]:
+        """Validate SQL syntax using sqlglot.
+
+        Args:
+            sql: Extracted SQL query to validate
+            task_text: Original task text for error context
+
+        Returns:
+            (is_valid, error_message): Tuple where is_valid is True if SQL is valid,
+                                      error_message contains Chinese error description if invalid
+        """
+        import sqlglot
+
+        from datus.utils.sql_utils import parse_read_dialect
+
+        if not sql or not sql.strip():
+            return False, "SQL语法错误：未找到SQL语句"
+
+        # Get database dialect from agent config
+        try:
+            dialect = parse_read_dialect(self.agent_config.db_type)
+        except Exception:
+            dialect = "starrocks"  # Default fallback
+
+        try:
+            # Try to parse the SQL with error detection
+            # Use error_level=RAISE to immediately catch syntax errors
+            parsed = sqlglot.parse_one(sql.strip(), read=dialect, error_level=sqlglot.ErrorLevel.RAISE)
+
+            # Additional validation: check for common SQL structure issues
+            # Convert to string and re-parse to catch any hidden issues
+            sql_str = str(parsed)
+            sqlglot.parse_one(sql_str, read=dialect, error_level=sqlglot.ErrorLevel.RAISE)
+
+            return True, None
+
+        except Exception as e:
+            # Extract meaningful error information
+            error_desc = str(e)
+            logger.warning(f"SQL syntax error detected: {error_desc}")
+
+            # Generate user-friendly Chinese error message
+            error_message = self._generate_sql_error_message(error_desc, sql)
+            return False, error_message
+
+    def _generate_sql_error_message(self, error_desc: str, sql: str) -> str:
+        """Generate user-friendly Chinese error message from sqlglot error description.
+
+        Args:
+            error_desc: Raw error description from sqlglot
+            sql: Original SQL that failed validation
+
+        Returns:
+            Chinese error message suitable for user display
+        """
+        import re
+
+        error_lower = error_desc.lower()
+
+        # Common error patterns with Chinese translations
+        error_patterns = [
+            (r"unexpected.*FROM", "SQL语法错误：缺少FROM子句"),
+            (r"unexpected.*SELECT", "SQL语法错误：SELECT关键字位置错误"),
+            (r"unexpected.*WHERE", "SQL语法错误：WHERE子句语法错误"),
+            (r"unexpected.*JOIN", "SQL语法错误：JOIN连接语法错误"),
+            (r"unexpected.*GROUP BY", "SQL语法错误：GROUP BY语法错误"),
+            (r"unexpected.*ORDER BY", "SQL语法错误：ORDER BY语法错误"),
+            (r"mismatched parentheses", "SQL语法错误：括号不匹配"),
+            (r"unexpected.*\)", "SQL语法错误：多余的右括号"),
+            (r"unexpected.*\(", "SQL语法错误：多余的左括号"),
+            (r"unexpected end", "SQL语法错误：语句不完整"),
+            (r"expected.*,", "SQL语法错误：缺少逗号分隔符"),
+            (r"unexpected.*,", "SQL语法错误：多余的逗号"),
+            (r"identifier.*too long", "SQL语法错误：标识符过长"),
+            (r"invalid identifier", "SQL语法错误：无效的标识符"),
+            (r"unknown column", "SQL语法错误：未知列名"),
+            (r"unknown table", "SQL语法错误：未知表名"),
+        ]
+
+        for pattern, message in error_patterns:
+            if re.search(pattern, error_lower, re.IGNORECASE):
+                return message
+
+        # Default generic error
+        # Try to extract specific error type
+        if "syntax" in error_lower:
+            return "SQL语法错误：语法不正确"
+        elif "parse" in error_lower:
+            return "SQL语法错误：解析失败"
+        else:
+            return "SQL语法错误：无法解析SQL语句"
+
     def _inject_tool_result_into_context(self, workflow, tool_name: str, result: dict):
         """Inject tool results into workflow context for LLM access."""
         if not result.get("success", False):
@@ -724,9 +866,26 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     self.plan_hooks.enable_query_caching = True
                     self.plan_hooks.enable_batch_processing = True
 
-            preflight_success = await self.run_preflight_tools(self.workflow, action_history_manager)
-            if not preflight_success:
-                logger.warning("Some preflight tools failed, but continuing with execution")
+            try:
+                # Execute preflight tools (now a generator that may yield error actions)
+                async for preflight_action in self.run_preflight_tools(self.workflow, action_history_manager):
+                    yield preflight_action
+
+                    # Check if this is a validation failure that should terminate execution
+                    if (
+                        preflight_action.action_type == "sql_syntax_validation"
+                        and preflight_action.status == ActionStatus.FAILED
+                    ):
+                        # Stop execution - validation failed
+                        logger.info("SQL syntax validation failed, terminating execution")
+                        return
+
+            except ValueError as e:
+                # SQL syntax validation failed, already yielded error actions
+                logger.info(f"Preflight terminated due to validation error: {e}")
+                return
+            except Exception as e:
+                logger.warning(f"Preflight execution error: {e}")
 
         is_plan_mode = getattr(user_input, "plan_mode", False)
         # emit_queue used to stream ActionHistory produced by PlanModeHooks back to node stream
