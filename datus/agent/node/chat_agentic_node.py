@@ -9,6 +9,7 @@ This module provides a concrete implementation of GenSQLAgenticNode specifically
 designed for chat interactions with database and filesystem tool support.
 """
 import asyncio
+import time
 from typing import AsyncGenerator, Optional, override
 
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
@@ -16,6 +17,7 @@ from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.chat_agentic_node_models import ChatNodeInput, ChatNodeResult
+from datus.schemas.node_models import SQLContext
 from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool import ContextSearchTools, DBFuncTool
 from datus.utils.loggings import get_logger
@@ -290,6 +292,390 @@ class ChatAgenticNode(GenSQLAgenticNode):
         self._setup_filesystem_tools()
         self._rebuild_tools()
 
+    async def run_preflight_tools(self, workflow, action_history_manager: ActionHistoryManager) -> bool:
+        """
+        Execute required preflight tools before main LLM processing.
+
+        Args:
+            workflow: The workflow instance
+            action_history_manager: Action history manager for logging
+
+        Returns:
+            bool: True if all required tools executed successfully, False otherwise
+        """
+        required_tools = workflow.metadata.get("required_tool_sequence", [])
+        if not required_tools:
+            logger.debug("No required tool sequence specified, skipping preflight")
+            return True
+
+        logger.info(f"Starting preflight tool execution: {required_tools}")
+
+        # Start preflight monitoring if available
+        execution_id = f"preflight_{id(workflow)}"
+        if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
+            self.plan_hooks.monitor.start_preflight(execution_id, required_tools)
+
+        # Extract task information for tool parameters
+        task = workflow.task
+        catalog = task.catalog_name or ""
+        database = task.database_name or ""
+        schema = task.schema_name or ""
+
+        # Parse SQL to extract table names for tool calls
+        sql_query = self._extract_sql_from_task(task.task)
+        table_names = self._parse_table_names_from_sql(sql_query)
+
+        all_success = True
+        tool_results = {}
+
+        for tool_name in required_tools:
+            start_time = time.time()
+            cache_hit = False
+
+            try:
+                logger.info(f"Executing preflight tool: {tool_name}")
+
+                # Create action for tool execution
+                tool_action = ActionHistory.create_action(
+                    role=ActionRole.TOOL,
+                    action_type=f"preflight_{tool_name}",
+                    messages=f"Executing preflight tool: {tool_name}",
+                    input_data={
+                        "tool_name": tool_name,
+                        "sql_query": sql_query,
+                        "table_names": table_names,
+                        "catalog": catalog,
+                        "database": database,
+                        "schema": schema,
+                    },
+                    status=ActionStatus.PROCESSING,
+                )
+                action_history_manager.add_action(tool_action)
+
+                # Execute the specific tool
+                result = await self._execute_preflight_tool(
+                    tool_name, sql_query, table_names, catalog, database, schema
+                )
+
+                execution_time = time.time() - start_time
+
+                # Check if this was a cache hit
+                cache_hit = result.get("cached", False)
+
+                # Update action with result
+                success = result.get("success", False)
+                tool_action.status = ActionStatus.SUCCESS if success else ActionStatus.FAILED
+                tool_action.output_data = result
+                tool_action.messages = f"Preflight tool {tool_name}: {'SUCCESS' if success else 'FAILED'}"
+
+                # Record in monitor
+                if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
+                    self.plan_hooks.monitor.record_preflight_tool_call(
+                        execution_id,
+                        tool_name,
+                        success,
+                        cache_hit,
+                        execution_time,
+                        result.get("error") if not success else None,
+                    )
+
+                # Store result for context injection
+                tool_results[tool_name] = result
+
+                # Inject results into workflow context
+                self._inject_tool_result_into_context(workflow, tool_name, result)
+
+                if not success:
+                    logger.warning(f"Preflight tool {tool_name} failed: {result.get('error', 'Unknown error')}")
+                    all_success = False
+
+            except Exception as e:
+                execution_time = time.time() - start_time
+                logger.error(f"Preflight tool {tool_name} execution error: {e}")
+                all_success = False
+
+                # Record error in monitor
+                if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
+                    self.plan_hooks.monitor.record_preflight_tool_call(
+                        execution_id, tool_name, False, False, execution_time, str(e)
+                    )
+
+                # Update action with error
+                if "tool_action" in locals():
+                    tool_action.status = ActionStatus.FAILED
+                    tool_action.output_data = {"success": False, "error": str(e)}
+                    tool_action.messages = f"Preflight tool {tool_name} failed: {str(e)}"
+
+        # End preflight monitoring
+        preflight_summary = {}
+        if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
+            preflight_summary = self.plan_hooks.monitor.end_preflight(execution_id)
+
+            # Generate fail-safe report annotation if there were failures
+            if not all_success:
+                fail_safe_annotation = self.plan_hooks.monitor.generate_fail_safe_report_annotation(execution_id)
+                if fail_safe_annotation:
+                    # Store annotation in workflow for later use in report generation
+                    workflow.metadata["fail_safe_annotation"] = fail_safe_annotation
+                    logger.info("Generated fail-safe report annotation due to preflight tool failures")
+
+        logger.info(f"Preflight tool execution completed: {'SUCCESS' if all_success else 'PARTIAL_SUCCESS'}")
+        if preflight_summary:
+            logger.info(f"Preflight summary: {preflight_summary}")
+        return all_success
+
+    async def _execute_preflight_tool(
+        self, tool_name: str, sql_query: str, table_names: list, catalog: str, database: str, schema: str
+    ) -> dict:
+        """Execute a specific preflight tool with caching and batch support."""
+        try:
+            # Check cache first for cacheable operations
+            cache_key_params = {"catalog": catalog, "database": database, "schema": schema}
+
+            if tool_name == "describe_table" and table_names:
+                # Check cache first
+                table_name = table_names[0]
+                cache_key_params["table_name"] = table_name
+
+                if hasattr(self, "plan_hooks") and self.plan_hooks and self.plan_hooks.enable_query_caching:
+                    cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
+                    if cached_result is not None:
+                        logger.info(f"Cache hit for {tool_name} on table {table_name}")
+                        return cached_result
+
+                # Execute the tool
+                result = self.db_func_tool.describe_table(
+                    table_name=table_name, catalog=catalog, database=database, schema_name=schema
+                )
+                result_dict = (
+                    result.__dict__
+                    if hasattr(result, "__dict__")
+                    else {"success": False, "error": "Invalid result format"}
+                )
+
+                # Cache successful results
+                if (
+                    result_dict.get("success", False)
+                    and hasattr(self, "plan_hooks")
+                    and self.plan_hooks
+                    and self.plan_hooks.enable_query_caching
+                ):
+                    self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
+                    logger.debug(f"Cached result for {tool_name} on table {table_name}")
+
+                return result_dict
+
+            elif tool_name == "search_external_knowledge":
+                # Search for StarRocks SQL review rules
+                query = "StarRocks 3.3 SQL审查规则"
+
+                # Check cache
+                cache_key_params["query_text"] = query
+                cache_key_params["domain"] = "database"
+                cache_key_params["layer1"] = "sql_review"
+                cache_key_params["layer2"] = "starrocks"
+
+                if hasattr(self, "plan_hooks") and self.plan_hooks and self.plan_hooks.enable_query_caching:
+                    cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
+                    if cached_result is not None:
+                        logger.info(f"Cache hit for {tool_name} with query '{query}'")
+                        return cached_result
+
+                result = self.context_search_tools.search_external_knowledge(
+                    query_text=query, domain="database", layer1="sql_review", layer2="starrocks", top_n=5
+                )
+                result_dict = (
+                    result.__dict__
+                    if hasattr(result, "__dict__")
+                    else {"success": False, "error": "Invalid result format"}
+                )
+
+                # Cache successful results
+                if (
+                    result_dict.get("success", False)
+                    and hasattr(self, "plan_hooks")
+                    and self.plan_hooks
+                    and self.plan_hooks.enable_query_caching
+                ):
+                    self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
+
+                return result_dict
+
+            elif tool_name == "read_query" and sql_query:
+                # Check cache for read_query (be careful with dynamic data)
+                cache_key_params["sql_query"] = sql_query[:500]  # Limit key size
+
+                if hasattr(self, "plan_hooks") and self.plan_hooks and self.plan_hooks.enable_query_caching:
+                    cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
+                    if cached_result is not None:
+                        logger.info(f"Cache hit for {tool_name} with SQL query")
+                        return cached_result
+
+                # Execute the SQL query for validation
+                result = self.db_func_tool.read_query(sql=sql_query)
+                result_dict = (
+                    result.__dict__
+                    if hasattr(result, "__dict__")
+                    else {"success": False, "error": "Invalid result format"}
+                )
+
+                # Only cache successful, non-destructive SELECT queries
+                if (
+                    result_dict.get("success", False)
+                    and sql_query.strip().upper().startswith("SELECT")
+                    and hasattr(self, "plan_hooks")
+                    and self.plan_hooks
+                    and self.plan_hooks.enable_query_caching
+                ):
+                    self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
+
+                return result_dict
+
+            elif tool_name == "get_table_ddl" and table_names:
+                # Check cache first
+                table_name = table_names[0]
+                cache_key_params["table_name"] = table_name
+
+                if hasattr(self, "plan_hooks") and self.plan_hooks and self.plan_hooks.enable_query_caching:
+                    cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
+                    if cached_result is not None:
+                        logger.info(f"Cache hit for {tool_name} on table {table_name}")
+                        return cached_result
+
+                # Get DDL for the first table
+                result = self.db_func_tool.get_table_ddl(
+                    table_name=table_name, catalog=catalog, database=database, schema_name=schema
+                )
+                result_dict = (
+                    result.__dict__
+                    if hasattr(result, "__dict__")
+                    else {"success": False, "error": "Invalid result format"}
+                )
+
+                # Cache successful results
+                if (
+                    result_dict.get("success", False)
+                    and hasattr(self, "plan_hooks")
+                    and self.plan_hooks
+                    and self.plan_hooks.enable_query_caching
+                ):
+                    self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
+
+                return result_dict
+
+            else:
+                return {"success": False, "error": f"Unsupported or insufficient data for tool: {tool_name}"}
+
+        except Exception as e:
+            logger.error(f"Error executing preflight tool {tool_name}: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _extract_sql_from_task(self, task_text: str) -> str:
+        """Extract SQL query from task text."""
+        # Simple extraction - look for SQL between triple backticks or SELECT statements
+        import re
+
+        # Try to find SQL in backticks first
+        sql_match = re.search(r"```\s*sql\s*(.*?)\s*```", task_text, re.DOTALL | re.IGNORECASE)
+        if sql_match:
+            return sql_match.group(1).strip()
+
+        # Try to find SELECT statement
+        select_match = re.search(r"(SELECT\s+.*?);", task_text, re.DOTALL | re.IGNORECASE)
+        if select_match:
+            return select_match.group(1).strip()
+
+        # Fallback: return the entire task text
+        return task_text.strip()
+
+    def _parse_table_names_from_sql(self, sql: str) -> list:
+        """Parse table names from SQL query."""
+        import re
+
+        import sqlparse
+
+        try:
+            # Use sqlparse to extract table names
+            parsed = sqlparse.parse(sql)[0]
+            tables = []
+
+            for token in parsed.flatten():
+                if token.ttype is None and token.value.upper() in ["FROM", "JOIN", "INTO", "UPDATE"]:
+                    # Find the next identifier token
+                    next_token = parsed.token_next(token)
+                    while next_token and (
+                        next_token.ttype in (sqlparse.tokens.Whitespace, sqlparse.tokens.Punctuation)
+                        or next_token.value.upper() in ["SELECT", "WHERE", "GROUP", "ORDER", "HAVING"]
+                    ):
+                        next_token = parsed.token_next(next_token)
+
+                    if next_token and not next_token.ttype:
+                        table_name = next_token.value.strip("`").split(".")[-1]  # Get last part after dots
+                        if table_name and table_name not in tables:
+                            tables.append(table_name)
+
+            return tables
+
+        except Exception as e:
+            logger.warning(f"Failed to parse table names from SQL: {e}")
+            # Fallback: simple regex extraction
+            table_matches = re.findall(r"\bFROM\s+(\w+)", sql, re.IGNORECASE)
+            return list(set(table_matches))
+
+    def _inject_tool_result_into_context(self, workflow, tool_name: str, result: dict):
+        """Inject tool results into workflow context for LLM access."""
+        if not result.get("success", False):
+            return
+
+        try:
+            if tool_name == "describe_table":
+                # Add table schema information
+                if "columns" in result:
+                    if not hasattr(workflow.context, "table_schemas") or not workflow.context.table_schemas:
+                        workflow.context.table_schemas = []
+                    # Avoid duplicates
+                    existing_names = [s.get("table_name", "") for s in workflow.context.table_schemas]
+                    if result.get("table_name", "") not in existing_names:
+                        workflow.context.table_schemas.append(result)
+
+            elif tool_name == "search_external_knowledge":
+                # Add external knowledge
+                if "result" in result and isinstance(result["result"], list):
+                    knowledge_text = "\n".join(
+                        [
+                            f"- {item.get('terminology', '')}: {item.get('explanation', '')}"
+                            for item in result["result"]
+                            if item.get("terminology") and item.get("explanation")
+                        ]
+                    )
+                    if knowledge_text:
+                        workflow.task.external_knowledge = (
+                            workflow.task.external_knowledge or ""
+                        ) + f"\n\nStarRocks审查规则:\n{knowledge_text}"
+
+            elif tool_name == "read_query":
+                # Add SQL execution results to context
+                if "result" in result:
+                    sql_context = SQLContext(
+                        sql_query=self._extract_sql_from_task(workflow.task.task),
+                        explanation="Preflight SQL validation result",
+                        sql_return=str(result["result"])[:1000],  # Limit size
+                        row_count=result.get("row_count", 0),
+                    )
+                    workflow.context.sql_contexts.append(sql_context)
+
+            elif tool_name == "get_table_ddl":
+                # Add DDL information to external knowledge
+                if "result" in result and isinstance(result.get("result"), dict):
+                    ddl_info = result["result"].get("definition", "")
+                    if ddl_info:
+                        workflow.task.external_knowledge = (
+                            workflow.task.external_knowledge or ""
+                        ) + f"\n\n表DDL信息:\n```sql\n{ddl_info}\n```"
+
+        except Exception as e:
+            logger.warning(f"Failed to inject tool result into context for {tool_name}: {e}")
+
     async def execute_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None
     ) -> AsyncGenerator[ActionHistory, None]:
@@ -315,6 +701,36 @@ class ChatAgenticNode(GenSQLAgenticNode):
             raise ValueError("Chat input not set. Call setup_input() first or set self.input directly.")
 
         user_input = self.input
+
+        # Execute preflight tools if required (for sql_review tasks)
+        if hasattr(self, "workflow") and self.workflow:
+            # Ensure plan_hooks are available for caching and batching
+            if not hasattr(self, "plan_hooks") or not self.plan_hooks:
+                # Create temporary plan hooks for preflight caching support
+                from rich.console import Console
+
+                from datus.cli.plan_hooks import PlanModeHooks
+
+                console = Console()
+                session = self._get_or_create_session()[0] if hasattr(self, "_get_or_create_session") else None
+                if session:
+                    self.plan_hooks = PlanModeHooks(
+                        console=console,
+                        session=session,
+                        auto_mode=False,
+                        action_history_manager=action_history_manager,
+                        agent_config=self.agent_config,
+                        emit_queue=asyncio.Queue(),
+                        model=None,  # No LLM needed for preflight
+                        auto_injected_knowledge=[],
+                    )
+                    # Enable caching and batching for preflight
+                    self.plan_hooks.enable_query_caching = True
+                    self.plan_hooks.enable_batch_processing = True
+
+            preflight_success = await self.run_preflight_tools(self.workflow, action_history_manager)
+            if not preflight_success:
+                logger.warning("Some preflight tools failed, but continuing with execution")
 
         is_plan_mode = getattr(user_input, "plan_mode", False)
         # emit_queue used to stream ActionHistory produced by PlanModeHooks back to node stream
@@ -403,10 +819,8 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 status=ActionStatus.PROCESSING,
             )
             # Do NOT add the interim assistant generation action to action history or emit it.
-            # We keep a local reference so we can update it later if needed, but avoid persisting
-            # or emitting interim LLM-generated actions as final ChatEvents to prevent duplicates.
-            # (Final response will be produced as a single `chat_response` action below.)
-            _assistant_action_local = assistant_action
+            # We avoid persisting or emitting interim LLM-generated actions as final ChatEvents
+            # to prevent duplicates. (Final response will be produced as a single `chat_response` action below.)
 
             # Determine execution mode and start unified recursive execution
             execution_mode = "plan" if is_plan_mode and self.plan_hooks else "normal"

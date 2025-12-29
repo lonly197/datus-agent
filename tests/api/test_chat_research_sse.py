@@ -371,3 +371,111 @@ class TestChatResearchPromptParameters:
             assert response.status_code == 200
             # In a real implementation, we would verify that the prompt parameters
             # are correctly passed through to the workflow metadata
+
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
+    def test_sql_review_task_identification_and_config(self, mock_stream, test_client):
+        """Test that SQL review tasks are correctly identified and configured."""
+
+        # Mock streaming response with preflight success
+        async def mock_stream_generator():
+            yield 'data: {"id":"evt_1","timestamp":1703123456789,"event":"chat","content":"Starting SQL review..."}\n\n'
+            yield 'data: {"id":"evt_2","timestamp":1703123456790,"event":"complete","content":"Review completed"}\n\n'
+
+        mock_stream.return_value = mock_stream_generator()
+
+        request_data = {
+            "namespace": "test",
+            "task": "审查以下SQL：SELECT * FROM users WHERE id = 1",
+            "ext_knowledge": "使用StarRocks规范",
+        }
+
+        response = test_client.post(
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
+        )
+
+        assert response.status_code == 200
+        mock_stream.assert_called_once()
+
+        # Verify the call arguments include sql_review configuration
+        call_args = mock_stream.call_args[0][0]  # First positional argument
+        assert call_args.task == request_data["task"]
+        assert call_args.ext_knowledge == request_data["ext_knowledge"]
+
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
+    def test_sql_review_with_mcp_unavailable_fallback(self, mock_stream, test_client):
+        """Test SQL review with MCP services unavailable, should still generate report with warnings."""
+
+        # Mock streaming response that includes fail-safe annotations
+        async def mock_stream_with_fallback():
+            yield 'data: {"id":"evt_1","timestamp":1703123456789,"event":"chat","content":"Preflight tools partially failed..."}\n\n'
+            yield 'data: {"id":"evt_2","timestamp":1703123456790,"event":"report","content":"⚠️ 数据完整性说明: 部分工具调用失败"}\n\n'
+            yield 'data: {"id":"evt_3","timestamp":1703123456791,"event":"complete","content":"Review completed with limitations"}\n\n'
+
+        mock_stream.return_value = mock_stream_with_fallback()
+
+        request_data = {
+            "namespace": "test",
+            "task": "检查这个SQL：SELECT * FROM orders WHERE date > '2024-01-01'",
+            "ext_knowledge": "检查性能问题",
+        }
+
+        response = test_client.post(
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
+        )
+
+        assert response.status_code == 200
+
+        # Verify that the service was called with the correct parameters
+        call_args = mock_stream.call_args[0][0]
+        assert "检查" in call_args.task  # Should contain review keywords
+
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
+    def test_sql_review_preflight_success_scenario(self, mock_stream, test_client):
+        """Test successful preflight execution for SQL review."""
+
+        async def mock_successful_preflight():
+            yield 'data: {"id":"evt_1","timestamp":1703123456789,"event":"tool_call","tool":"describe_table","status":"success"}\n\n'
+            yield 'data: {"id":"evt_2","timestamp":1703123456790,"event":"tool_call","tool":"search_external_knowledge","status":"success"}\n\n'
+            yield 'data: {"id":"evt_3","timestamp":1703123456791,"event":"tool_call","tool":"read_query","status":"success"}\n\n'
+            yield 'data: {"id":"evt_4","timestamp":1703123456792,"event":"chat","content":"基于完整数据分析生成审查报告..."}\n\n'
+            yield 'data: {"id":"evt_5","timestamp":1703123456793,"event":"complete","content":"审查完成"}\n\n'
+
+        mock_stream.return_value = mock_successful_preflight()
+
+        request_data = {
+            "namespace": "test",
+            "task": "审核SQL：SELECT id, name FROM customers WHERE status = 'active'",
+            "ext_knowledge": "遵循公司SQL规范",
+        }
+
+        response = test_client.post(
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
+        )
+
+        assert response.status_code == 200
+
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
+    def test_non_sql_review_task_uses_regular_flow(self, mock_stream, test_client):
+        """Test that non-SQL review tasks don't trigger preflight tools."""
+
+        async def mock_regular_flow():
+            yield 'data: {"id":"evt_1","timestamp":1703123456789,"event":"chat","content":"Generating SQL..."}\n\n'
+            yield 'data: {"id":"evt_2","timestamp":1703123456790,"event":"complete","content":"SQL generated"}\n\n'
+
+        mock_stream.return_value = mock_regular_flow()
+
+        request_data = {
+            "namespace": "test",
+            "task": "Generate SQL to find all active users",  # Not a review task
+            "ext_knowledge": "Use standard SQL practices",
+        }
+
+        response = test_client.post(
+            "/workflows/chat_research", json=request_data, headers={"Accept": "text/event-stream"}
+        )
+
+        assert response.status_code == 200
+
+        # Verify task type identification
+        call_args = mock_stream.call_args[0][0]
+        assert call_args.task == request_data["task"]

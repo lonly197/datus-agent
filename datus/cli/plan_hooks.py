@@ -31,6 +31,7 @@ from datus.cli.blocking_input_manager import blocking_input_manager
 from datus.cli.execution_state import execution_controller
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.schemas.node_models import SQLContext
+from datus.tools.func_tool.plan_tools import TodoItem
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -430,6 +431,12 @@ class ExecutionMonitor:
             "cache_misses": 0,
             "batch_optimizations": 0,
             "error_recoveries": 0,
+            # Preflight-specific metrics
+            "preflight_calls": 0,
+            "preflight_successes": 0,
+            "preflight_failures": 0,
+            "preflight_cache_hits": 0,
+            "preflight_tool_calls": 0,
         }
 
         # Tool-specific metrics
@@ -507,6 +514,153 @@ class ExecutionMonitor:
         logger.info(f"📊 Ended monitoring execution {self.current_execution['id']}: {status} in {duration:.2f}s")
         self.current_execution = None
         self.start_time = None
+
+    def start_preflight(self, execution_id: str, tool_sequence: List[str]):
+        """Start monitoring preflight tool execution."""
+        if not self.current_execution or self.current_execution["id"] != execution_id:
+            logger.warning(f"No active execution {execution_id} for preflight monitoring")
+            return
+
+        self.current_execution["preflight"] = {
+            "start_time": time.time(),
+            "tool_sequence": tool_sequence,
+            "tool_results": {},
+            "cache_hits": 0,
+            "success_count": 0,
+            "failure_count": 0,
+        }
+        self.metrics["preflight_calls"] += 1
+        logger.info(f"📊 Started preflight monitoring for execution {execution_id} with {len(tool_sequence)} tools")
+
+    def record_preflight_tool_call(
+        self,
+        execution_id: str,
+        tool_name: str,
+        success: bool,
+        cache_hit: bool = False,
+        execution_time: float = 0,
+        error: str = None,
+    ):
+        """Record a preflight tool call result."""
+        if not self.current_execution or self.current_execution["id"] != execution_id:
+            return
+
+        if "preflight" not in self.current_execution:
+            return
+
+        preflight = self.current_execution["preflight"]
+
+        # Record tool result
+        preflight["tool_results"][tool_name] = {
+            "success": success,
+            "cache_hit": cache_hit,
+            "execution_time": execution_time,
+            "error": error,
+            "timestamp": time.time(),
+        }
+
+        # Update counters
+        if success:
+            preflight["success_count"] += 1
+            self.metrics["preflight_successes"] += 1
+        else:
+            preflight["failure_count"] += 1
+            self.metrics["preflight_failures"] += 1
+
+        if cache_hit:
+            preflight["cache_hits"] += 1
+            self.metrics["preflight_cache_hits"] += 1
+
+        self.metrics["preflight_tool_calls"] += 1
+
+        # Update tool-specific metrics
+        self.tool_metrics[tool_name]["calls"] += 1
+        if success:
+            self.tool_metrics[tool_name]["successes"] += 1
+        else:
+            self.tool_metrics[tool_name]["failures"] += 1
+            if error:
+                self.tool_metrics[tool_name]["errors"][error] += 1
+
+        # Update execution time tracking
+        if execution_time > 0:
+            tool_metric = self.tool_metrics[tool_name]
+            tool_metric["total_execution_time"] += execution_time
+            tool_metric["avg_execution_time"] = tool_metric["total_execution_time"] / tool_metric["calls"]
+
+        status = "SUCCESS" if success else "FAILED"
+        cache_status = " (cache hit)" if cache_hit else ""
+        logger.info(f"📊 Preflight tool {tool_name}: {status}{cache_status} in {execution_time:.3f}s")
+
+    def end_preflight(self, execution_id: str) -> Dict[str, Any]:
+        """End preflight monitoring and return summary."""
+        if not self.current_execution or self.current_execution["id"] != execution_id:
+            return {}
+
+        if "preflight" not in self.current_execution:
+            return {}
+
+        preflight = self.current_execution["preflight"]
+        end_time = time.time()
+        duration = end_time - preflight["start_time"]
+
+        summary = {
+            "duration": duration,
+            "total_tools": len(preflight["tool_sequence"]),
+            "success_count": preflight["success_count"],
+            "failure_count": preflight["failure_count"],
+            "cache_hits": preflight["cache_hits"],
+            "success_rate": preflight["success_count"] / len(preflight["tool_sequence"])
+            if preflight["tool_sequence"]
+            else 0,
+            "tool_results": preflight["tool_results"],
+        }
+
+        logger.info(
+            f"📊 Preflight completed for {execution_id}: {preflight['success_count']}/{len(preflight['tool_sequence'])} tools successful in {duration:.2f}s"
+        )
+        return summary
+
+    def get_preflight_status(self, execution_id: str) -> Dict[str, Any]:
+        """Get current preflight status."""
+        if not self.current_execution or self.current_execution["id"] != execution_id:
+            return {"status": "no_active_execution"}
+
+        if "preflight" not in self.current_execution:
+            return {"status": "no_preflight_active"}
+
+        preflight = self.current_execution["preflight"]
+        return {
+            "status": "active",
+            "tools_completed": len(preflight["tool_results"]),
+            "tools_total": len(preflight["tool_sequence"]),
+            "success_count": preflight["success_count"],
+            "failure_count": preflight["failure_count"],
+            "cache_hits": preflight["cache_hits"],
+        }
+
+    def generate_fail_safe_report_annotation(self, execution_id: str) -> str:
+        """Generate fail-safe report annotation for missing tool data."""
+        if not self.current_execution or self.current_execution["id"] != execution_id:
+            return ""
+
+        if "preflight" not in self.current_execution:
+            return ""
+
+        preflight = self.current_execution["preflight"]
+        failed_tools = [tool_name for tool_name, result in preflight["tool_results"].items() if not result["success"]]
+
+        if not failed_tools:
+            return ""
+
+        annotation = f"""
+⚠️ **数据完整性说明**: 以下工具调用失败，相关实证数据可能缺失:
+{chr(10).join(f"- {tool}: {preflight['tool_results'][tool].get('error', '未知错误')}" for tool in failed_tools)}
+
+**影响**: 审查报告基于LLM推理而非完整实证数据，结论准确性可能受影响。
+**建议**: 检查数据库连接和外部知识库配置以恢复完整功能。
+"""
+        return annotation
 
     def record_todo_start(self, todo_id: str, content: str):
         """Record the start of a todo execution."""

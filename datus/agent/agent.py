@@ -155,7 +155,7 @@ class Agent:
             yield action
 
     async def run_stream_with_metadata(
-        self, sql_task: SqlTask, metadata: Dict[str, Any] = None
+        self, sql_task: SqlTask, metadata: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[ActionHistory, None]:
         """Execute workflow with streaming and custom metadata."""
 

@@ -5,6 +5,7 @@
 import argparse
 import asyncio
 import csv
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -560,16 +561,36 @@ class DatusAPIService:
 
         # SQL审查任务特征
         review_keywords = [
-            "审查", "review", "检查", "check", "审核", "audit",
-            "质量", "quality", "评估", "evaluate", "分析sql", "analyze sql"
+            "审查",
+            "review",
+            "检查",
+            "check",
+            "审核",
+            "audit",
+            "质量",
+            "quality",
+            "评估",
+            "evaluate",
+            "分析sql",
+            "analyze sql",
         ]
         if any(keyword in task_lower for keyword in review_keywords):
             return "sql_review"
 
         # 数据分析任务特征
         analysis_keywords = [
-            "分析", "analysis", "对比", "compare", "趋势", "trend",
-            "统计", "statistics", "汇总", "summary", "报告", "report"
+            "分析",
+            "analysis",
+            "对比",
+            "compare",
+            "趋势",
+            "trend",
+            "统计",
+            "statistics",
+            "汇总",
+            "summary",
+            "报告",
+            "report",
         ]
         if any(keyword in task_lower for keyword in analysis_keywords):
             return "data_analysis"
@@ -587,7 +608,13 @@ class DatusAPIService:
                 "plan_mode": False,
                 "auto_execute_plan": False,
                 "system_prompt": "sql_review",  # 专门的SQL审查提示词（会自动添加_system后缀）
-                "output_format": "markdown"  # 指定输出格式
+                "output_format": "markdown",  # 指定输出格式
+                "required_tool_sequence": [
+                    "describe_table",  # 获取表结构信息
+                    "search_external_knowledge",  # 检索StarRocks审查规则
+                    "read_query",  # 执行查询验证SQL正确性
+                    "get_table_ddl",  # 获取表DDL定义
+                ],
             }
         elif task_type == "data_analysis":
             # 数据分析：使用plan模式
@@ -596,7 +623,7 @@ class DatusAPIService:
                 "plan_mode": True,
                 "auto_execute_plan": True,
                 "system_prompt": "plan_mode",
-                "output_format": "json"
+                "output_format": "json",
             }
         else:  # text2sql
             # Text2SQL：标准模式
@@ -605,7 +632,7 @@ class DatusAPIService:
                 "plan_mode": False,
                 "auto_execute_plan": False,
                 "system_prompt": "chat_system",
-                "output_format": "json"
+                "output_format": "json",
             }
 
     async def run_chat_research_stream(
@@ -649,12 +676,18 @@ class DatusAPIService:
             workflow_metadata = {
                 "plan_mode": task_config["plan_mode"],
                 "auto_execute_plan": task_config["auto_execute_plan"],
-                "system_prompt": task_config["system_prompt"].replace("_system", "") if task_config["system_prompt"].endswith("_system") else task_config["system_prompt"],
+                "system_prompt": task_config["system_prompt"].replace("_system", "")
+                if task_config["system_prompt"].endswith("_system")
+                else task_config["system_prompt"],
                 "output_format": task_config["output_format"],
                 "task_type": task_type,
                 "prompt": request.prompt,
                 "prompt_mode": request.prompt_mode,
             }
+
+            # Add required tool sequence if specified (for sql_review tasks)
+            if "required_tool_sequence" in task_config:
+                workflow_metadata["required_tool_sequence"] = task_config["required_tool_sequence"]
 
             # Initialize task tracking
             if self.task_store:

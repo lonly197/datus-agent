@@ -10,14 +10,32 @@ agent:
 
   # Plan executor configuration (optional)
   # Controls how the server-side plan executor matches todo text to tools and handles execution
-  # plan_executor:
-  #   # Custom keyword-to-tool mapping (extends default map)
-  #   keyword_tool_map:
-  #     search_table: ["search", "搜索", "表结构", "table", "columns", "列", "字段", "schema"]
-  #     execute_sql: ["execute sql", "执行sql", "执行 sql", "run sql", "执行"]
-  #     report: ["generate report", "生成报告", "write report", "write"]
-  #   # Whether to enable fallback tool execution when no keyword matches (default: true)
-  #   enable_fallback: true
+  # For SQL review tasks, enables preflight tool execution for data collection before analysis
+  plan_executor:
+    # Custom keyword-to-tool mapping (extends default map)
+    keyword_tool_map:
+      search_table: ["search", "搜索", "表结构", "table", "columns", "列", "字段", "schema"]
+      execute_sql: ["execute sql", "执行sql", "执行 sql", "run sql", "执行"]
+      report: ["generate report", "生成报告", "write report", "write"]
+    # Whether to enable fallback tool execution when no keyword matches (default: true)
+    enable_fallback: true
+    # SQL review preflight configuration
+    sql_review_preflight:
+      # Whether to enable preflight tool execution for SQL review tasks (default: true)
+      enabled: true
+      # Default tool sequence for SQL review tasks (can be overridden per request)
+      default_tool_sequence:
+        - describe_table        # Get table structure information
+        - search_external_knowledge  # Retrieve StarRocks review rules
+        - read_query           # Execute SQL for validation
+        - get_table_ddl        # Get table DDL definition
+      # Cache settings for preflight tools
+      cache_enabled: true
+      cache_ttl_seconds: 300  # 5 minutes
+      # Timeout for individual preflight tool calls (seconds)
+      tool_timeout_seconds: 30
+      # Whether to continue execution if some tools fail (default: true)
+      continue_on_failure: true
       base_url: https://api.openai.com/v1
       api_key: ${OPENAI_API_KEY}
       model: gpt-4-turbo

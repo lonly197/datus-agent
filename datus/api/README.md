@@ -90,6 +90,77 @@ Notes:
 - `keyword_tool_map` maps tool identifiers to a list of keywords. The executor performs a simple substring match (case-insensitive) against the todo content to pick which tool to call.
 - `enable_fallback` controls whether the executor will issue a safe `search_table` call when no mapping matches and a DB tool is available.
 
+## SQL Review Tasks
+
+Datus Agent supports specialized SQL review tasks that automatically perform comprehensive code quality analysis. When a task contains review-related keywords (审查, review, 检查, check, 审核, audit), it is automatically identified as an SQL review task and triggers enhanced processing.
+
+### SQL Review Features
+
+- **Automatic Tool Execution**: Pre-executes essential tools (describe_table, search_external_knowledge, read_query, get_table_ddl) before analysis
+- **Comprehensive Analysis**: Checks StarRocks SQL compliance, performance optimization, and data consistency
+- **Structured Reports**: Generates markdown-formatted review reports with specific sections
+- **Fail-Safe Operation**: Continues analysis even if some tools fail, with appropriate warnings
+
+### SQL Review Configuration
+
+Add SQL review specific configuration to your `agent.yml`:
+
+```yaml
+plan_executor:
+  sql_review_preflight:
+    # Enable preflight tool execution (default: true)
+    enabled: true
+    # Default tool sequence for reviews
+    default_tool_sequence:
+      - describe_table           # Table structure analysis
+      - search_external_knowledge # StarRocks rules retrieval
+      - read_query              # SQL validation execution
+      - get_table_ddl           # DDL definition retrieval
+    # Cache settings
+    cache_enabled: true
+    cache_ttl_seconds: 300
+    # Tool execution timeout
+    tool_timeout_seconds: 30
+    # Continue on partial failures
+    continue_on_failure: true
+```
+
+### SQL Review API Usage
+
+```bash
+curl --location --request POST 'http://localhost:8000/workflows/chat_research' \
+--header 'Accept: text/event-stream' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+    "namespace": "test",
+    "catalog_name": "default_catalog",
+    "database_name": "test",
+    "task": "审查SQL：SELECT * FROM users WHERE created_at > '\''2024-01-01'\''",
+    "ext_knowledge": "使用StarRocks 3.3规范进行检查"
+  }'
+```
+
+### SQL Review Report Format
+
+The system generates structured markdown reports with the following sections:
+
+- **📋 审查概览**: Summary with pass/fail status
+- **🔍 审查规则**: Applied review standards
+- **📊 审查分析**: Detailed analysis by category
+- **⚠️ 发现问题**: Issues found with severity levels
+- **💡 优化建议**: Specific improvement recommendations
+- **🛠️ 优化后的SQL**: Optimized SQL code when applicable
+- **📈 预期效果**: Expected performance improvements
+
+### Monitoring SQL Review Execution
+
+SQL review tasks include comprehensive monitoring:
+
+- **Preflight Tool Tracking**: Records execution time and success/failure for each tool
+- **Cache Statistics**: Shows cache hit rates for repeated operations
+- **Fail-Safe Annotations**: Warns when tools fail and analysis is based on incomplete data
+- **Performance Metrics**: Tool execution times and overall review duration
+
 ## Usage Examples
 
 ### Health Check
