@@ -14,6 +14,15 @@ from typing import AsyncGenerator, Optional, override
 
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 from datus.agent.workflow import Workflow
+from datus.api.models import (
+    DeepResearchEventType,
+    ErrorEvent,
+    PlanUpdateEvent,
+    ToolCallEvent,
+    ToolCallResultEvent,
+    TodoItem,
+    TodoStatus,
+)
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.chat_agentic_node_models import ChatNodeInput, ChatNodeResult
@@ -23,6 +32,40 @@ from datus.tools.func_tool import ContextSearchTools, DBFuncTool
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
+
+
+class ExecutionStatus:
+    """Execution status tracker for preflight and main execution."""
+
+    def __init__(self):
+        self.preflight_completed = False
+        self.syntax_validation_passed = False
+        self.tools_executed = []
+        self.errors_encountered = []
+
+    def mark_preflight_complete(self, success: bool):
+        """Mark preflight execution as completed."""
+        self.preflight_completed = True
+
+    def mark_syntax_validation(self, passed: bool):
+        """Mark syntax validation result."""
+        self.syntax_validation_passed = passed
+
+    def add_tool_execution(self, tool_name: str, success: bool):
+        """Add tool execution record."""
+        self.tools_executed.append({
+            "tool": tool_name,
+            "success": success,
+            "timestamp": time.time()
+        })
+
+    def add_error(self, error_type: str, error_msg: str):
+        """Add error record."""
+        self.errors_encountered.append({
+            "type": error_type,
+            "message": error_msg,
+            "timestamp": time.time()
+        })
 
 
 class ChatAgenticNode(GenSQLAgenticNode):
@@ -71,9 +114,123 @@ class ChatAgenticNode(GenSQLAgenticNode):
         # Initialize action_history_manager attribute for plan mode support
         self.action_history_manager = None
 
+        # Initialize execution status tracker
+        self.execution_status = ExecutionStatus()
+
         logger.debug(
             f"ChatAgenticNode initialized: {self.agent_config.current_namespace} {self.agent_config.current_database}"
         )
+
+    async def _send_preflight_plan_update(self, workflow, tool_sequence):
+        """发送预检执行计划"""
+        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+            return
+
+        todos = []
+        for i, tool_name in enumerate(tool_sequence):
+            todos.append(TodoItem(
+                id=f"preflight_{tool_name}_{i}",
+                content=f"执行预检工具: {tool_name}",
+                status=TodoStatus.PENDING
+            ))
+
+        plan_event = PlanUpdateEvent(
+            id=f"plan_preflight_{int(time.time() * 1000)}",
+            timestamp=int(time.time() * 1000),
+            event=DeepResearchEventType.PLAN_UPDATE,
+            todos=todos
+        )
+
+        await self.emit_queue.put(plan_event)
+
+    async def _send_tool_call_event(self, tool_name, tool_call_id, input_data):
+        """发送工具调用事件"""
+        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+            return
+
+        call_event = ToolCallEvent(
+            id=f"call_{tool_call_id}",
+            timestamp=int(time.time() * 1000),
+            event=DeepResearchEventType.TOOL_CALL,
+            toolCallId=tool_call_id,
+            toolName=tool_name,
+            input=input_data
+        )
+
+        await self.emit_queue.put(call_event)
+
+    async def _send_tool_call_result_event(self, tool_call_id, result, execution_time, cache_hit):
+        """发送工具调用结果事件"""
+        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+            return
+
+        result_event = ToolCallResultEvent(
+            id=f"result_{tool_call_id}",
+            timestamp=int(time.time() * 1000),
+            event=DeepResearchEventType.TOOL_CALL_RESULT,
+            toolCallId=tool_call_id,
+            data={
+                **result,
+                "execution_time": execution_time,
+                "cache_hit": cache_hit
+            },
+            error=not result.get("success", False)
+        )
+
+        await self.emit_queue.put(result_event)
+
+    async def _update_preflight_plan_status(self, workflow, tool_name, success):
+        """更新预检计划状态"""
+        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+            return
+
+        # 查找对应的todo项并更新状态
+        todo_id = f"preflight_{tool_name}_0"  # 简化处理，实际需要更精确的匹配
+        status = TodoStatus.COMPLETED if success else TodoStatus.ERROR
+
+        todo = TodoItem(
+            id=todo_id,
+            content=f"执行预检工具: {tool_name}",
+            status=status
+        )
+
+        update_event = PlanUpdateEvent(
+            id=f"plan_update_{tool_name}_{int(time.time() * 1000)}",
+            planId=todo_id,
+            timestamp=int(time.time() * 1000),
+            event=DeepResearchEventType.PLAN_UPDATE,
+            todos=[todo]
+        )
+
+        await self.emit_queue.put(update_event)
+
+    async def _send_syntax_error_event(self, sql_query, error):
+        """发送SQL语法错误事件"""
+        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+            return
+
+        error_event = ErrorEvent(
+            id=f"syntax_error_{int(time.time() * 1000)}",
+            timestamp=int(time.time() * 1000),
+            event=DeepResearchEventType.ERROR,
+            error=f"SQL语法错误: {error}"
+        )
+
+        await self.emit_queue.put(error_event)
+
+    async def _send_db_connection_error_event(self, sql_query, error):
+        """发送数据库连接错误事件"""
+        if not hasattr(self, 'emit_queue') or not self.emit_queue:
+            return
+
+        error_event = ErrorEvent(
+            id=f"db_error_{int(time.time() * 1000)}",
+            timestamp=int(time.time() * 1000),
+            event=DeepResearchEventType.ERROR,
+            error=f"数据库连接错误: {error}"
+        )
+
+        await self.emit_queue.put(error_event)
 
     def setup_input(self, workflow: Workflow) -> dict:
         """
@@ -315,6 +472,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
         logger.info(f"Starting preflight tool execution: {required_tools}")
 
+        # 发送预检执行计划事件
+        await self._send_preflight_plan_update(workflow, required_tools)
+
         # ========== SQL Syntax Validation Check ==========
         # Extract and validate SQL syntax BEFORE executing any tools
         task = workflow.task
@@ -324,6 +484,13 @@ class ChatAgenticNode(GenSQLAgenticNode):
         is_valid, error_message = self._validate_sql_syntax(sql_query, task.task)
 
         if not is_valid:
+            # 记录语法验证失败状态
+            self.execution_status.mark_syntax_validation(False)
+            self.execution_status.add_error("syntax_error", error_message)
+
+            # 发送语法错误事件
+            await self._send_syntax_error_event(sql_query, error_message)
+
             # Create error action for syntax validation failure
             error_action = ActionHistory.create_action(
                 role=ActionRole.SYSTEM,
@@ -405,8 +572,25 @@ class ChatAgenticNode(GenSQLAgenticNode):
             start_time = time.time()
             cache_hit = False
 
+            # 生成工具调用ID
+            tool_call_id = f"preflight_{tool_name}_{start_time}"
+
             try:
                 logger.info(f"Executing preflight tool: {tool_name}")
+
+                # 发送工具调用开始事件
+                await self._send_tool_call_event(
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    input_data={
+                        "tool_name": tool_name,
+                        "sql_query": sql_query,
+                        "table_names": table_names,
+                        "catalog": catalog,
+                        "database": database,
+                        "schema": schema,
+                    }
+                )
 
                 # Create action for tool execution
                 tool_action = ActionHistory.create_action(
@@ -441,6 +625,24 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 tool_action.output = result
                 tool_action.messages = f"Preflight tool {tool_name}: {'SUCCESS' if success else 'FAILED'}"
 
+                # 发送工具调用结果事件
+                await self._send_tool_call_result_event(
+                    tool_call_id=tool_call_id,
+                    result=result,
+                    execution_time=execution_time,
+                    cache_hit=cache_hit
+                )
+
+                # 更新执行计划状态
+                await self._update_preflight_plan_status(workflow, tool_name, success)
+
+                # 更新执行状态跟踪
+                self.execution_status.add_tool_execution(tool_name, success)
+                if not success:
+                    error_desc = result.get("error", "Unknown error")
+                    error_type = self._classify_error_type(error_desc, tool_name)
+                    self.execution_status.add_error(error_type, error_desc)
+
                 # Record in monitor
                 if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
                     self.plan_hooks.monitor.record_preflight_tool_call(
@@ -472,6 +674,10 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
                     logger.warning(f"Preflight tool {tool_name} failed ({error_type}): {error_desc}")
 
+                    # 如果是数据库连接错误，发送专门的错误事件
+                    if error_type == "database_connection":
+                        await self._send_db_connection_error_event(sql_query, error_desc)
+
                     # Log recovery suggestions
                     if recovery_suggestions:
                         logger.info(f"Recovery suggestions for {error_type}: {recovery_suggestions[0]}")
@@ -482,6 +688,17 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 execution_time = time.time() - start_time
                 logger.error(f"Preflight tool {tool_name} execution error: {e}")
                 all_success = False
+
+                # 发送工具调用失败结果事件
+                await self._send_tool_call_result_event(
+                    tool_call_id=tool_call_id,
+                    result={"success": False, "error": str(e)},
+                    execution_time=execution_time,
+                    cache_hit=False
+                )
+
+                # 更新执行计划状态为失败
+                await self._update_preflight_plan_status(workflow, tool_name, False)
 
                 # Record error in monitor
                 if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
@@ -494,6 +711,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     tool_action.status = ActionStatus.FAILED
                     tool_action.output = {"success": False, "error": str(e)}
                     tool_action.messages = f"Preflight tool {tool_name} failed: {str(e)}"
+
+        # 标记预检执行完成
+        self.execution_status.mark_preflight_complete(all_success)
 
         # End preflight monitoring
         preflight_summary = {}
