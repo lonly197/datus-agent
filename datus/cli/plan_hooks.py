@@ -1418,7 +1418,9 @@ Context (recent actions):
 Provide your reasoning and any recommendations. If this requires tool calls, you can suggest them in your response."""
 
             # Execute LLM reasoning
-            response = await self.model.generate_async(prompt, max_tokens=500, temperature=0.3)
+            response = await asyncio.to_thread(
+                self.model.generate, prompt, max_tokens=500, temperature=0.3
+            )
 
             if response and hasattr(response, 'content'):
                 reasoning_result = {
@@ -1524,7 +1526,9 @@ Respond with only the tool name, nothing else."""
 
             # Use async generation if available
             if hasattr(self.model, 'generate_async'):
-                response = await self.model.generate_async(prompt, max_tokens=50, temperature=0.1)
+                response = await asyncio.to_thread(
+                    self.model.generate, prompt, max_tokens=50, temperature=0.1
+                )
             else:
                 # Fallback to sync method in a thread
                 import asyncio

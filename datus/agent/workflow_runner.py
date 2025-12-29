@@ -44,14 +44,32 @@ class WorkflowRunner:
         """Generate a new workflow plan."""
         plan_type = getattr(self.args, "workflow", None) or self.global_config.workflow_plan
 
+        # Check if plan_mode is specified in initial metadata (API context)
+        plan_mode = False
+        if self.initial_metadata and "plan_mode" in self.initial_metadata:
+            plan_mode = self.initial_metadata["plan_mode"]
+        elif hasattr(self.args, "plan_mode"):
+            plan_mode = self.args.plan_mode
+
+        logger.info(f"Workflow initialization: plan_type={plan_type}, plan_mode={plan_mode}, metadata={self.initial_metadata}")
+
+        # Override workflow type for plan mode
+        if plan_mode:
+            if plan_type == "chat_agentic":
+                plan_type = "chat_agentic_plan"
+            elif plan_type.endswith("_agentic") and not plan_type.endswith("_plan"):
+                # Handle other agentic workflows that might have plan variants
+                plan_type = plan_type + "_plan"
+            logger.info(f"Plan mode enabled, using workflow type: {plan_type}")
+
         self.workflow = generate_workflow(
             task=sql_task,
             plan_type=plan_type,
             agent_config=self.global_config,
         )
 
-        if hasattr(self.args, "plan_mode"):
-            self.workflow.metadata["plan_mode"] = self.args.plan_mode
+        if plan_mode:
+            self.workflow.metadata["plan_mode"] = plan_mode
             self.workflow.metadata["auto_execute_plan"] = True
 
         self.workflow.display()

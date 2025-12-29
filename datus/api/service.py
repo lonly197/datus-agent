@@ -729,6 +729,38 @@ class DatusAPIService:
 
         return enhanced_msg, suggestions
 
+    async def cancel_all_running_tasks(self):
+        """Cancel all currently running tasks during shutdown."""
+        if not hasattr(self, 'running_tasks_lock') or not hasattr(self, 'running_tasks'):
+            return
+
+        async with self.running_tasks_lock:
+            tasks_to_cancel = list(self.running_tasks.values())
+
+        if tasks_to_cancel:
+            logger.info(f"Cancelling {len(tasks_to_cancel)} running tasks during shutdown")
+            for running_task in tasks_to_cancel:
+                try:
+                    task = running_task.task
+                    if not task.done():
+                        task.cancel()
+                        logger.debug(f"Cancelled task: {running_task.task_id}")
+                except Exception as e:
+                    logger.warning(f"Error cancelling task {running_task.task_id}: {e}")
+
+            # Wait a bit for tasks to cancel
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*[t.task for t in tasks_to_cancel if not t.task.done()], return_exceptions=True),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Some tasks did not cancel within timeout")
+            except Exception as e:
+                logger.warning(f"Error waiting for task cancellation: {e}")
+
+        logger.info("Task cancellation completed")
+
 
 # Global service instance - will be initialized with command line args
 service = None
@@ -981,6 +1013,10 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     logger.info("Datus API Service shutting down")
+
+    # Cancel all running tasks
+    if service:
+        await service.cancel_all_running_tasks()
 
 
 def create_app(agent_args: argparse.Namespace) -> FastAPI:

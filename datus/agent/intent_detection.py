@@ -9,6 +9,7 @@ This module provides hybrid intent detection (keyword heuristics + LLM fallback)
 to automatically inject relevant external knowledge when front-end omits ext_knowledge.
 """
 
+import asyncio
 import re
 from typing import Dict, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -142,7 +143,9 @@ User request: {text}
 """
 
             # Use the model's generate method
-            response = await model.generate(prompt, max_tokens=100, temperature=0.1)
+            response = await asyncio.to_thread(
+                model.generate, prompt, max_tokens=100, temperature=0.1
+            )
 
             # Parse the response (assuming JSON format)
             import json
