@@ -304,6 +304,33 @@ class Text2SQLExecutionMode(BaseExecutionMode):
             self.execution_id, "sql_generation", f"Generate SQL for intent: {intent_result}", sql_result
         )
 
+        # Preflight validation phase
+        await self.event_manager.update_execution_status(self.execution_id, "preflight", "Validating SQL syntax")
+        syntax_validation = await self._validate_sql_syntax(sql_result)
+        if not syntax_validation.get("valid", False):
+            await self.event_manager.record_llm_interaction(
+                self.execution_id,
+                "syntax_validation",
+                f"Validate SQL syntax: {sql_result}",
+                error=syntax_validation.get("error", "Syntax validation failed"),
+            )
+            # Check if we should continue on failure
+            config = self.context.workflow_metadata or {}
+            if not config.get('text2sql_preflight', {}).get('continue_on_failure', True):
+                # Fail fast - don't continue with invalid SQL
+                await self.event_manager.complete_execution(
+                    self.execution_id,
+                    {
+                        "sql": sql_result,
+                        "intent": intent_result,
+                        "schema_info": schema_result,
+                        "syntax_validation": syntax_validation,
+                        "status": "failed",
+                        "error": "SQL syntax validation failed"
+                    },
+                )
+                return
+
         # Validation phase
         await self.event_manager.update_execution_status(self.execution_id, "executing", "Validating SQL")
         validation_result = await self._validate_sql(sql_result)
@@ -353,6 +380,38 @@ class Text2SQLExecutionMode(BaseExecutionMode):
                 logger.error(f"SQL generation failed: {e}")
                 return "SELECT * FROM table"
         return "SELECT * FROM table"
+
+    async def _validate_sql_syntax(self, sql: str):
+        """Validate SQL syntax using DB tool."""
+        try:
+            # Import here to avoid circular imports
+            from datus.tools.func_tool.database import db_function_tool_instance
+
+            # Get DB tool instance
+            if self.context.agent_config:
+                db_tool = db_function_tool_instance(
+                    self.context.agent_config,
+                    self.context.agent_config.current_database
+                )
+                result = db_tool.validate_sql_syntax(sql)
+
+                if result.success:
+                    return {
+                        "valid": True,
+                        "tables_referenced": result.result.get("tables_referenced", []),
+                        "sql_type": result.result.get("sql_type", "unknown")
+                    }
+                else:
+                    return {
+                        "valid": False,
+                        "error": result.error
+                    }
+            else:
+                # Fallback to basic validation if no config
+                return await self._validate_sql(sql)
+
+        except Exception as e:
+            return {"valid": False, "error": f"Validation error: {str(e)}"}
 
     async def _validate_sql(self, sql: str):
         """Validate generated SQL."""

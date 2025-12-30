@@ -602,19 +602,23 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     )
 
                 # 更新执行状态跟踪
-                self.execution_status.add_tool_execution(
-                    tool_name, success, execution_time, error_type if not success else None
-                )
+                error_type = None
                 if not success:
                     error_desc = result.get("error", "Unknown error")
                     error_type = self._classify_error_type(error_desc, tool_name)
-                    self.execution_status.add_error(error_type, error_desc)
+                    if hasattr(self, "execution_status") and self.execution_status:
+                        self.execution_status.add_error(error_type, error_desc)
 
-                    # Record error if using event manager
-                    if event_manager and execution_id:
-                        await event_manager.record_llm_interaction(
-                            execution_id, "tool_error", f"Tool {tool_name} failed", error=error_desc
-                        )
+                if hasattr(self, "execution_status") and self.execution_status:
+                    self.execution_status.add_tool_execution(
+                        tool_name, success, execution_time, error_type
+                    )
+
+                # Record error if using event manager
+                if not success and event_manager and execution_id:
+                    await event_manager.record_llm_interaction(
+                        execution_id, "tool_error", f"Tool {tool_name} failed", error=error_desc
+                    )
 
                 # Record in monitor
                 if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
@@ -647,20 +651,65 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
                     logger.warning(f"Preflight tool {tool_name} failed ({error_type}): {error_desc}")
 
-                    # 如果是数据库连接错误，创建错误事件
+                    # Send appropriate error events based on error type
                     if error_type == "database_connection":
-                        error_action = ActionHistory.create_action(
-                            role=ActionRole.TOOL,
-                            action_type="db_connection_error",
-                            messages=f"Database connection failed: {error_desc}",
-                            input_data={
-                                "sql_query": sql_query,
-                                "error": error_desc,
-                                "error_type": error_type
-                            },
-                            status=ActionStatus.FAILED,
-                        )
-                        action_history_manager.add_action(error_action)
+                        error_action = await self._send_db_connection_error_event(sql_query, error_desc)
+                        if action_history_manager:
+                            action_history_manager.add_action(error_action)
+                        yield error_action
+                    elif error_type == "table_not_found" and tool_name in ["describe_table", "get_table_ddl"]:
+                        # Extract table name from the error or tool parameters
+                        table_name = table_names[0] if table_names else "unknown"
+                        error_action = await self._send_table_not_found_event(table_name, error_desc)
+                        if action_history_manager:
+                            action_history_manager.add_action(error_action)
+                        yield error_action
+
+                        # Try fallback search_table for suggestions
+                        if tool_name == "describe_table":
+                            try:
+                                logger.info(f"Attempting fallback search_table for missing table: {table_name}")
+                                search_result = await self._execute_preflight_tool(
+                                    "search_table", sql_query, [table_name], catalog, database, schema
+                                )
+
+                                if search_result.get("success", False):
+                                    # Extract suggestions from search results
+                                    search_data = search_result.get("result", {})
+                                    suggestions = []
+
+                                    # Get table names from search results
+                                    if "metadata" in search_data:
+                                        for meta in search_data["metadata"]:
+                                            if "table_name" in meta:
+                                                suggestions.append(meta["table_name"])
+
+                                    if suggestions:
+                                        logger.info(f"Found {len(suggestions)} similar tables via search_table fallback")
+                                        # Emit a tool result event with suggestions
+                                        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+                                        fallback_action = ActionHistory.create_action(
+                                            role=ActionRole.TOOL,
+                                            action_type="tool_call_result",
+                                            messages=f"Search found {len(suggestions)} similar tables for '{table_name}'",
+                                            input={"original_table": table_name, "search_tool": "search_table"},
+                                            output={
+                                                "tool_name": "search_table",
+                                                "success": True,
+                                                "suggestions": suggestions[:5],  # Limit to top 5
+                                                "fallback_for": tool_name
+                                            },
+                                            status=ActionStatus.SUCCESS,
+                                        )
+                                        if action_history_manager:
+                                            action_history_manager.add_action(fallback_action)
+                                        yield fallback_action
+                            except Exception as fallback_e:
+                                logger.warning(f"Fallback search_table failed for {table_name}: {str(fallback_e)}")
+                    elif tool_name == "validate_sql_syntax":
+                        error_action = await self._send_syntax_error_event(sql_query, error_desc)
+                        if action_history_manager:
+                            action_history_manager.add_action(error_action)
                         yield error_action
 
                     # Log recovery suggestions
@@ -706,7 +755,8 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     tool_action.messages = f"Preflight tool {tool_name} failed: {str(e)}"
 
         # 标记预检执行完成
-        self.execution_status.mark_preflight_complete(all_success)
+        if hasattr(self, "execution_status") and self.execution_status:
+            self.execution_status.mark_preflight_complete(all_success)
 
         # End preflight monitoring
         preflight_summary = {}
@@ -829,8 +879,16 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 return result_dict
 
             elif tool_name == "check_table_exists" and table_names:
-                # Check table existence (no caching needed for lightweight check)
+                # Check table existence with caching for better performance
                 table_name = table_names[0]
+                cache_key_params["table_name"] = table_name
+
+                # Check cache first
+                if hasattr(self, "plan_hooks") and self.plan_hooks and self.plan_hooks.enable_query_caching:
+                    cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
+                    if cached_result is not None:
+                        logger.info(f"Cache hit for {tool_name} on table {table_name}")
+                        return cached_result
 
                 result = self.db_func_tool.check_table_exists(
                     table_name=table_name, catalog=catalog, database=database, schema_name=schema
@@ -840,6 +898,16 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     if hasattr(result, "__dict__")
                     else {"success": False, "error": "Invalid result format"}
                 )
+
+                # Cache successful results
+                if (
+                    result_dict.get("success", False)
+                    and hasattr(self, "plan_hooks")
+                    and self.plan_hooks
+                    and self.plan_hooks.enable_query_caching
+                ):
+                    self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
+                    logger.debug(f"Cached result for {tool_name} on table {table_name}")
 
                 return result_dict
 
@@ -1261,6 +1329,90 @@ class ChatAgenticNode(GenSQLAgenticNode):
         except Exception as e:
             logger.warning(f"Failed to inject tool result into context for {tool_name}: {e}")
 
+    async def _send_syntax_error_event(self, sql_query: str, error: str):
+        """Send SQL syntax error event to frontend."""
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        error_action = ActionHistory.create_action(
+            role=ActionRole.TOOL,
+            action_type="sql_execution_error",
+            messages=f"SQL syntax validation failed: {error}",
+            input_data={"sql_query": sql_query, "error_type": "syntax"},
+            output_data={
+                "error": error,
+                "error_type": "syntax",
+                "suggestions": [
+                    "检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)",
+                    "验证括号和引号是否匹配",
+                    "确认表名和列名拼写是否正确"
+                ],
+                "can_retry": False
+            },
+            status=ActionStatus.FAILED,
+        )
+
+        # Emit the error event if action_history_manager is available
+        if hasattr(self, 'action_history_manager') and self.action_history_manager:
+            self.action_history_manager.add_action(error_action)
+
+        return error_action
+
+    async def _send_table_not_found_event(self, table_name: str, error: str):
+        """Send table not found error event to frontend."""
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        error_action = ActionHistory.create_action(
+            role=ActionRole.TOOL,
+            action_type="table_not_found",
+            messages=f"Table '{table_name}' not found: {error}",
+            input_data={"table_name": table_name, "error_type": "table_not_found"},
+            output_data={
+                "error": error,
+                "error_type": "table_not_found",
+                "suggestions": [
+                    "检查表名拼写是否正确",
+                    "确认数据库权限",
+                    "使用search_table工具查找相似表名"
+                ],
+                "can_retry": True
+            },
+            status=ActionStatus.FAILED,
+        )
+
+        # Emit the error event if action_history_manager is available
+        if hasattr(self, 'action_history_manager') and self.action_history_manager:
+            self.action_history_manager.add_action(error_action)
+
+        return error_action
+
+    async def _send_db_connection_error_event(self, sql_query: str, error: str):
+        """Send database connection error event to frontend."""
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        error_action = ActionHistory.create_action(
+            role=ActionRole.TOOL,
+            action_type="db_connection_error",
+            messages=f"Database connection failed: {error}",
+            input_data={"sql_query": sql_query, "error_type": "connection"},
+            output_data={
+                "error": error,
+                "error_type": "connection",
+                "suggestions": [
+                    "检查数据库服务是否运行",
+                    "验证网络连接",
+                    "确认数据库连接配置"
+                ],
+                "can_retry": True
+            },
+            status=ActionStatus.FAILED,
+        )
+
+        # Emit the error event if action_history_manager is available
+        if hasattr(self, 'action_history_manager') and self.action_history_manager:
+            self.action_history_manager.add_action(error_action)
+
+        return error_action
+
     async def execute_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None
     ) -> AsyncGenerator[ActionHistory, None]:
@@ -1293,6 +1445,57 @@ class ChatAgenticNode(GenSQLAgenticNode):
         # Determine execution scenario
         scenario = self._determine_execution_scenario(user_input)
         logger.info(f"Detected execution scenario: {scenario}")
+
+        # Execute preflight tools if required (for sql_review tasks)
+        if scenario == "sql_review" and hasattr(self, "workflow") and self.workflow:
+            # Ensure plan_hooks are available for caching and batching
+            if not hasattr(self, "plan_hooks") or not self.plan_hooks:
+                # Create temporary plan hooks for preflight caching support
+                from rich.console import Console
+
+                from datus.cli.plan_hooks import PlanModeHooks
+
+                console = Console()
+                session = self._get_or_create_session()[0] if hasattr(self, "_get_or_create_session") else None
+                if session:
+                    self.plan_hooks = PlanModeHooks(
+                        console=console,
+                        session=session,
+                        auto_mode=False,
+                        action_history_manager=action_history_manager,
+                        agent_config=self.agent_config,
+                        emit_queue=asyncio.Queue(),
+                        model=None,  # No LLM needed for preflight
+                        auto_injected_knowledge=[],
+                    )
+                    # Enable caching and batching for preflight
+                    self.plan_hooks.enable_query_caching = True
+                    # Set execution event manager if available
+                    if hasattr(self, "execution_event_manager") and self.execution_event_manager:
+                        execution_id = f"preflight_{int(time.time() * 1000)}"
+                        self.plan_hooks.set_execution_event_manager(self.execution_event_manager, execution_id)
+                    self.plan_hooks.enable_batch_processing = True
+
+            try:
+                # Execute preflight tools (now a generator that may yield error actions)
+                async for preflight_action in self.run_preflight_tools(self.workflow, action_history_manager):
+                    yield preflight_action
+
+                    # Check if this is a validation failure that should terminate execution
+                    if (
+                        preflight_action.action_type == "sql_syntax_validation"
+                        and preflight_action.status == ActionStatus.FAILED
+                    ):
+                        # Stop execution - validation failed
+                        logger.info("SQL syntax validation failed, terminating execution")
+                        return
+
+            except ValueError as e:
+                # SQL syntax validation failed, already yielded error actions
+                logger.info(f"Preflight terminated due to validation error: {e}")
+                return
+            except Exception as e:
+                logger.warning(f"Preflight execution error: {e}")
 
         # Create execution context and mode
         from datus.agent.node.execution_event_manager import ExecutionContext
@@ -1356,57 +1559,6 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
         # Default fallback
         return "data_analysis"
-
-        # Execute preflight tools if required (for sql_review tasks)
-        if hasattr(self, "workflow") and self.workflow:
-            # Ensure plan_hooks are available for caching and batching
-            if not hasattr(self, "plan_hooks") or not self.plan_hooks:
-                # Create temporary plan hooks for preflight caching support
-                from rich.console import Console
-
-                from datus.cli.plan_hooks import PlanModeHooks
-
-                console = Console()
-                session = self._get_or_create_session()[0] if hasattr(self, "_get_or_create_session") else None
-                if session:
-                    self.plan_hooks = PlanModeHooks(
-                        console=console,
-                        session=session,
-                        auto_mode=False,
-                        action_history_manager=action_history_manager,
-                        agent_config=self.agent_config,
-                        emit_queue=asyncio.Queue(),
-                        model=None,  # No LLM needed for preflight
-                        auto_injected_knowledge=[],
-                    )
-                    # Enable caching and batching for preflight
-                    self.plan_hooks.enable_query_caching = True
-                    # Set execution event manager if available
-                    if hasattr(self, "execution_event_manager") and self.execution_event_manager:
-                        execution_id = f"preflight_{int(time.time() * 1000)}"
-                        self.plan_hooks.set_execution_event_manager(self.execution_event_manager, execution_id)
-                    self.plan_hooks.enable_batch_processing = True
-
-            try:
-                # Execute preflight tools (now a generator that may yield error actions)
-                async for preflight_action in self.run_preflight_tools(self.workflow, action_history_manager):
-                    yield preflight_action
-
-                    # Check if this is a validation failure that should terminate execution
-                    if (
-                        preflight_action.action_type == "sql_syntax_validation"
-                        and preflight_action.status == ActionStatus.FAILED
-                    ):
-                        # Stop execution - validation failed
-                        logger.info("SQL syntax validation failed, terminating execution")
-                        return
-
-            except ValueError as e:
-                # SQL syntax validation failed, already yielded error actions
-                logger.info(f"Preflight terminated due to validation error: {e}")
-                return
-            except Exception as e:
-                logger.warning(f"Preflight execution error: {e}")
 
         is_plan_mode = getattr(user_input, "plan_mode", False)
         # emit_queue used to stream ActionHistory produced by PlanModeHooks back to node stream

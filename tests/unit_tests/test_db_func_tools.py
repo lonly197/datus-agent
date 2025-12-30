@@ -866,3 +866,194 @@ class TestDBFuncToolIntegration:
         assert result.success == 1
         assert result.result is not None
         assert result.result["is_compressed"] is False
+
+
+class TestTableExistenceChecking:
+    """Test cases for table existence checking functionality."""
+
+    def test_check_table_exists_success(self, db_func_tool, mock_connector):
+        """Test successful table existence check."""
+        mock_connector.get_tables.return_value = [
+            {"name": "users", "type": "table"},
+            {"name": "orders", "type": "table"}
+        ]
+
+        result = db_func_tool.check_table_exists("users")
+
+        assert result.success == 1
+        assert result.result["table_exists"] == True
+        assert "users" in result.result["available_tables"]
+
+    def test_check_table_exists_not_found(self, db_func_tool, mock_connector):
+        """Test table existence check when table doesn't exist."""
+        mock_connector.get_tables.return_value = [
+            {"name": "users", "type": "table"},
+            {"name": "orders", "type": "table"}
+        ]
+
+        result = db_func_tool.check_table_exists("nonexistent_table")
+
+        assert result.success == 1
+        assert result.result["table_exists"] == False
+        assert result.result["suggestions"] == []  # No similar matches in this simple test
+
+    def test_check_table_exists_with_suggestions(self, db_func_tool, mock_connector):
+        """Test table existence check with fuzzy matching suggestions."""
+        mock_connector.get_tables.return_value = [
+            {"name": "users", "type": "table"},
+            {"name": "user_profiles", "type": "table"},
+            {"name": "user_orders", "type": "table"}
+        ]
+
+        result = db_func_tool.check_table_exists("usr")  # Partial match
+
+        assert result.success == 1
+        assert result.result["table_exists"] == False
+        # Should find similar tables via substring matching
+        assert len(result.result["suggestions"]) > 0
+
+    def test_check_table_exists_out_of_scope(self, db_func_tool, mock_connector):
+        """Test table existence check for out-of-scope table."""
+        # Mock the scoped patterns to exclude certain tables
+        db_func_tool._scoped_patterns = [
+            ScopedTablePattern(raw="allowed_*", table="allowed_*")
+        ]
+
+        result = db_func_tool.check_table_exists("forbidden_table")
+
+        assert result.success == 0
+        assert "outside the scoped context" in result.error
+
+    def test_check_table_exists_connector_error(self, db_func_tool, mock_connector):
+        """Test table existence check when connector fails."""
+        mock_connector.get_tables.side_effect = Exception("Connection failed")
+
+        result = db_func_tool.check_table_exists("users")
+
+        assert result.success == 0
+        assert "Table existence check failed" in result.error
+
+
+class TestSQLSyntaxValidation:
+    """Test cases for SQL syntax validation functionality."""
+
+    def test_validate_sql_syntax_valid_select(self, db_func_tool):
+        """Test validation of a valid SELECT query."""
+        sql = "SELECT id, name FROM users WHERE active = 1"
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 1
+        assert result.result["syntax_valid"] == True
+        assert "users" in result.result["tables_referenced"]
+        assert result.result["sql_type"] == "Select"
+
+    def test_validate_sql_syntax_valid_insert(self, db_func_tool):
+        """Test validation of a valid INSERT query."""
+        sql = "INSERT INTO users (name, email) VALUES ('John', 'john@example.com')"
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 1
+        assert result.result["syntax_valid"] == True
+        assert "users" in result.result["tables_referenced"]
+        assert result.result["sql_type"] == "Insert"
+
+    def test_validate_sql_syntax_valid_update(self, db_func_tool):
+        """Test validation of a valid UPDATE query."""
+        sql = "UPDATE users SET name = 'Jane' WHERE id = 1"
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 1
+        assert result.result["syntax_valid"] == True
+        assert "users" in result.result["tables_referenced"]
+        assert result.result["sql_type"] == "Update"
+
+    def test_validate_sql_syntax_valid_delete(self, db_func_tool):
+        """Test validation of a valid DELETE query."""
+        sql = "DELETE FROM users WHERE id = 1"
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 1
+        assert result.result["syntax_valid"] == True
+        assert "users" in result.result["tables_referenced"]
+        assert result.result["sql_type"] == "Delete"
+
+    def test_validate_sql_syntax_missing_operation(self, db_func_tool):
+        """Test validation fails for SQL without main operation keywords."""
+        sql = "FROM users WHERE id = 1"
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 0
+        assert "缺少基本的查询" in result.error
+
+    def test_validate_sql_syntax_syntax_error(self, db_func_tool):
+        """Test validation fails for malformed SQL."""
+        sql = "SELEC id FROM users WHRE id = 1"  # Typos in SELECT and WHERE
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 0
+        assert "SQL语法错误" in result.error
+
+    def test_validate_sql_syntax_incomplete_statement(self, db_func_tool):
+        """Test validation fails for incomplete SQL statements."""
+        sql = "SELECT id FROM"
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 0
+        assert "SQL语法错误" in result.error
+
+    def test_validate_sql_syntax_complex_query(self, db_func_tool):
+        """Test validation of complex SQL with joins and subqueries."""
+        sql = """
+        SELECT u.name, o.total
+        FROM users u
+        JOIN orders o ON u.id = o.user_id
+        WHERE u.active = 1 AND o.total > 100
+        """
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 1
+        assert result.result["syntax_valid"] == True
+        assert "users" in result.result["tables_referenced"]
+        assert "orders" in result.result["tables_referenced"]
+        assert result.result["sql_type"] == "Select"
+
+    def test_validate_sql_syntax_with_cte(self, db_func_tool):
+        """Test validation of SQL with Common Table Expressions."""
+        sql = """
+        WITH active_users AS (
+            SELECT id, name FROM users WHERE active = 1
+        )
+        SELECT * FROM active_users WHERE name LIKE 'J%'
+        """
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 1
+        assert result.result["syntax_valid"] == True
+        assert "users" in result.result["tables_referenced"]
+        assert result.result["sql_type"] == "With"
+
+    def test_validate_sql_syntax_select_without_from(self, db_func_tool):
+        """Test validation of SELECT without FROM (valid SQL)."""
+        sql = "SELECT 1 + 1 as result"
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 1
+        assert result.result["syntax_valid"] == True
+        assert result.result["tables_referenced"] == []  # No table references
+        assert result.result["sql_type"] == "Select"
+
+    def test_validate_sql_syntax_empty_string(self, db_func_tool):
+        """Test validation of empty SQL string."""
+        sql = ""
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 0
+        assert "SQL语法错误" in result.error
+
+    def test_validate_sql_syntax_whitespace_only(self, db_func_tool):
+        """Test validation of whitespace-only SQL string."""
+        sql = "   \n\t   "
+        result = db_func_tool.validate_sql_syntax(sql)
+
+        assert result.success == 0
+        assert "SQL语法错误" in result.error

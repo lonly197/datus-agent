@@ -262,3 +262,123 @@ class TestDeepResearchEventConverter:
         assert len(events) == 2
         assert events[0].planId == events[1].planId
         assert events[0].planId == self.converter.plan_id
+
+    def test_convert_syntax_error_to_error_event(self):
+        """Test conversion of SQL syntax error to ErrorEvent."""
+        action = ActionHistory(
+            action_id="syntax_error_1",
+            role=ActionRole.TOOL,
+            action_type="sql_execution_error",
+            messages="SQL syntax validation failed: missing SELECT keyword",
+            input={"sql_query": "FROM users WHERE id = 1", "error_type": "syntax"},
+            output={
+                "error": "SQL语句缺少基本的查询/修改操作关键词(SELECT, INSERT, UPDATE, DELETE等)",
+                "error_type": "syntax",
+                "suggestions": [
+                    "检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)",
+                    "验证括号和引号是否匹配",
+                    "确认表名和列名拼写是否正确"
+                ],
+                "can_retry": False
+            },
+            status=ActionStatus.FAILED,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        events = self.converter.convert_action_to_event(action, 1)
+
+        assert len(events) == 1
+        event = events[0]
+        assert isinstance(event, ErrorEvent)
+        assert event.event == DeepResearchEventType.ERROR
+        assert "SQL语句缺少基本的查询" in event.error
+
+    def test_convert_table_not_found_to_error_event(self):
+        """Test conversion of table not found error to ErrorEvent."""
+        action = ActionHistory(
+            action_id="table_error_1",
+            role=ActionRole.TOOL,
+            action_type="table_not_found",
+            messages="Table 'nonexistent_table' not found",
+            input={"table_name": "nonexistent_table", "error_type": "table_not_found"},
+            output={
+                "error": "Table 'nonexistent_table' not found or no DDL available",
+                "error_type": "table_not_found",
+                "suggestions": [
+                    "检查表名拼写是否正确",
+                    "确认数据库权限",
+                    "使用search_table工具查找相似表名"
+                ],
+                "can_retry": True
+            },
+            status=ActionStatus.FAILED,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        events = self.converter.convert_action_to_event(action, 1)
+
+        assert len(events) == 1
+        event = events[0]
+        assert isinstance(event, ErrorEvent)
+        assert event.event == DeepResearchEventType.ERROR
+        assert "nonexistent_table" in event.error
+
+    def test_convert_db_connection_error_to_error_event(self):
+        """Test conversion of database connection error to ErrorEvent."""
+        action = ActionHistory(
+            action_id="db_error_1",
+            role=ActionRole.TOOL,
+            action_type="db_connection_error",
+            messages="Database connection failed: Connection timeout",
+            input={"sql_query": "SELECT * FROM users", "error_type": "connection"},
+            output={
+                "error": "Connection timeout after 30 seconds",
+                "error_type": "connection",
+                "suggestions": [
+                    "检查数据库服务是否运行",
+                    "验证网络连接",
+                    "确认数据库连接配置"
+                ],
+                "can_retry": True
+            },
+            status=ActionStatus.FAILED,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        events = self.converter.convert_action_to_event(action, 1)
+
+        assert len(events) == 1
+        event = events[0]
+        assert isinstance(event, ErrorEvent)
+        assert event.event == DeepResearchEventType.ERROR
+        assert "Connection timeout" in event.error
+
+    def test_convert_generic_tool_error_to_error_event(self):
+        """Test conversion of generic tool error to ErrorEvent."""
+        action = ActionHistory(
+            action_id="generic_error_1",
+            role=ActionRole.TOOL,
+            action_type="tool_execution_error",
+            messages="Tool read_query failed: Permission denied",
+            input={"tool_name": "read_query", "error_type": "permission"},
+            output={
+                "error": "Permission denied for table access",
+                "error_type": "permission",
+                "tool_name": "read_query",
+                "can_retry": False
+            },
+            status=ActionStatus.FAILED,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        events = self.converter.convert_action_to_event(action, 1)
+
+        assert len(events) == 1
+        event = events[0]
+        assert isinstance(event, ErrorEvent)
+        assert event.event == DeepResearchEventType.ERROR
+        assert "Permission denied" in event.error

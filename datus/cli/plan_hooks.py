@@ -2696,7 +2696,8 @@ Respond with only the tool name, nothing else."""
 
                 # Check if we should retry
                 if not error_info.get("can_retry", False) or attempt_count >= max_attempts:
-                    # No more retries or not retryable - return the error
+                    # No more retries or not retryable - emit error event and return the error
+                    await self._emit_tool_error_event(tool_name, str(e), error_info, kwargs)
                     error_info["final_attempt"] = True
                     return None, False, error_info
 
@@ -2786,6 +2787,99 @@ Respond with only the tool name, nothing else."""
                 logger.debug(f"Emitted status message: {message}")
         except Exception as e:
             logger.debug(f"Failed to emit status message: {e}")
+
+    async def _emit_tool_error_event(self, tool_name: str, error_message: str, error_info: Dict[str, Any], kwargs: Dict[str, Any]):
+        """Emit error events for failed tool executions."""
+        try:
+            if self.emit_queue is not None:
+                from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+                # Determine error type for appropriate event
+                error_type = error_info.get("error_type", "unknown")
+
+                # Create appropriate error event based on error type
+                if error_type == "database_connection":
+                    sql_query = kwargs.get("sql", kwargs.get("query_text", ""))
+                    error_action = ActionHistory.create_action(
+                        role=ActionRole.TOOL,
+                        action_type="db_connection_error",
+                        messages=f"Database connection failed: {error_message}",
+                        input_data={"sql_query": sql_query, "error_type": "connection"},
+                        output_data={
+                            "error": error_message,
+                            "error_type": "connection",
+                            "suggestions": [
+                                "检查数据库服务是否运行",
+                                "验证网络连接",
+                                "确认数据库连接配置"
+                            ],
+                            "can_retry": error_info.get("can_retry", True)
+                        },
+                        status=ActionStatus.FAILED,
+                    )
+                elif error_type == "table_not_found" and tool_name in ["describe_table", "get_table_ddl"]:
+                    table_name = kwargs.get("table_name", "unknown")
+                    error_action = ActionHistory.create_action(
+                        role=ActionRole.TOOL,
+                        action_type="table_not_found",
+                        messages=f"Table '{table_name}' not found: {error_message}",
+                        input_data={"table_name": table_name, "error_type": "table_not_found"},
+                        output_data={
+                            "error": error_message,
+                            "error_type": "table_not_found",
+                            "suggestions": [
+                                "检查表名拼写是否正确",
+                                "确认数据库权限",
+                                "使用search_table工具查找相似表名"
+                            ],
+                            "can_retry": error_info.get("can_retry", True)
+                        },
+                        status=ActionStatus.FAILED,
+                    )
+                elif tool_name == "validate_sql_syntax":
+                    sql_query = kwargs.get("sql", "")
+                    error_action = ActionHistory.create_action(
+                        role=ActionRole.TOOL,
+                        action_type="sql_execution_error",
+                        messages=f"SQL syntax validation failed: {error_message}",
+                        input_data={"sql_query": sql_query, "error_type": "syntax"},
+                        output_data={
+                            "error": error_message,
+                            "error_type": "syntax",
+                            "suggestions": [
+                                "检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)",
+                                "验证括号和引号是否匹配",
+                                "确认表名和列名拼写是否正确"
+                            ],
+                            "can_retry": False
+                        },
+                        status=ActionStatus.FAILED,
+                    )
+                else:
+                    # Generic tool error
+                    error_action = ActionHistory.create_action(
+                        role=ActionRole.TOOL,
+                        action_type="tool_execution_error",
+                        messages=f"Tool {tool_name} failed: {error_message}",
+                        input_data={"tool_name": tool_name, "error_type": error_type},
+                        output_data={
+                            "error": error_message,
+                            "error_type": error_type,
+                            "tool_name": tool_name,
+                            "can_retry": error_info.get("can_retry", False)
+                        },
+                        status=ActionStatus.FAILED,
+                    )
+
+                # Add to action history and emit
+                if hasattr(self, 'action_history_manager') and self.action_history_manager:
+                    self.action_history_manager.add_action(error_action)
+                await self._emit_action(error_action)
+
+                logger.debug(f"Emitted tool error event for {tool_name}: {error_type}")
+
+        except Exception as e:
+            logger.debug(f"Failed to emit tool error event: {e}")
 
     async def _execute_batch_operations(self, db_tool, fs_tool, call_id: str) -> Dict[str, List[Dict]]:
         """Execute batched tool operations for improved efficiency."""

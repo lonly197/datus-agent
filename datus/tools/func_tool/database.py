@@ -681,6 +681,125 @@ class DBFuncTool:
         except Exception as e:
             return FuncToolResult(success=0, error=str(e))
 
+    def validate_sql_syntax(self, sql: str) -> FuncToolResult:
+        """
+        Validate SQL syntax without executing the query.
+
+        Args:
+            sql: SQL statement to validate
+
+        Returns:
+            FuncToolResult with result containing validation status and extracted tables
+        """
+        try:
+            import sqlglot
+            from sqlglot import exp
+
+            # Get dialect from agent config or use default
+            dialect = None
+            if self.agent_config and hasattr(self.agent_config, 'db_type'):
+                dialect = self.agent_config.db_type
+
+            # Parse SQL syntax tree
+            parsed = sqlglot.parse_one(sql, read=dialect)
+
+            # Basic syntax checks
+            issues = []
+
+            # Check for basic SELECT/FROM/INSERT/UPDATE/DELETE structure
+            has_main_operation = any(
+                isinstance(node, (exp.Select, exp.Insert, exp.Update, exp.Delete))
+                for node in parsed.walk()
+            )
+
+            if not has_main_operation:
+                issues.append("SQL语句缺少基本的查询/修改操作关键词(SELECT, INSERT, UPDATE, DELETE等)")
+
+            # Extract table references
+            tables = [table.name for table in parsed.find_all(exp.Table)]
+            if not tables and has_main_operation:
+                # Some valid operations might not have explicit table references (like SELECT 1)
+                # Only flag as issue if it's clearly intended to have tables
+                pass
+
+            if issues:
+                return FuncToolResult(success=0, error="; ".join(issues))
+
+            return FuncToolResult(result={
+                "syntax_valid": True,
+                "tables_referenced": tables,
+                "sql_type": type(parsed).__name__,
+                "dialect": dialect or "default"
+            })
+
+        except Exception as e:
+            return FuncToolResult(success=0, error=f"SQL语法错误: {str(e)}")
+
+    def check_table_exists(self, table_name: str, catalog: Optional[str] = "", database: Optional[str] = "", schema: Optional[str] = "") -> FuncToolResult:
+        """
+        Check if a table exists without retrieving its full schema.
+
+        Args:
+            table_name: Name of the table to check
+            catalog: Optional catalog name
+            database: Optional database name
+            schema: Optional schema name
+
+        Returns:
+            FuncToolResult with result containing existence status and available tables
+        """
+        try:
+            coordinate = self._build_table_coordinate(
+                raw_name=table_name,
+                catalog=catalog,
+                database=database,
+                schema=schema,
+            )
+
+            # Check if table matches scoped context
+            if not self._table_matches_scope(coordinate):
+                return FuncToolResult(success=0, error=f"Table '{table_name}' is outside the scoped context.")
+
+            # Get tables list for the specified scope
+            tables = self.connector.get_tables(
+                catalog_name=catalog,
+                database_name=database,
+                schema_name=schema
+            )
+
+            # Extract table names
+            table_names = [t.get('name', '') for t in tables if t.get('name')]
+            table_exists = table_name in table_names
+
+            # Get a few similar table names for suggestions if table doesn't exist
+            suggestions = []
+            if not table_exists:
+                # Simple fuzzy matching based on substring or edit distance
+                import difflib
+
+                # Find tables with similar names (substring match or close edit distance)
+                for existing_table in table_names[:20]:  # Limit to first 20 for performance
+                    if table_name.lower() in existing_table.lower() or existing_table.lower() in table_name.lower():
+                        suggestions.append(existing_table)
+                    elif difflib.SequenceMatcher(None, table_name.lower(), existing_table.lower()).ratio() > 0.6:
+                        suggestions.append(existing_table)
+
+                # Limit suggestions to top 5
+                suggestions = list(set(suggestions))[:5]
+
+            return FuncToolResult(result={
+                "table_exists": table_exists,
+                "available_tables": table_names[:10],  # Return first 10 for context
+                "suggestions": suggestions if not table_exists else [],
+                "catalog": catalog,
+                "database": database,
+                "schema": schema,
+                "table_name": table_name
+            })
+
+        except Exception as e:
+            return FuncToolResult(success=0, error=f"Table existence check failed: {str(e)}")
+
 
 def db_function_tool_instance(
     agent_config: AgentConfig, database_name: str = "", sub_agent_name: Optional[str] = None
