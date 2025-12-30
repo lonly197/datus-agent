@@ -610,9 +610,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         self.execution_status.add_error(error_type, error_desc)
 
                 if hasattr(self, "execution_status") and self.execution_status:
-                    self.execution_status.add_tool_execution(
-                        tool_name, success, execution_time, error_type
-                    )
+                    self.execution_status.add_tool_execution(tool_name, success, execution_time, error_type)
 
                 # Record error if using event manager
                 if not success and event_manager and execution_id:
@@ -685,9 +683,12 @@ class ChatAgenticNode(GenSQLAgenticNode):
                                                 suggestions.append(meta["table_name"])
 
                                     if suggestions:
-                                        logger.info(f"Found {len(suggestions)} similar tables via search_table fallback")
+                                        logger.info(
+                                            f"Found {len(suggestions)} similar tables via search_table fallback"
+                                        )
                                         # Emit a tool result event with suggestions
                                         from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
                                         fallback_action = ActionHistory.create_action(
                                             role=ActionRole.TOOL,
                                             action_type="tool_call_result",
@@ -697,7 +698,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                                                 "tool_name": "search_table",
                                                 "success": True,
                                                 "suggestions": suggestions[:5],  # Limit to top 5
-                                                "fallback_for": tool_name
+                                                "fallback_for": tool_name,
                                             },
                                             status=ActionStatus.SUCCESS,
                                         )
@@ -732,7 +733,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         "tool_call_id": tool_call_id,
                         "tool_name": tool_name,
                         "execution_time": execution_time,
-                        "cache_hit": False
+                        "cache_hit": False,
                     },
                     output={"success": False, "error": str(e)},
                     status=ActionStatus.FAILED,
@@ -1341,18 +1342,14 @@ class ChatAgenticNode(GenSQLAgenticNode):
             output_data={
                 "error": error,
                 "error_type": "syntax",
-                "suggestions": [
-                    "检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)",
-                    "验证括号和引号是否匹配",
-                    "确认表名和列名拼写是否正确"
-                ],
-                "can_retry": False
+                "suggestions": ["检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)", "验证括号和引号是否匹配", "确认表名和列名拼写是否正确"],
+                "can_retry": False,
             },
             status=ActionStatus.FAILED,
         )
 
         # Emit the error event if action_history_manager is available
-        if hasattr(self, 'action_history_manager') and self.action_history_manager:
+        if hasattr(self, "action_history_manager") and self.action_history_manager:
             self.action_history_manager.add_action(error_action)
 
         return error_action
@@ -1369,18 +1366,14 @@ class ChatAgenticNode(GenSQLAgenticNode):
             output_data={
                 "error": error,
                 "error_type": "table_not_found",
-                "suggestions": [
-                    "检查表名拼写是否正确",
-                    "确认数据库权限",
-                    "使用search_table工具查找相似表名"
-                ],
-                "can_retry": True
+                "suggestions": ["检查表名拼写是否正确", "确认数据库权限", "使用search_table工具查找相似表名"],
+                "can_retry": True,
             },
             status=ActionStatus.FAILED,
         )
 
         # Emit the error event if action_history_manager is available
-        if hasattr(self, 'action_history_manager') and self.action_history_manager:
+        if hasattr(self, "action_history_manager") and self.action_history_manager:
             self.action_history_manager.add_action(error_action)
 
         return error_action
@@ -1397,18 +1390,14 @@ class ChatAgenticNode(GenSQLAgenticNode):
             output_data={
                 "error": error,
                 "error_type": "connection",
-                "suggestions": [
-                    "检查数据库服务是否运行",
-                    "验证网络连接",
-                    "确认数据库连接配置"
-                ],
-                "can_retry": True
+                "suggestions": ["检查数据库服务是否运行", "验证网络连接", "确认数据库连接配置"],
+                "can_retry": True,
             },
             status=ActionStatus.FAILED,
         )
 
         # Emit the error event if action_history_manager is available
-        if hasattr(self, 'action_history_manager') and self.action_history_manager:
+        if hasattr(self, "action_history_manager") and self.action_history_manager:
             self.action_history_manager.add_action(error_action)
 
         return error_action
@@ -1445,6 +1434,48 @@ class ChatAgenticNode(GenSQLAgenticNode):
         # Determine execution scenario
         scenario = self._determine_execution_scenario(user_input)
         logger.info(f"Detected execution scenario: {scenario}")
+
+        is_plan_mode = getattr(user_input, "plan_mode", False)
+        # emit_queue used to stream ActionHistory produced by PlanModeHooks back to node stream
+        emit_queue: "asyncio.Queue[ActionHistory]" = asyncio.Queue()
+
+        if is_plan_mode:
+            self.plan_mode_active = True
+
+            # Create plan mode hooks
+            from rich.console import Console
+
+            from datus.cli.plan_hooks import PlanModeHooks
+
+            console = Console()
+            session = self._get_or_create_session()[0]
+
+            # Workflow sets 'auto_execute_plan' in metadata, CLI REPL does not
+            auto_mode = getattr(user_input, "auto_execute_plan", False)
+            logger.info(f"Plan mode auto_mode: {auto_mode} (from input)")
+
+            # Check for auto-injected knowledge from workflow task
+            auto_injected_knowledge = (
+                getattr(self.workflow.task, "_auto_injected_knowledge", None) if self.workflow else None
+            )
+
+            self.plan_hooks = PlanModeHooks(
+                console=console,
+                session=session,
+                auto_mode=auto_mode,
+                action_history_manager=action_history_manager,
+                agent_config=self.agent_config,
+                emit_queue=emit_queue,
+                model=self.model,
+                auto_injected_knowledge=auto_injected_knowledge,
+            )
+            # Enable caching and batching for plan mode
+            self.plan_hooks.enable_query_caching = True
+            self.plan_hooks.enable_batch_processing = True
+            # Set execution event manager if available
+            if hasattr(self, "execution_event_manager") and self.execution_event_manager:
+                execution_id = f"plan_{int(time.time() * 1000)}"
+                self.plan_hooks.set_execution_event_manager(self.execution_event_manager, execution_id)
 
         # Execute preflight tools if required (for sql_review tasks)
         if scenario == "sql_review" and hasattr(self, "workflow") and self.workflow:
@@ -1523,10 +1554,10 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Determine the execution scenario based on input content.
 
         Args:
-            user_input: User input data
+        user_input: User input data
 
         Returns:
-            str: Execution scenario ("text2sql", "sql_review", "data_analysis", "smart_query", "deep_analysis")
+        str: Execution scenario ("text2sql", "sql_review", "data_analysis", "smart_query", "deep_analysis")
         """
         message = user_input.user_message.lower() if hasattr(user_input, "user_message") else str(user_input).lower()
 
@@ -1541,488 +1572,3 @@ class ChatAgenticNode(GenSQLAgenticNode):
         analysis_keywords = ["分析", "analysis", "统计", "statistics", "趋势", "trend", "对比", "compare"]
         if any(keyword in message for keyword in analysis_keywords):
             return "data_analysis"
-
-        # Check for smart query keywords
-        smart_query_keywords = ["智能查询", "smart query", "推荐", "recommend", "建议", "suggest"]
-        if any(keyword in message for keyword in smart_query_keywords):
-            return "smart_query"
-
-        # Check for deep analysis keywords
-        deep_analysis_keywords = ["深度分析", "deep analysis", "深入研究", "detailed analysis"]
-        if any(keyword in message for keyword in deep_analysis_keywords):
-            return "deep_analysis"
-
-        # Default to text2sql for SQL-related queries
-        sql_keywords = ["select", "insert", "update", "delete", "create", "alter", "drop"]
-        if any(keyword in message for keyword in sql_keywords):
-            return "text2sql"
-
-        # Default fallback
-        return "data_analysis"
-
-        is_plan_mode = getattr(user_input, "plan_mode", False)
-        # emit_queue used to stream ActionHistory produced by PlanModeHooks back to node stream
-        emit_queue: "asyncio.Queue[ActionHistory]" = asyncio.Queue()
-
-        if is_plan_mode:
-            self.plan_mode_active = True
-
-            # Create plan mode hooks
-            from rich.console import Console
-
-            from datus.cli.plan_hooks import PlanModeHooks
-
-            console = Console()
-            session = self._get_or_create_session()[0]
-
-            # Workflow sets 'auto_execute_plan' in metadata, CLI REPL does not
-            auto_mode = getattr(user_input, "auto_execute_plan", False)
-            logger.info(f"Plan mode auto_mode: {auto_mode} (from input)")
-
-            # Check for auto-injected knowledge from workflow task
-            auto_injected_knowledge = (
-                getattr(self.workflow.task, "_auto_injected_knowledge", None) if self.workflow else None
-            )
-
-            self.plan_hooks = PlanModeHooks(
-                console=console,
-                session=session,
-                auto_mode=auto_mode,
-                action_history_manager=action_history_manager,
-                agent_config=self.agent_config,
-                emit_queue=emit_queue,
-                model=self.model,  # Pass model for LLM reasoning fallback
-                auto_injected_knowledge=auto_injected_knowledge,
-            )
-            # Set execution event manager if available
-            if hasattr(self, "execution_event_manager") and self.execution_event_manager:
-                execution_id = f"plan_mode_{int(time.time() * 1000)}"
-                self.plan_hooks.set_execution_event_manager(self.execution_event_manager, execution_id)
-
-        # Create initial action
-        action_type = "plan_mode_interaction" if is_plan_mode else "chat_interaction"
-        action = ActionHistory.create_action(
-            role=ActionRole.USER,
-            action_type=action_type,
-            messages=f"User: {user_input.user_message}",
-            input_data=user_input.model_dump(),
-            status=ActionStatus.PROCESSING,
-        )
-        action_history_manager.add_action(action)
-        yield action
-
-        try:
-            # Check for auto-compact before session creation to ensure fresh context
-            await self._auto_compact()
-
-            # Get or create session and any available summary
-            session, conversation_summary = self._get_or_create_session()
-
-            # Get system instruction from template, passing summary and prompt version if available
-            system_instruction = self._get_system_prompt(conversation_summary, user_input.prompt_version)
-
-            # Add database context to user message if provided
-            from datus.agent.node.gen_sql_agentic_node import build_enhanced_message
-
-            enhanced_message = build_enhanced_message(
-                user_message=user_input.user_message,
-                db_type=self.agent_config.db_type,
-                catalog=user_input.catalog,
-                database=user_input.database,
-                db_schema=user_input.db_schema,
-                external_knowledge=user_input.external_knowledge,
-                schemas=user_input.schemas,
-                metrics=user_input.metrics,
-                reference_sql=user_input.reference_sql,
-            )
-
-            # Execute with streaming
-            response_content = ""
-            sql_content = None
-            tokens_used = 0
-            last_successful_output = None
-
-            # Create assistant action for processing
-            assistant_action = ActionHistory.create_action(
-                role=ActionRole.ASSISTANT,
-                action_type="llm_generation",
-                messages="Generating response with tools...",
-                input_data={"prompt": enhanced_message, "system": system_instruction},
-                status=ActionStatus.PROCESSING,
-            )
-            # Do NOT add the interim assistant generation action to action history or emit it.
-            # We avoid persisting or emitting interim LLM-generated actions as final ChatEvents
-            # to prevent duplicates. (Final response will be produced as a single `chat_response` action below.)
-
-            # Determine execution mode and start unified recursive execution
-            execution_mode = "plan" if is_plan_mode and self.plan_hooks else "normal"
-
-            # Start unified recursive execution
-            async for stream_action in self._execute_with_recursive_replan(
-                prompt=enhanced_message,
-                execution_mode=execution_mode,
-                original_input=user_input,
-                action_history_manager=action_history_manager,
-                session=session,
-            ):
-                yield stream_action
-
-                # Drain any actions emitted by hooks/executor into the node stream
-                try:
-                    while True:
-                        qaction = emit_queue.get_nowait()
-                        yield qaction
-                except asyncio.QueueEmpty:
-                    pass
-
-                # Collect response content from successful actions
-                if stream_action.status == ActionStatus.SUCCESS and stream_action.output:
-                    if isinstance(stream_action.output, dict):
-                        last_successful_output = stream_action.output
-                        # Look for content in various possible fields
-                        # Only collect raw_output if it's from a "message" type action (Thinking messages)
-                        raw_output_value = ""
-                        if stream_action.action_type == "message" and "raw_output" in stream_action.output:
-                            raw_output_value = stream_action.output.get("raw_output", "")
-
-                        response_content = (
-                            stream_action.output.get("content", "")
-                            or stream_action.output.get("response", "")
-                            or raw_output_value
-                            or response_content
-                        )
-
-            # After model stream completes, drain remaining emitted actions to ensure nothing is left
-            try:
-                while True:
-                    # Use timeout to avoid infinite blocking, check for cancellation
-                    try:
-                        qaction = await asyncio.wait_for(emit_queue.get(), timeout=0.1)
-                        yield qaction
-                    except asyncio.TimeoutError:
-                        # No more items in queue within timeout, break
-                        break
-                    except asyncio.CancelledError:
-                        # Task was cancelled, stop draining
-                        break
-            except Exception:
-                # queue empty or cancelled
-                pass
-
-            # If we still don't have response_content, check the last successful output
-            if not response_content and last_successful_output:
-                logger.debug(f"Trying to extract response from last_successful_output: {last_successful_output}")
-                # Try different fields that might contain the response
-                response_content = (
-                    last_successful_output.get("content", "")
-                    or last_successful_output.get("text", "")
-                    or last_successful_output.get("response", "")
-                    or last_successful_output.get("raw_output", "")  # Try raw_output from any action type
-                    or str(last_successful_output)  # Fallback to string representation
-                )
-
-            # Extract SQL directly from summary_report action if available
-            sql_content = None
-            for stream_action in reversed(action_history_manager.get_actions()):
-                if stream_action.action_type == "summary_report" and stream_action.output:
-                    if isinstance(stream_action.output, dict):
-                        sql_content = stream_action.output.get("sql")
-                        # Also get the markdown/content if response_content is still empty
-                        if not response_content:
-                            response_content = (
-                                stream_action.output.get("markdown", "")
-                                or stream_action.output.get("content", "")
-                                or stream_action.output.get("response", "")
-                            )
-                        if sql_content:  # Found SQL, stop searching
-                            logger.debug(f"Extracted SQL from summary_report action: {sql_content[:100]}...")
-                            break
-
-            # Fallback: try to extract SQL and output from response_content if not found
-            if not sql_content:
-                extracted_sql, extracted_output = self._extract_sql_and_output_from_response(
-                    {"content": response_content}
-                )
-                if extracted_sql:
-                    sql_content = extracted_sql
-                if extracted_output:
-                    response_content = extracted_output
-
-            logger.debug(f"Final response_content: '{response_content}' (length: {len(response_content)})")
-            logger.debug(f"Final sql_content: {sql_content[:100] if sql_content else 'None'}...")
-
-            # If we're in plan mode and no SQL was produced, attempt a final-summary fallback:
-            # synthesize a final JSON report from the completed action history.
-            plan_mode = getattr(user_input, "plan_mode", False)
-            logger.debug(
-                f"Final-summary check: plan_mode={plan_mode}, sql_content={bool(sql_content)}, response_content_length={len(response_content) if response_content else 0}"
-            )
-
-            # Also trigger fallback if response_content looks like a progress update (not a proper report)
-            looks_like_progress = response_content and any(
-                phrase in response_content for phrase in ["完成第", "completing task", "step", "子任务"]
-            )
-
-            if plan_mode and (not sql_content or looks_like_progress):
-                try:
-                    actions_list = action_history_manager.get_actions() if action_history_manager else []
-                    actions_summary = "\n".join(
-                        f"- {a.action_type}: {a.messages[:100]}" for a in actions_list[-20:]
-                    )  # limit to last 20
-                    fallback_prompt = (
-                        "Plan-mode fallback: All todos appear to have completed but no final SQL/report was produced.\n"
-                        "Based on the action history and tool outputs below, produce a comprehensive final JSON report.\n\n"
-                        "Required JSON format:\n"
-                        "{\n"
-                        '  "sql": "<final optimized SQL if applicable, or empty string>",\n'
-                        '  "explanation": "<comprehensive summary of findings, issues found, and optimization recommendations>"\n'
-                        "}\n\n"
-                        f"Action history (latest first):\n{actions_summary}\n\n"
-                        "Important: If this is a SQL review/analysis task, the 'explanation' should include:\n"
-                        "- Summary of issues found (e.g., SELECT * usage, partition pruning, function performance)\n"
-                        "- Specific optimization recommendations\n"
-                        "- Expected performance improvements\n"
-                        "Return only a JSON object or a JSON code block."
-                    )
-                    logger.info(
-                        f"Attempting final-summary fallback: plan_mode={plan_mode}, looks_like_progress={looks_like_progress}"
-                    )
-                    logger.debug(f"Fallback actions_summary: {actions_summary[:500]}...")
-                    fallback_resp = await asyncio.to_thread(
-                        self.model.generate, fallback_prompt, max_tokens=2000, temperature=0.0
-                    )
-
-                    logger.debug(
-                        f"Fallback response type: {type(fallback_resp)}, length: {len(fallback_resp) if isinstance(fallback_resp, str) else 'N/A'}"
-                    )
-
-                    # Handle different response types from model.generate
-                    fallback_text = ""
-                    if isinstance(fallback_resp, str):
-                        fallback_text = fallback_resp
-                    elif hasattr(fallback_resp, "content"):
-                        fallback_text = str(getattr(fallback_resp, "content", ""))
-                    elif isinstance(fallback_resp, dict) and "content" in fallback_resp:
-                        fallback_text = str(fallback_resp.get("content", ""))
-
-                    if fallback_text.strip():
-                        extracted_sql2, extracted_output2 = self._extract_sql_and_output_from_response(
-                            {"content": fallback_text}
-                        )
-                        logger.debug(
-                            f"Fallback extraction result: sql={bool(extracted_sql2)}, output={bool(extracted_output2)}"
-                        )
-
-                        # Always use fallback output if available (it's the final report)
-                        if extracted_output2:
-                            response_content = extracted_output2
-                            logger.info(
-                                f"Final-summary fallback succeeded, replaced response_content (length: {len(response_content)})"
-                            )
-                        if extracted_sql2:
-                            sql_content = extracted_sql2
-                            logger.info(f"Final-summary fallback extracted SQL (length: {len(sql_content)})")
-                    else:
-                        logger.warning(f"Final-summary fallback returned empty response: type={type(fallback_resp)}")
-                except Exception as e:
-                    logger.error(f"Final-summary fallback failed with exception: {e}", exc_info=True)
-
-            # Extract token usage from final actions using our new approach
-            # With our streaming token fix, only the final assistant action will have accurate usage
-            final_actions = action_history_manager.get_actions()
-            tokens_used = 0
-
-            # Find the final assistant action with token usage
-            for action in reversed(final_actions):
-                if action.role == "assistant":
-                    if action.output and isinstance(action.output, dict):
-                        usage_info = action.output.get("usage", {})
-                        if usage_info and isinstance(usage_info, dict) and usage_info.get("total_tokens"):
-                            conversation_tokens = usage_info.get("total_tokens", 0)
-                            if conversation_tokens > 0:
-                                # Add this conversation's tokens to the session
-                                self._add_session_tokens(conversation_tokens)
-                                tokens_used = conversation_tokens
-                                logger.info(f"Added {conversation_tokens} tokens to session")
-                                break
-                            else:
-                                logger.warning(f"no usage token found in this action {action.messages}")
-
-            # Collect action history and calculate execution stats
-            all_actions = action_history_manager.get_actions()
-            tool_calls = [action for action in all_actions if action.role == ActionRole.TOOL]
-
-            execution_stats = {
-                "total_actions": len(all_actions),
-                "tool_calls_count": len(tool_calls),
-                "tools_used": list(set([a.action_type for a in tool_calls])),
-                "total_tokens": int(tokens_used),
-            }
-
-            # Create final result with action history
-            result = ChatNodeResult(
-                success=True,
-                response=response_content,
-                sql=sql_content,
-                tokens_used=int(tokens_used),
-                action_history=[action.model_dump() for action in all_actions],
-                execution_stats=execution_stats,
-            )
-
-            # Make result visible to Node.run_stream completeness checks
-            # so the chat node is marked as completed instead of failed.
-            self.result = result
-
-            # # Update assistant action with success
-            # action_history_manager.update_action_by_id(
-            #     assistant_action.action_id,
-            #     status=ActionStatus.SUCCESS,
-            #     output=result.model_dump(),
-            #     messages=(
-            #         f"Generated response: {response_content[:100]}..."
-            #         if len(response_content) > 100
-            #         else response_content
-            #     ),
-            # )
-
-            # Add to internal actions list
-            self.actions.extend(action_history_manager.get_actions())
-
-            # Ensure the final response includes SQL code if available
-            if sql_content and sql_content.strip():
-                # Append SQL code to the response
-                sql_section = f"\n\n### 生成的 SQL 代码：\n\n```sql\n{sql_content}\n```"
-                result.response = result.response + sql_section
-                logger.info(f"Added SQL code to final response (length: {len(sql_section)})")
-
-            # Create final response action
-            final_action = ActionHistory.create_action(
-                role=ActionRole.ASSISTANT,
-                action_type="chat_response",
-                messages="Chat interaction completed successfully",
-                input_data=user_input.model_dump(),
-                output_data=result.model_dump(),
-                status=ActionStatus.SUCCESS,
-            )
-            action_history_manager.add_action(final_action)
-            yield final_action
-
-            # Create and yield complete event
-            complete_action = ActionHistory.create_action(
-                role=ActionRole.SYSTEM,
-                action_type="workflow_completion",
-                messages="DONE",
-                input_data={"source": "chat_agentic_node"},
-                status=ActionStatus.SUCCESS,
-            )
-            action_history_manager.add_action(complete_action)
-            yield complete_action
-
-        except Exception as e:
-            # Handle user cancellation as success, not error
-            if "User cancelled" in str(e) or "UserCancelledException" in str(type(e).__name__):
-                logger.info("User cancelled execution, stopping gracefully...")
-
-                # Create cancellation result (success=True)
-                result = ChatNodeResult(
-                    success=True,
-                    response="Execution cancelled by user.",
-                    tokens_used=0,
-                )
-
-                # Make result visible to Node.run_stream completeness checks
-                self.result = result
-
-                # Update action with cancellation
-                action_history_manager.update_current_action(
-                    status=ActionStatus.SUCCESS,
-                    output=result.model_dump(),
-                    messages="Execution cancelled by user",
-                )
-
-                # Create cancellation action
-                action = ActionHistory.create_action(
-                    role=ActionRole.ASSISTANT,
-                    action_type="user_cancellation",
-                    messages="Execution cancelled by user",
-                    input_data=user_input.model_dump(),
-                    output_data=result.model_dump(),
-                    status=ActionStatus.SUCCESS,
-                )
-            else:
-                logger.error(f"Chat execution error: {e}")
-
-                # Create error result for all other exceptions
-                result = ChatNodeResult(
-                    success=False,
-                    error=str(e),
-                    response="Sorry, I encountered an error while processing your request.",
-                    tokens_used=0,
-                )
-
-                # Make result visible to Node.run_stream completeness checks
-                self.result = result
-
-                # Create ErrorEvent for streaming to frontend
-                error_action = ActionHistory.create_action(
-                    role=ActionRole.SYSTEM,
-                    action_type="error",
-                    messages=f"Execution failed: {str(e)}",
-                    input_data=user_input.model_dump(),
-                    output_data={"error": str(e)},
-                    status=ActionStatus.FAILED,
-                )
-
-                # Add error action to history and emit for streaming
-                if action_history_manager:
-                    action_history_manager.add_action(error_action)
-                    if emit_queue:
-                        try:
-                            await emit_queue.put(error_action)
-                        except Exception as emit_e:
-                            logger.debug(f"Failed to emit error event: {emit_e}")
-
-                # Create CompleteEvent even on error to signal task completion
-                complete_action = ActionHistory.create_action(
-                    role=ActionRole.SYSTEM,
-                    action_type="workflow_completion",
-                    messages="Task completed with error",
-                    input_data=user_input.model_dump(),
-                    output_data=result.model_dump(),
-                    status=ActionStatus.FAILED,
-                )
-
-                # Add complete action to history and emit for streaming
-                if action_history_manager:
-                    action_history_manager.add_action(complete_action)
-                    if emit_queue:
-                        try:
-                            await emit_queue.put(complete_action)
-                        except Exception as emit_e:
-                            logger.debug(f"Failed to emit complete event: {emit_e}")
-
-                # Update action with error
-                action_history_manager.update_current_action(
-                    status=ActionStatus.FAILED,
-                    output=result.model_dump(),
-                    messages=f"Error: {str(e)}",
-                )
-
-                # Create error action
-                action = ActionHistory.create_action(
-                    role=ActionRole.ASSISTANT,
-                    action_type="error",
-                    messages=f"Chat interaction failed: {str(e)}",
-                    input_data=user_input.model_dump(),
-                    output_data=result.model_dump(),
-                    status=ActionStatus.FAILED,
-                )
-
-            action_history_manager.add_action(action)
-            yield action
-
-        finally:
-            # Clean up plan mode state
-            if is_plan_mode:
-                self.plan_mode_active = False
-                self.plan_hooks = None
