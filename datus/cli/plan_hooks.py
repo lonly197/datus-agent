@@ -570,6 +570,50 @@ class ExecutionMonitor:
             preflight["cache_hits"] += 1
             self.metrics["preflight_cache_hits"] += 1
 
+        # Enhanced metrics for specific tools
+        self._record_enhanced_tool_metrics(tool_name, success, execution_time, cache_hit)
+
+    def _record_enhanced_tool_metrics(self, tool_name: str, success: bool, execution_time: float, cache_hit: bool):
+        """Record metrics specific to enhanced preflight tools."""
+        # Initialize enhanced metrics if not exists
+        if "enhanced_tools" not in self.metrics:
+            self.metrics["enhanced_tools"] = {
+                "analyze_query_plan": {"calls": 0, "successes": 0, "avg_time": 0, "cache_hits": 0},
+                "check_table_conflicts": {"calls": 0, "successes": 0, "avg_time": 0, "cache_hits": 0},
+                "validate_partitioning": {"calls": 0, "successes": 0, "avg_time": 0, "cache_hits": 0},
+            }
+
+        tool_metrics = self.metrics["enhanced_tools"].get(tool_name, {})
+        if not tool_metrics:
+            return
+
+        # Update metrics
+        tool_metrics["calls"] += 1
+        if success:
+            tool_metrics["successes"] += 1
+        if cache_hit:
+            tool_metrics["cache_hits"] += 1
+
+        # Update average execution time
+        if tool_metrics["calls"] == 1:
+            tool_metrics["avg_time"] = execution_time
+        else:
+            # Running average
+            prev_avg = tool_metrics["avg_time"]
+            tool_metrics["avg_time"] = (prev_avg * (tool_metrics["calls"] - 1) + execution_time) / tool_metrics["calls"]
+
+        # Log enhanced metrics periodically
+        if tool_metrics["calls"] % 10 == 0:  # Log every 10 calls
+            success_rate = (tool_metrics["successes"] / tool_metrics["calls"]) * 100
+            cache_hit_rate = (tool_metrics["cache_hits"] / tool_metrics["calls"]) * 100
+            logger.info(
+                f"Enhanced tool '{tool_name}' metrics: "
+                f"calls={tool_metrics['calls']}, "
+                f"success_rate={success_rate:.1f}%, "
+                f"cache_hit_rate={cache_hit_rate:.1f}%, "
+                f"avg_time={tool_metrics['avg_time']:.2f}s"
+            )
+
         self.metrics["preflight_tool_calls"] += 1
 
         # Update tool-specific metrics
@@ -1136,6 +1180,92 @@ class QueryCache:
 
         logger.debug(f"Cached result for {tool_name} with key {cache_key}")
 
+    def get_enhanced(self, tool_name: str, **kwargs) -> Optional[Any]:
+        """Enhanced get method with tool-specific cache key generation."""
+        # Generate tool-specific cache key
+        cache_key = self._get_enhanced_cache_key(tool_name, **kwargs)
+
+        if cache_key in self.cache:
+            entry = self.cache[cache_key]
+            if time.time() - entry["timestamp"] < self._get_tool_ttl(tool_name):
+                logger.debug(f"Enhanced cache hit for {tool_name} with key {cache_key}")
+                return entry["result"]
+
+            # Remove expired entry
+            del self.cache[cache_key]
+
+        return None
+
+    def set_enhanced(self, tool_name: str, result: Any, **kwargs) -> None:
+        """Enhanced set method with tool-specific caching."""
+        cache_key = self._get_enhanced_cache_key(tool_name, **kwargs)
+
+        # Implement LRU eviction if cache is full
+        if len(self.cache) >= self.max_size:
+            oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k]["timestamp"])
+            del self.cache[oldest_key]
+
+        self.cache[cache_key] = {"result": result, "timestamp": time.time()}
+
+        logger.debug(f"Enhanced cached result for {tool_name} with key {cache_key}")
+
+    def _get_enhanced_cache_key(self, tool_name: str, **kwargs) -> str:
+        """Generate enhanced cache key with tool-specific logic."""
+        if tool_name == "analyze_query_plan":
+            # For query plan analysis, include normalized SQL hash
+            sql_query = kwargs.get("sql_query", "")
+            normalized_sql = self._normalize_sql_for_cache(sql_query)
+            cache_params = {
+                "tool": tool_name,
+                "sql_hash": hashlib.md5(normalized_sql.encode()).hexdigest()[:16],
+                "catalog": kwargs.get("catalog", ""),
+                "database": kwargs.get("database", ""),
+                "schema": kwargs.get("schema", "")
+            }
+            sorted_params = json.dumps(cache_params, sort_keys=True)
+            return hashlib.md5(sorted_params.encode()).hexdigest()
+
+        elif tool_name in ["check_table_conflicts", "validate_partitioning"]:
+            # For table-specific tools, include table name and metadata
+            cache_params = {
+                "tool": tool_name,
+                "table_name": kwargs.get("table_name", ""),
+                "catalog": kwargs.get("catalog", ""),
+                "database": kwargs.get("database", ""),
+                "schema": kwargs.get("schema", "")
+            }
+            sorted_params = json.dumps(cache_params, sort_keys=True)
+            return hashlib.md5(sorted_params.encode()).hexdigest()
+
+        else:
+            # Fallback to original method for existing tools
+            return self._get_cache_key(tool_name, **kwargs)
+
+    def _normalize_sql_for_cache(self, sql: str) -> str:
+        """Normalize SQL query for consistent caching."""
+        if not sql:
+            return ""
+
+        # Remove comments
+        import re
+        sql = re.sub(r'--.*$', '', sql, flags=re.MULTILINE)
+        sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+
+        # Normalize whitespace
+        sql = ' '.join(sql.split())
+
+        # Convert to lowercase for basic normalization
+        return sql.lower().strip()
+
+    def _get_tool_ttl(self, tool_name: str) -> int:
+        """Get TTL for specific tools."""
+        tool_ttls = {
+            "analyze_query_plan": 1800,  # 30 minutes (query plans can change)
+            "check_table_conflicts": 3600,  # 1 hour (table conflicts don't change often)
+            "validate_partitioning": 7200,  # 2 hours (partitioning changes infrequently)
+        }
+        return tool_ttls.get(tool_name, self.ttl_seconds)
+
 
 class ToolBatchProcessor:
     """Batch processor for similar tool calls to improve efficiency."""
@@ -1219,6 +1349,100 @@ class ToolBatchProcessor:
             logger.info(f"Optimized describe_table batch: removed {len(batch) - len(unique_batch)} duplicates")
 
         return unique_batch
+
+    def optimize_analyze_query_plan_batch(self, batch: List[Tuple]) -> List[Tuple]:
+        """Optimize analyze_query_plan batch by deduplicating similar SQL queries."""
+        if not batch:
+            return batch
+
+        # Group by normalized SQL queries
+        sql_groups = {}
+        for todo_item, params in batch:
+            sql_query = params.get("sql_query", "").strip()
+            if sql_query:
+                # Normalize SQL for grouping
+                normalized_sql = self._normalize_sql_for_batch(sql_query)
+                if normalized_sql not in sql_groups:
+                    sql_groups[normalized_sql] = []
+                sql_groups[normalized_sql].append((todo_item, params))
+
+        # Keep only one query per unique normalized SQL
+        optimized_batch = []
+        for sql_hash, items in sql_groups.items():
+            if len(items) > 1:
+                # If multiple items for same SQL, keep the first one
+                optimized_batch.append(items[0])
+                logger.info(f"Optimized analyze_query_plan batch: deduplicated {len(items)} identical queries")
+            else:
+                optimized_batch.extend(items)
+
+        return optimized_batch
+
+    def optimize_check_table_conflicts_batch(self, batch: List[Tuple]) -> List[Tuple]:
+        """Optimize check_table_conflicts batch by removing duplicate table checks."""
+        if not batch:
+            return batch
+
+        # Remove duplicate table names
+        seen_tables = set()
+        unique_batch = []
+
+        for todo_item, params in batch:
+            table_name = params.get("table_name", "").lower().strip()
+            if table_name and table_name not in seen_tables:
+                seen_tables.add(table_name)
+                unique_batch.append((todo_item, params))
+
+        if len(unique_batch) < len(batch):
+            logger.info(f"Optimized check_table_conflicts batch: removed {len(batch) - len(unique_batch)} duplicates")
+
+        return unique_batch
+
+    def optimize_validate_partitioning_batch(self, batch: List[Tuple]) -> List[Tuple]:
+        """Optimize validate_partitioning batch by removing duplicate table validations."""
+        if not batch:
+            return batch
+
+        # Remove duplicate table names (same logic as check_table_conflicts)
+        seen_tables = set()
+        unique_batch = []
+
+        for todo_item, params in batch:
+            table_name = params.get("table_name", "").lower().strip()
+            if table_name and table_name not in seen_tables:
+                seen_tables.add(table_name)
+                unique_batch.append((todo_item, params))
+
+        if len(unique_batch) < len(batch):
+            logger.info(f"Optimized validate_partitioning batch: removed {len(batch) - len(unique_batch)} duplicates")
+
+        return unique_batch
+
+    def _normalize_sql_for_batch(self, sql: str) -> str:
+        """Normalize SQL query for batch deduplication."""
+        if not sql:
+            return ""
+
+        import re
+
+        # Remove comments and normalize whitespace
+        sql = re.sub(r'--.*$', '', sql, flags=re.MULTILINE)
+        sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+        sql = ' '.join(sql.split())
+
+        # Create a hash of the normalized SQL
+        return hashlib.md5(sql.lower().encode()).hexdigest()
+
+    def get_batch_optimizer(self, tool_name: str):
+        """Get the appropriate batch optimizer for a tool."""
+        optimizers = {
+            "search_table": self.optimize_search_table_batch,
+            "describe_table": self.optimize_describe_table_batch,
+            "analyze_query_plan": self.optimize_analyze_query_plan_batch,
+            "check_table_conflicts": self.optimize_check_table_conflicts_batch,
+            "validate_partitioning": self.optimize_validate_partitioning_batch,
+        }
+        return optimizers.get(tool_name, lambda x: x)  # Return identity function if no optimizer
 
 
 # Default keyword mapping for plan executor - tool name to list of matching phrases

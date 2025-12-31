@@ -479,3 +479,108 @@ class TestChatResearchPromptParameters:
         # Verify task type identification
         call_args = mock_stream.call_args[0][0]
         assert call_args.task == request_data["task"]
+
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
+    def test_enhanced_preflight_tools_integration(self, mock_stream, test_client):
+        """Test integration of enhanced preflight tools in chat research workflow."""
+
+        # Mock streaming response with enhanced preflight events
+        async def mock_enhanced_stream():
+            # Preflight plan update
+            yield 'data: {"id":"plan_1","timestamp":1703123456789,"event":"plan_update","todos":[{"id":"analyze_plan","content":"Analyze query plan","status":"pending"},{"id":"check_conflicts","content":"Check table conflicts","status":"pending"},{"id":"validate_partitioning","content":"Validate partitioning","status":"pending"}]}\n\n'
+
+            # Tool call events
+            yield 'data: {"id":"tool_1","timestamp":1703123456790,"event":"tool_call","toolCallId":"call_analyze","toolName":"analyze_query_plan","input":{"sql_query":"SELECT * FROM test_table"}}\n\n'
+
+            # Tool result events
+            yield 'data: {"id":"result_1","timestamp":1703123456791,"event":"tool_call_result","toolCallId":"call_analyze","data":{"success":true,"estimated_rows":1000,"hotspots":[{"reason":"full_table_scan","severity":"high"}]},"executionTime":150}\n\n'
+
+            # Chat response with enhanced context
+            yield 'data: {"id":"chat_1","timestamp":1703123456792,"event":"chat","content":"Based on the query plan analysis, I found performance issues..."}\n\n'
+
+            # Completion
+            yield 'data: {"id":"complete_1","timestamp":1703123456793,"event":"complete","content":"SQL review completed with enhanced analysis"}\n\n'
+
+        mock_stream.return_value = mock_enhanced_stream()
+
+        request_data = {
+            "namespace": "test",
+            "task": "审查以下SQL：SELECT * FROM test_table WHERE id = 1",
+            "plan_mode": True
+        }
+
+        response = test_client.post(
+            "/workflows/chat_research",
+            json=request_data,
+            headers={"Accept": "text/event-stream"},
+        )
+
+        assert response.status_code == 200
+
+        # Parse SSE events
+        response_text = response.text
+        events = [line for line in response_text.split('\n') if line.startswith('data: ')]
+
+        # Verify enhanced preflight events are present
+        event_types = []
+        for event in events:
+            try:
+                event_data = json.loads(event[6:])  # Remove 'data: ' prefix
+                event_types.append(event_data.get('event'))
+            except json.JSONDecodeError:
+                continue
+
+        assert "plan_update" in event_types
+        assert "tool_call" in event_types
+        assert "tool_call_result" in event_types
+        assert "chat" in event_types
+        assert "complete" in event_types
+
+    @patch("datus.api.service.DatusAPIService.run_chat_research_stream")
+    def test_sql_review_with_enhanced_preflight_error_handling(self, mock_stream, test_client):
+        """Test SQL review with enhanced preflight error handling."""
+
+        async def mock_error_stream():
+            # Tool call
+            yield 'data: {"id":"tool_1","timestamp":1703123456789,"event":"tool_call","toolCallId":"call_analyze","toolName":"analyze_query_plan","input":{"sql_query":"SELECT * FROM invalid_table"}}\n\n'
+
+            # Tool failure
+            yield 'data: {"id":"error_1","timestamp":1703123456790,"event":"tool_call_result","toolCallId":"call_analyze","data":{"success":false,"error":"Table \'invalid_table\' not found"},"executionTime":50}\n\n'
+
+            # Error event
+            yield 'data: {"id":"sys_error","timestamp":1703123456791,"event":"error","error":"Database table not found","suggestions":["Check table name spelling","Verify table exists in database"]}\n\n'
+
+            # Recovery chat response
+            yield 'data: {"id":"chat_1","timestamp":1703123456792,"event":"chat","content":"虽然查询计划分析失败，但我可以基于其他信息继续审查..."}\n\n'
+
+        mock_stream.return_value = mock_error_stream()
+
+        request_data = {
+            "namespace": "test",
+            "task": "审查SQL：SELECT * FROM invalid_table WHERE id = 1",
+            "plan_mode": True
+        }
+
+        response = test_client.post(
+            "/workflows/chat_research",
+            json=request_data,
+            headers={"Accept": "text/event-stream"},
+        )
+
+        assert response.status_code == 200
+
+        # Verify error handling events
+        response_text = response.text
+        events = [line for line in response_text.split('\n') if line.startswith('data: ')]
+
+        error_events = []
+        for event in events:
+            try:
+                event_data = json.loads(event[6:])
+                if event_data.get('event') == 'error':
+                    error_events.append(event_data)
+            except json.JSONDecodeError:
+                continue
+
+        assert len(error_events) > 0
+        assert "not found" in error_events[0].get('error', '').lower()
