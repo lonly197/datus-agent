@@ -10,6 +10,8 @@ import yaml
 from agents import Tool
 
 from datus.agent.node import Node
+from datus.agent.node.intent_analysis_node import IntentAnalysisNode
+from datus.agent.node.schema_discovery_node import SchemaDiscoveryNode
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.node_type import NodeType
@@ -168,6 +170,15 @@ def _create_single_node(
         normalized_type = NodeType.TYPE_EXECUTE_SQL
     elif node_type == "chat":
         normalized_type = NodeType.TYPE_CHAT
+    elif node_type == "sql_generation":
+        # Map sql_generation to GenSQLAgenticNode for the text2sql workflow
+        normalized_type = NodeType.TYPE_GENSQL
+    elif node_type == "syntax_validation":
+        # Map syntax_validation to existing chat workflow (handled by preflight tools)
+        normalized_type = NodeType.TYPE_CHAT
+    elif node_type == "execution_preview":
+        # Map execution_preview to existing chat workflow (handled by preflight tools)
+        normalized_type = NodeType.TYPE_CHAT
     # Check if node_type is defined in agentic_nodes config - if so, map to gensql
     elif agent_config and hasattr(agent_config, "agentic_nodes") and node_type in agent_config.agentic_nodes:
         normalized_type = NodeType.TYPE_GENSQL
@@ -181,14 +192,33 @@ def _create_single_node(
             matching_rate=agent_config.schema_linking_rate if agent_config else "fast",
         )
 
-    node = Node.new_instance(
-        node_id=node_id,
-        description=description,
-        node_type=normalized_type,
-        input_data=input_data,
-        agent_config=agent_config,
-        node_name=node_type if normalized_type == NodeType.TYPE_GENSQL else None,  # Pass original name for gensql nodes
-    )
+    # Handle special node types that require specific classes
+    if normalized_type == NodeType.TYPE_INTENT_ANALYSIS:
+        node = IntentAnalysisNode(
+            node_id=node_id,
+            description=description,
+            node_type=normalized_type,
+            input_data=input_data,
+            agent_config=agent_config,
+        )
+    elif normalized_type == NodeType.TYPE_SCHEMA_DISCOVERY:
+        node = SchemaDiscoveryNode(
+            node_id=node_id,
+            description=description,
+            node_type=normalized_type,
+            input_data=input_data,
+            agent_config=agent_config,
+        )
+    else:
+        # Use generic Node.new_instance for other node types
+        node = Node.new_instance(
+            node_id=node_id,
+            description=description,
+            node_type=normalized_type,
+            input_data=input_data,
+            agent_config=agent_config,
+            node_name=node_type if normalized_type == NodeType.TYPE_GENSQL else None,  # Pass original name for gensql nodes
+        )
 
     return node
 

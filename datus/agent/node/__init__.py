@@ -19,6 +19,8 @@ __all__ = [
     "SubworkflowNode",
     "CompareNode",
     "DateParserNode",
+    "IntentAnalysisNode",
+    "SchemaDiscoveryNode",
     "GenSQLAgenticNode",
     "ChatAgenticNode",
     "CompareAgenticNode",
@@ -35,6 +37,8 @@ from .compare_agentic_node import CompareAgenticNode
 from .compare_node import CompareNode
 from .date_parser_node import DateParserNode
 from .doc_search_node import DocSearchNode
+from .intent_analysis_node import IntentAnalysisNode
+from .schema_discovery_node import SchemaDiscoveryNode
 from .execute_sql_node import ExecuteSQLNode
 from .fix_node import FixNode
 from .gen_sql_agentic_node import GenSQLAgenticNode

@@ -92,7 +92,7 @@ Execute a workflow to convert natural language to SQL.
 
 | Parameter | Type     | Required | Description |
 |-----------|----------|----------|-------------|
-| `workflow` | string   | ✅ | Workflow name (nl2sql, reflection, fixed, metric_to_sql) |
+| `workflow` | string   | ✅ | Workflow name (text2sql, reflection, fixed, metric_to_sql) |
 | `namespace` | string   | ✅ | Database namespace |
 | `task` | string   | ✅ | Natural language task description |
 | `mode` | string   | ✅ | Execution mode (sync or async) |
@@ -115,7 +115,7 @@ Content-Type: application/json
 **Request Body:**
 ```json
 {
-  "workflow": "nl2sql",
+  "workflow": "text2sql",
   "namespace": "your_database_namespace",
   "task": "Show me monthly revenue by product category",
   "mode": "sync",
@@ -129,7 +129,7 @@ Content-Type: application/json
 {
   "task_id": "client_20240115143000",
   "status": "completed",
-  "workflow": "nl2sql",
+  "workflow": "text2sql",
   "sql": "SELECT DATE_TRUNC('month', order_date) as month, product_category, SUM(amount) as revenue FROM orders WHERE order_date >= '2023-01-01' GROUP BY month, product_category ORDER BY month, revenue DESC",
   "result": [
     {
@@ -166,7 +166,7 @@ Cache-Control: no-cache
 **Request Body:**
 ```json
 {
-  "workflow": "nl2sql",
+  "workflow": "text2sql",
   "namespace": "your_database_namespace",
   "task": "Show me monthly revenue by product category",
   "mode": "async",
@@ -180,7 +180,7 @@ Cache-Control: no-cache
 Content-Type: text/event-stream
 
 event: started
-data: {"task_id": "client_20240115143000", "workflow": "nl2sql"}
+data: {"task_id": "client_20240115143000", "workflow": "text2sql"}
 
 event: progress
 data: {"message": "Initializing workflow", "progress": 10}

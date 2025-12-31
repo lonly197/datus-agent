@@ -47,7 +47,8 @@ workflow:
     - output
 
   # Text2SQL workflow with preflight evidence and structured generation
-  text2sql_standard:
+  # Legacy names: text2sql_standard, nl2sql (mapped at API level for backward compatibility)
+  text2sql:
     - intent_analysis      # Analyze query intent
     - schema_discovery     # Discover relevant schema
     - sql_generation       # Generate SQL with evidence

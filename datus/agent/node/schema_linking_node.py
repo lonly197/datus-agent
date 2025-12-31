@@ -198,9 +198,14 @@ class SchemaLinkingNode(Node):
 
             # Execute semantic search
             # Convert subject_path to domain/layer1/layer2 format
-            domain = subject_path[0] if len(subject_path) > 0 else ""
-            layer1 = subject_path[1] if len(subject_path) > 1 else ""
-            layer2 = subject_path[2] if len(subject_path) > 2 else ""
+            if subject_path and len(subject_path) > 0:
+                domain = subject_path[0] if len(subject_path) > 0 else ""
+                layer1 = subject_path[1] if len(subject_path) > 1 else ""
+                layer2 = subject_path[2] if len(subject_path) > 2 else ""
+            else:
+                domain = ""
+                layer1 = ""
+                layer2 = ""
 
             search_result = context_search_tools.search_external_knowledge(
                 query_text=user_query, domain=domain, layer1=layer1, layer2=layer2, top_n=5

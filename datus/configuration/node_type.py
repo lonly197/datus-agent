@@ -12,7 +12,7 @@ from datus.schemas.date_parser_node_models import DateParserInput
 from datus.schemas.doc_search_node_models import DocSearchInput
 from datus.schemas.fix_node_models import FixInput
 from datus.schemas.gen_sql_agentic_node_models import GenSQLNodeInput
-from datus.schemas.node_models import ExecuteSQLInput, GenerateSQLInput, OutputInput, ReflectionInput
+from datus.schemas.node_models import BaseInput, ExecuteSQLInput, GenerateSQLInput, OutputInput, ReflectionInput
 from datus.schemas.parallel_node_models import ParallelInput, SelectionInput
 from datus.schemas.reason_sql_node_models import ReasoningInput
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput
@@ -46,6 +46,8 @@ class NodeType:
     TYPE_SEARCH_METRICS = "search_metrics"  # For search metrics
     TYPE_COMPARE = "compare"  # For comparing SQL with expectations
     TYPE_DATE_PARSER = "date_parser"  # For parsing temporal expressions
+    TYPE_INTENT_ANALYSIS = "intent_analysis"  # For analyzing query intent
+    TYPE_SCHEMA_DISCOVERY = "schema_discovery"  # For discovering relevant schema
 
     # Agentic node types
     TYPE_CHAT = "chat"  # For conversational AI interactions
@@ -64,6 +66,8 @@ class NodeType:
         TYPE_SEARCH_METRICS,
         TYPE_COMPARE,
         TYPE_DATE_PARSER,
+        TYPE_INTENT_ANALYSIS,
+        TYPE_SCHEMA_DISCOVERY,
         TYPE_CHAT,
         TYPE_GENSQL,
         TYPE_SEMANTIC,
@@ -87,6 +91,8 @@ class NodeType:
         TYPE_SUBWORKFLOW: "Execute a nested workflow",
         TYPE_COMPARE: "Compare SQL with expectations",
         TYPE_DATE_PARSER: "Parse temporal expressions in queries",
+        TYPE_INTENT_ANALYSIS: "Analyze query intent using heuristics and optional LLM fallback",
+        TYPE_SCHEMA_DISCOVERY: "Discover relevant schema and tables for the query",
         TYPE_CHAT: "Conversational AI interactions with tool calling",
         TYPE_GENSQL: "SQL generation with conversational AI and tool calling",
         TYPE_SEMANTIC: "Semantic model generation with conversational AI",
@@ -128,6 +134,10 @@ class NodeType:
             input_data_cls = CompareInput
         elif node_type == NodeType.TYPE_DATE_PARSER:
             input_data_cls = DateParserInput
+        elif node_type == NodeType.TYPE_INTENT_ANALYSIS:
+            input_data_cls = BaseInput
+        elif node_type == NodeType.TYPE_SCHEMA_DISCOVERY:
+            input_data_cls = BaseInput
         elif node_type == NodeType.TYPE_CHAT:
             input_data_cls = ChatNodeInput
         elif node_type == NodeType.TYPE_GENSQL:

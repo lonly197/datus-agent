@@ -296,6 +296,28 @@ class DatusAPIService:
             return f"{prefix}_{client_id}_{timestamp}"
         return f"{client_id}_{timestamp}"
 
+    def _normalize_workflow_name(self, workflow_name: str) -> str:
+        """Normalize legacy workflow names to current names for backward compatibility.
+
+        Args:
+            workflow_name: The workflow name from the request
+
+        Returns:
+            Normalized workflow name
+        """
+        # Map legacy names to current names
+        legacy_mappings = {
+            "nl2sql": "text2sql",
+            "text2sql_standard": "text2sql",
+        }
+
+        normalized_name = legacy_mappings.get(workflow_name, workflow_name)
+
+        if normalized_name != workflow_name:
+            logger.info(f"Mapped legacy workflow name '{workflow_name}' to '{normalized_name}'")
+
+        return normalized_name
+
     async def _validate_task_id_uniqueness(self, task_id: str, current_client: str) -> None:
         """Validate that the task_id is unique for the current client.
 
@@ -494,6 +516,10 @@ class DatusAPIService:
             # Get agent for the namespace
             agent = self.get_agent(request.namespace)
 
+            # Normalize workflow name for backward compatibility
+            original_workflow = request.workflow
+            request.workflow = self._normalize_workflow_name(request.workflow)
+
             # Create SQL task
             sql_task = await self._create_sql_task(request, task_id, agent)
 
@@ -577,6 +603,9 @@ class DatusAPIService:
         try:
             # Get agent for the namespace
             agent = self.get_agent(request.namespace)
+
+            # Normalize workflow name for backward compatibility
+            request.workflow = self._normalize_workflow_name(request.workflow)
 
             # Create SQL task
             sql_task = await self._create_sql_task(request, task_id, agent)
@@ -699,7 +728,7 @@ class DatusAPIService:
         elif task_type == "text2sql":
             # Text2SQL：使用专门的Text2SQL工作流和提示词
             return {
-                "workflow": "text2sql_standard",
+                "workflow": "text2sql",
                 "plan_mode": False,
                 "auto_execute_plan": False,
                 "system_prompt": "text2sql_system",

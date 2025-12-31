@@ -60,7 +60,7 @@ class TestText2SQLIntegration:
         """Test Text2SQL task configuration."""
         config = service._configure_task_processing("text2sql", MagicMock())
 
-        assert config["workflow"] == "text2sql_standard"
+        assert config["workflow"] == "text2sql"
         assert config["system_prompt"] == "text2sql_system"
         assert config["output_format"] == "json"
         assert "required_tool_sequence" in config
@@ -84,7 +84,7 @@ class TestText2SQLIntegration:
         with patch.object(service, '_identify_task_type', return_value="text2sql"):
             with patch.object(service, '_configure_task_processing') as mock_config:
                 mock_config.return_value = {
-                    "workflow": "text2sql_standard",
+                    "workflow": "text2sql",
                     "plan_mode": False,
                     "system_prompt": "text2sql_system",
                     "output_format": "json",
@@ -98,7 +98,7 @@ class TestText2SQLIntegration:
                 mock_create_task.assert_called_once()
                 call_args = mock_create_task.call_args[0][0]  # First positional arg
 
-                assert call_args.workflow == "text2sql_standard"
+                assert call_args.workflow == "text2sql"
                 assert call_args.task == text2sql_request.task
                 assert call_args.namespace == text2sql_request.namespace
 

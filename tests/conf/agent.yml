@@ -140,7 +140,7 @@ agent:
     text2sql:
       enabled: true
       preflight_tools: ["search_table", "describe_table", "search_reference_sql", "parse_temporal_expressions"]
-      workflow: "text2sql_standard"
+      workflow: "text2sql"
       system_prompt: "text2sql_system"
       execution_mode: "text2sql"
       tool_timeout_seconds: 30

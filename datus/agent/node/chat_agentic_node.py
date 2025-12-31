@@ -1550,7 +1550,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
                     preflight_orchestrator = PreflightOrchestrator(
                         agent_config=self.agent_config,
-                        plan_hooks=self.plan_hooks
+                        plan_hooks=getattr(self, 'plan_hooks', None)
                     )
 
                     # Run preflight tools for Text2SQL
