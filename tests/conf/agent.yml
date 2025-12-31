@@ -134,3 +134,40 @@ agent:
   storage:
     base_path: data
     embedding_device_type: cpu
+
+  # Scenario-specific configurations
+  scenarios:
+    text2sql:
+      enabled: true
+      preflight_tools: ["search_table", "describe_table", "search_reference_sql", "parse_temporal_expressions"]
+      workflow: "text2sql_standard"
+      system_prompt: "text2sql_system"
+      execution_mode: "text2sql"
+      tool_timeout_seconds: 30
+      continue_on_failure: true
+      cache_ttl_seconds: 300
+    sql_review:
+      enabled: true
+      preflight_tools: ["describe_table", "search_external_knowledge", "read_query", "get_table_ddl", "analyze_query_plan", "check_table_conflicts", "validate_partitioning"]
+      workflow: "chat_agentic_plan"
+      system_prompt: "sql_review_system"
+      execution_mode: "traditional"
+      tool_timeout_seconds: 30
+      continue_on_failure: false
+      cache_ttl_seconds: 300
+
+  # Plan executor configurations for caching and batching
+  plan_executor:
+    enable_query_caching: true
+    enable_batch_processing: true
+    cache_ttl_seconds:
+      search_table: 300
+      describe_table: 600
+      search_reference_sql: 300
+      parse_temporal_expressions: 300
+      analyze_query_plan: 1800
+      check_table_conflicts: 3600
+      validate_partitioning: 7200
+    tool_timeout_seconds: 30
+    max_batch_size: 10
+    batch_timeout_seconds: 5

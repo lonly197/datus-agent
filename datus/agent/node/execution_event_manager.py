@@ -353,33 +353,214 @@ class Text2SQLExecutionMode(BaseExecutionMode):
         )
 
     async def _analyze_query_intent(self):
-        """Analyze the user's query intent."""
+        """Analyze the user's query intent using LLM."""
         task = self.context.task_data.get("task", "")
-        # Use LLM to analyze intent if available
+
         if self.context.model:
             try:
-                # This would call the LLM to analyze intent
-                return {"type": "select", "tables": [], "filters": []}
+                intent_prompt = f"""Analyze the following natural language query and extract key information for SQL generation.
+
+Query: {task}
+
+Return a JSON object with the following structure:
+{{
+    "query_type": "SELECT|INSERT|UPDATE|DELETE|OTHER",
+    "entities": ["list", "of", "mentioned", "entities", "tables"],
+    "filters": ["list", "of", "filter", "conditions"],
+    "aggregations": ["count", "sum", "avg", "etc"],
+    "sort_requirements": ["order", "by", "clauses"],
+    "temporal_aspects": ["dates", "time", "periods", "mentioned"]
+}}
+
+Be specific about table names, column names, and business logic. If uncertain, use general terms."""
+
+                intent_result = await self.context.model.generate_with_json_output(intent_prompt)
+                logger.info(f"Intent analysis result: {intent_result}")
+                return intent_result
+
             except Exception as e:
                 logger.warning(f"Intent analysis failed: {e}")
-                return {"type": "unknown", "error": str(e)}
-        return {"type": "select", "tables": []}
+                # Fallback to basic analysis
+                return {
+                    "query_type": "SELECT",
+                    "entities": [],
+                    "filters": [],
+                    "aggregations": [],
+                    "sort_requirements": [],
+                    "temporal_aspects": [],
+                    "error": str(e)
+                }
+
+        # Fallback if no model available
+        return {
+            "query_type": "SELECT",
+            "entities": [],
+            "filters": [],
+            "aggregations": [],
+            "sort_requirements": [],
+            "temporal_aspects": []
+        }
 
     async def _link_schema(self):
-        """Link relevant database schema."""
-        # This would call database tools to get schema information
-        return {"tables": [], "columns": {}}
+        """Link relevant database schema using search tools."""
+        try:
+            from datus.tools.func_tool.database import db_function_tool_instance
+
+            if not self.context.agent_config:
+                return {"tables": [], "columns": {}, "error": "No agent config available"}
+
+            # Get DB tool instance
+            db_tool = db_function_tool_instance(
+                self.context.agent_config,
+                self.context.agent_config.current_database
+            )
+
+            # Get intent from previous step (this assumes intent analysis was done first)
+            intent = await self._analyze_query_intent()
+            entities = intent.get("entities", [])
+
+            if not entities:
+                # Fallback: search based on the task description
+                task_text = self.context.task_data.get("task", "")
+                search_result = db_tool.search_table(
+                    query_text=task_text,
+                    catalog=self.context.agent_config.current_catalog or "",
+                    database=self.context.agent_config.current_database or "",
+                    schema_name=self.context.agent_config.current_schema or "",
+                    top_n=5
+                )
+            else:
+                # Search for specific entities
+                search_result = db_tool.search_table(
+                    query_text=" ".join(entities),
+                    catalog=self.context.agent_config.current_catalog or "",
+                    database=self.context.agent_config.current_database or "",
+                    schema_name=self.context.agent_config.current_schema or "",
+                    top_n=5
+                )
+
+            if search_result.success and hasattr(search_result, 'result'):
+                tables_info = []
+                for table_result in search_result.result:
+                    table_name = table_result.get("table_name", "")
+                    if table_name:
+                        # Get detailed schema for each table
+                        describe_result = db_tool.describe_table(
+                            table_name=table_name,
+                            catalog=self.context.agent_config.current_catalog or "",
+                            database=self.context.agent_config.current_database or "",
+                            schema_name=self.context.agent_config.current_schema or ""
+                        )
+
+                        if describe_result.success and hasattr(describe_result, 'result'):
+                            tables_info.append({
+                                "table_name": table_name,
+                                "schema": describe_result.result
+                            })
+
+                return {
+                    "tables": tables_info,
+                    "search_results": search_result.result if hasattr(search_result, 'result') else [],
+                    "intent": intent
+                }
+            else:
+                return {
+                    "tables": [],
+                    "columns": {},
+                    "error": search_result.error if hasattr(search_result, 'error') else "Search failed"
+                }
+
+        except Exception as e:
+            logger.error(f"Schema linking failed: {e}")
+            return {"tables": [], "columns": {}, "error": str(e)}
 
     async def _generate_sql(self, intent, schema_info):
-        """Generate SQL based on intent and schema."""
-        if self.context.model:
-            try:
-                # This would call the LLM to generate SQL
-                return "SELECT * FROM users WHERE active = 1"
-            except Exception as e:
-                logger.error(f"SQL generation failed: {e}")
+        """Generate SQL based on intent and schema using LLM."""
+        if not self.context.model:
+            return "SELECT * FROM table"  # Fallback
+
+        try:
+            # Build comprehensive context for SQL generation
+            task = self.context.task_data.get("task", "")
+            tables_info = schema_info.get("tables", [])
+
+            # Format schema information for prompt
+            schema_context = ""
+            if tables_info:
+                schema_lines = []
+                for table_info in tables_info:
+                    table_name = table_info.get("table_name", "")
+                    schema_data = table_info.get("schema", {})
+
+                    schema_lines.append(f"Table: {table_name}")
+                    if "columns" in schema_data:
+                        columns = schema_data["columns"]
+                        if isinstance(columns, list):
+                            for col in columns:
+                                if isinstance(col, dict):
+                                    col_name = col.get("name", "")
+                                    col_type = col.get("type", "")
+                                    col_comment = col.get("comment", "")
+                                    schema_lines.append(f"  - {col_name} ({col_type}) {f': {col_comment}' if col_comment else ''}")
+                    schema_lines.append("")  # Empty line between tables
+
+                schema_context = "\n".join(schema_lines)
+
+            # Build SQL generation prompt
+            sql_prompt = f"""Generate accurate SQL based on the user's query and available schema information.
+
+User Query: {task}
+
+Available Tables and Columns:
+{schema_context}
+
+Query Intent Analysis:
+- Type: {intent.get('query_type', 'SELECT')}
+- Entities: {', '.join(intent.get('entities', []))}
+- Filters: {', '.join(intent.get('filters', []))}
+- Aggregations: {', '.join(intent.get('aggregations', []))}
+- Sort Requirements: {', '.join(intent.get('sort_requirements', []))}
+- Temporal Aspects: {', '.join(intent.get('temporal_aspects', []))}
+
+Requirements:
+1. Use only the tables and columns provided in the schema information
+2. Ensure SQL syntax is correct for the target database
+3. Include appropriate WHERE, JOIN, GROUP BY, ORDER BY clauses as needed
+4. Use proper column names and table aliases
+5. Return only the SQL query without explanation
+
+Generate the SQL query:"""
+
+            # Generate SQL using LLM
+            sql_result = await self.context.model.generate(sql_prompt)
+            generated_sql = sql_result.strip()
+
+            # Clean up the SQL (remove markdown code blocks if present)
+            if generated_sql.startswith("```"):
+                # Extract SQL from markdown code block
+                lines = generated_sql.split("\n")
+                sql_lines = []
+                in_code_block = False
+                for line in lines:
+                    if line.startswith("```"):
+                        in_code_block = not in_code_block
+                        continue
+                    if in_code_block:
+                        sql_lines.append(line)
+                generated_sql = "\n".join(sql_lines).strip()
+
+            logger.info(f"Generated SQL: {generated_sql}")
+            return generated_sql
+
+        except Exception as e:
+            logger.error(f"SQL generation failed: {e}")
+            # Return a basic fallback SQL
+            fallback_tables = schema_info.get("tables", [])
+            if fallback_tables:
+                table_name = fallback_tables[0].get("table_name", "table")
+                return f"SELECT * FROM {table_name} LIMIT 10"
+            else:
                 return "SELECT * FROM table"
-        return "SELECT * FROM table"
 
     async def _validate_sql_syntax(self, sql: str):
         """Validate SQL syntax using DB tool."""

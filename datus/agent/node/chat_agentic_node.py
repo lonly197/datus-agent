@@ -1487,8 +1487,8 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 execution_id = f"plan_{int(time.time() * 1000)}"
                 self.plan_hooks.set_execution_event_manager(self.execution_event_manager, execution_id)
 
-        # Execute preflight tools if required (for sql_review tasks)
-        if scenario == "sql_review" and hasattr(self, "workflow") and self.workflow:
+        # Execute preflight tools if required (for sql_review and text2sql tasks)
+        if (scenario in ["sql_review", "text2sql"]) and hasattr(self, "workflow") and self.workflow:
             # Ensure plan_hooks are available for caching and batching
             if not hasattr(self, "plan_hooks") or not self.plan_hooks:
                 # Create temporary plan hooks for preflight caching support
@@ -1518,21 +1518,39 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     self.plan_hooks.enable_batch_processing = True
 
             try:
-                # Execute preflight tools (now a generator that may yield error actions)
-                async for preflight_action in self.run_preflight_tools(self.workflow, action_history_manager):
-                    yield preflight_action
+                if scenario == "sql_review":
+                    # Use existing preflight tools for SQL review
+                    async for preflight_action in self.run_preflight_tools(self.workflow, action_history_manager):
+                        yield preflight_action
 
-                    # Check if this is a validation failure that should terminate execution
-                    if (
-                        preflight_action.action_type == "sql_syntax_validation"
-                        and preflight_action.status == ActionStatus.FAILED
+                        # Check if this is a validation failure that should terminate execution
+                        if (
+                            preflight_action.action_type == "sql_syntax_validation"
+                            and preflight_action.status == ActionStatus.FAILED
+                        ):
+                            # Stop execution - validation failed
+                            logger.info("SQL syntax validation failed, terminating execution")
+                            return
+                elif scenario == "text2sql":
+                    # Use PreflightOrchestrator for Text2SQL evidence gathering
+                    from datus.agent.node.preflight_orchestrator import PreflightOrchestrator
+
+                    preflight_orchestrator = PreflightOrchestrator(
+                        agent_config=self.agent_config,
+                        plan_hooks=self.plan_hooks
+                    )
+
+                    # Run preflight tools for Text2SQL
+                    async for preflight_action in preflight_orchestrator.run_preflight_tools(
+                        workflow=self.workflow,
+                        action_history_manager=action_history_manager,
+                        execution_id=f"text2sql_preflight_{int(time.time() * 1000)}",
+                        required_tools=["search_table", "describe_table", "search_reference_sql", "parse_temporal_expressions"]
                     ):
-                        # Stop execution - validation failed
-                        logger.info("SQL syntax validation failed, terminating execution")
-                        return
+                        yield preflight_action
 
             except ValueError as e:
-                # SQL syntax validation failed, already yielded error actions
+                # Preflight validation failed, already yielded error actions
                 logger.info(f"Preflight terminated due to validation error: {e}")
                 return
             except Exception as e:

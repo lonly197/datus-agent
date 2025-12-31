@@ -698,8 +698,23 @@ class DatusAPIService:
                 "system_prompt": "plan_mode",
                 "output_format": "json",
             }
-        else:  # text2sql
-            # Text2SQL：标准模式
+        elif task_type == "text2sql":
+            # Text2SQL：使用专门的Text2SQL工作流和提示词
+            return {
+                "workflow": "text2sql_standard",
+                "plan_mode": False,
+                "auto_execute_plan": False,
+                "system_prompt": "text2sql_system",
+                "output_format": "json",
+                "required_tool_sequence": [
+                    "search_table",              # 表结构搜索
+                    "describe_table",            # 表详细描述
+                    "search_reference_sql",      # 参考SQL搜索
+                    "parse_temporal_expressions" # 时间表达式解析
+                ]
+            }
+        else:  # fallback to text2sql
+            # Text2SQL：标准模式（兼容旧版本）
             return {
                 "workflow": "chat_agentic",
                 "plan_mode": False,

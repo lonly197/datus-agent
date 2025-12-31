@@ -45,3 +45,12 @@ workflow:
     - chatbot
     - execute_sql
     - output
+
+  # Text2SQL workflow with preflight evidence and structured generation
+  text2sql_standard:
+    - intent_analysis      # Analyze query intent
+    - schema_discovery     # Discover relevant schema
+    - sql_generation       # Generate SQL with evidence
+    - syntax_validation    # Validate SQL syntax
+    - execution_preview    # Preview execution plan
+    - output               # Return results
