@@ -10,7 +10,12 @@ designed for chat interactions with database and filesystem tool support.
 """
 import asyncio
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, override
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+
+try:
+    from typing import override
+except ImportError:
+    from typing_extensions import override
 
 from datus.agent.node.execution_event_manager import (
     ExecutionEventManager,

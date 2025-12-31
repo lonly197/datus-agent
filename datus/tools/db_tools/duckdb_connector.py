@@ -2,7 +2,12 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from typing import Any, Dict, List, Literal, Optional, Set, override
+from typing import Any, Dict, List, Literal, Optional, Set
+
+try:
+    from typing import override
+except ImportError:
+    from typing_extensions import override
 
 import duckdb
 from pydantic import BaseModel, Field

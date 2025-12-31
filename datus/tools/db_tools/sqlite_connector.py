@@ -3,7 +3,12 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import sqlite3
-from typing import Any, Dict, List, Literal, Optional, override
+from typing import Any, Dict, List, Literal, Optional
+
+try:
+    from typing import override
+except ImportError:
+    from typing_extensions import override
 
 from pandas import DataFrame
 from pyarrow import Table

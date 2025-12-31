@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from agents import Tool
 
+from datus.agent.error_handling import ErrorHandlerMixin, NodeErrorResult
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.node_type import NodeType
 from datus.models.base import LLMBaseModel
@@ -33,6 +34,8 @@ from datus.schemas.reason_sql_node_models import ReasoningResult
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput, SchemaLinkingResult
 from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.utils.error_handling import NodeErrorResult, unified_error_handler
+from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -41,7 +44,7 @@ if TYPE_CHECKING:
     from datus.agent.workflow import Workflow
 
 
-class Node(ABC):
+class Node(ErrorHandlerMixin, ABC):
     """
     Represents a single node in a workflow.
     """
@@ -276,13 +279,29 @@ class Node(ABC):
                     logger.info(f"Node.run calling complete for {self.type}")
                     self.complete(self.result)
                 else:
-                    logger.error(f"{self.type} node execution failed: {self.result}")
-                    self.fail(f"{self.type} node execution failed: {self.result}")
+                    # Enhanced error handling for failed results
+                    if isinstance(self.result, NodeErrorResult):
+                        # Already a standardized error result
+                        self.fail(self.result.error_message)
+                    else:
+                        # Legacy error result, wrap it
+                        error_msg = f"{self.type} node execution failed: {self.result}"
+                        logger.error(error_msg)
+                        self.fail(error_msg)
             else:
-                raise ValueError(f"Invalid node type: {self.type}")
+                error_msg = f"Invalid node type: {self.type}"
+                logger.error(error_msg)
+                self.fail(error_msg)
         except Exception as e:
-            logger.error(f"Node execution failed: {str(e)}")
-            self.fail(str(e))
+            # Use unified error handling for unexpected exceptions
+            error_result = self.create_error_result(
+                ErrorCode.NODE_EXECUTION_FAILED,
+                f"Unexpected error during {self.type} execution: {str(e)}",
+                "node_execution"
+            )
+            logger.error(f"Node execution failed: {error_result.error}", exc_info=True)
+            self.fail(error_result.error)
+            self.result = error_result
 
         return self.result
 
@@ -424,3 +443,91 @@ class Node(ABC):
         node.metadata = node_dict["metadata"]
 
         return node
+
+    def _summarize_input(self) -> Dict[str, Any]:
+        """
+        Generate a summary of the node's input for error context.
+
+        This method can be overridden by subclasses for more specific input summarization.
+
+        Returns:
+            Dictionary containing input summary
+        """
+        summary = {}
+        if not self.input:
+            return summary
+
+        try:
+            # Handle different input types
+            if hasattr(self.input, '__dict__'):
+                for key, value in self.input.__dict__.items():
+                    # Common fields to summarize
+                    if key in ['sql_query', 'task', 'database_name', 'input_text']:
+                        if isinstance(value, str) and len(value) > 100:
+                            summary[key] = value[:100] + "..."
+                        else:
+                            summary[key] = str(value) if value is not None else None
+            elif isinstance(self.input, dict):
+                for key, value in self.input.items():
+                    if key in ['sql_query', 'task', 'database_name', 'input_text']:
+                        if isinstance(value, str) and len(value) > 100:
+                            summary[key] = value[:100] + "..."
+                        else:
+                            summary[key] = value
+        except Exception as e:
+            summary["summary_error"] = f"Failed to summarize input: {str(e)}"
+
+        return summary
+
+    def _create_error_result(
+        self,
+        error_code: ErrorCode,
+        error_message: str,
+        operation: str,
+        error_details: Optional[Dict[str, Any]] = None,
+        retryable: bool = False
+    ) -> NodeErrorResult:
+        """
+        Create a standardized error result for this node.
+
+        Args:
+            error_code: The error code
+            error_message: Human-readable error message
+            operation: The operation that failed
+            error_details: Additional error details
+            retryable: Whether the error is retryable
+
+        Returns:
+            NodeErrorResult with comprehensive error information
+        """
+        from datus.utils.error_handling import _create_node_error_result
+        return _create_node_error_result(
+            self, error_code, error_message, operation, error_details, retryable
+        )
+
+    def _summarize_input(self) -> Dict[str, Any]:
+        """
+        Generate a summary of node input for error context.
+
+        Returns:
+            Dictionary with input summary
+        """
+        if not self.input:
+            return {}
+
+        input_obj = self.input
+        summary = {}
+
+        # Extract common fields that are useful for debugging
+        common_fields = ['sql_query', 'task', 'database_name', 'table_schemas', 'task_id']
+        for field in common_fields:
+            if hasattr(input_obj, field):
+                value = getattr(input_obj, field)
+                if isinstance(value, str) and len(value) > 100:
+                    summary[field] = value[:100] + "..."
+                elif isinstance(value, list) and len(value) > 3:
+                    summary[field] = f"{len(value)} items"
+                else:
+                    summary[field] = value
+
+        return summary

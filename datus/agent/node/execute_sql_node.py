@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
+from datus.agent.error_handling import unified_error_handler
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import ExecuteSQLInput, ExecuteSQLResult
 from datus.utils.loggings import get_logger
@@ -18,6 +19,7 @@ logger = get_logger(__name__)
 
 
 class ExecuteSQLNode(Node):
+    @unified_error_handler("ExecuteSQLNode", "sql_execution")
     def execute(self):
         self.result = self._execute_sql()
 
@@ -85,68 +87,58 @@ class ExecuteSQLNode(Node):
 
     def _execute_sql(self) -> ExecuteSQLResult:
         """Execute SQL query action to run the generated query."""
-        try:
-            db_connector = self._sql_connector(self.input.database_name)
-            if not db_connector:
-                logger.error("Database connection not initialized in workflow")
-                return ExecuteSQLResult(
-                    success=False,
-                    error="Database connection not initialized in workflow",
-                )
+        from datus.utils.exceptions import DatusException, ErrorCode
 
-            logger.debug(f"SQL execution input: {self.input}")
+        db_connector = self._sql_connector(self.input.database_name)
+        if not db_connector:
+            raise DatusException(
+                ErrorCode.DB_CONNECTION_FAILED,
+                "Database connection not initialized in workflow",
+                {"database_name": getattr(self.input, 'database_name', 'unknown') if self.input else {}}
+            )
 
-            # determine timeout: per-input -> task-level -> agent config
-            timeout = None
-            if hasattr(self.input, "query_timeout_seconds") and self.input.query_timeout_seconds:
-                timeout = int(self.input.query_timeout_seconds)
-            elif getattr(self, "agent_config", None) and getattr(
-                self.agent_config, "default_query_timeout_seconds", None
-            ):
-                timeout = int(self.agent_config.default_query_timeout_seconds)
+        logger.debug(f"SQL execution input: {self.input}")
 
-            # Run blocking execute in thread and enforce timeout if provided
-            def run_execute():
-                return db_connector.execute(self.input)
+        # determine timeout: per-input -> task-level -> agent config
+        timeout = None
+        if hasattr(self.input, "query_timeout_seconds") and self.input.query_timeout_seconds:
+            timeout = int(self.input.query_timeout_seconds)
+        elif getattr(self, "agent_config", None) and getattr(
+            self.agent_config, "default_query_timeout_seconds", None
+        ):
+            timeout = int(self.agent_config.default_query_timeout_seconds)
 
-            if timeout and timeout > 0:
-                with ThreadPoolExecutor(max_workers=1) as ex:
-                    future = ex.submit(run_execute)
+        # Run blocking execute in thread and enforce timeout if provided
+        def run_execute():
+            return db_connector.execute(self.input)
+
+        if timeout and timeout > 0:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(run_execute)
+                try:
+                    result = future.result(timeout=timeout)
+                    logger.debug(f"SQL execution result: {result}")
+                    return result
+                except FuturesTimeoutError:
+                    # Attempt best-effort cancellation/cleanup
                     try:
-                        result = future.result(timeout=timeout)
-                        logger.debug(f"SQL execution result: {result}")
-                        return result
-                    except FuturesTimeoutError:
-                        # Attempt best-effort cancellation/cleanup
-                        try:
-                            db_connector.close()
-                        except (AttributeError, ConnectionError, Exception) as cleanup_error:
-                            logger.warning(
-                                f"Failed to close database connection during timeout cleanup: {cleanup_error}"
-                            )
-                        return ExecuteSQLResult(
-                            success=False,
-                            error=f"Query timed out after {timeout} seconds",
-                            sql_query=self.input.sql_query,
+                        db_connector.close()
+                    except (AttributeError, ConnectionError, Exception) as cleanup_error:
+                        logger.warning(
+                            f"Failed to close database connection during timeout cleanup: {cleanup_error}"
                         )
-            else:
-                result = db_connector.execute(self.input)
-                logger.debug(f"SQL execution result: {result}")
-                return result
-        except ValidationError as e:
-            logger.error(f"SQL execution failed: {str(e)}")
-            return ExecuteSQLResult(
-                success=False,
-                error=str(e),
-                sql_query=self.input.sql_query if hasattr(self.input, "sql_query") else "",
-            )
-        except Exception as e:
-            logger.error(f"SQL execution failed: {str(e)}")
-            return ExecuteSQLResult(
-                success=False,
-                error=str(e),
-                sql_query=self.input.sql_query if hasattr(self.input, "sql_query") else "",
-            )
+                    raise DatusException(
+                        ErrorCode.DB_EXECUTION_TIMEOUT,
+                        f"Query timed out after {timeout} seconds",
+                        {
+                            "timeout_seconds": timeout,
+                            "sql_preview": self.input.sql_query[:100] if self.input.sql_query else ""
+                        }
+                    )
+        else:
+            result = db_connector.execute(self.input)
+            logger.debug(f"SQL execution result: {result}")
+            return result
 
     async def _execute_sql_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None
