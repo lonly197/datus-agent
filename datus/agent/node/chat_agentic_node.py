@@ -815,632 +815,191 @@ class ChatAgenticNode(GenSQLAgenticNode):
             original_metadata = workflow.metadata.copy()
             workflow.metadata["required_tool_sequence"] = existing_tools
             try:
-                async for action in self._run_original_preflight_tools(
-                    workflow, action_history_manager, execution_id
-                ):
-                    yield action
+                # Execute existing tools using the original implementation (lines below)
+                # Use execution event manager if provided, otherwise fall back to action_history_manager
+                event_manager = (
+                    self.execution_event_manager
+                    if hasattr(self, "execution_event_manager") and self.execution_event_manager
+                    else None
+                )
+
+                required_tools = workflow.metadata.get("required_tool_sequence", [])
+                if not required_tools:
+                    logger.debug("No required tool sequence specified, skipping preflight")
+                    return
+
+                logger.info(f"Starting preflight tool execution: {required_tools}")
+
+                # Send preflight plan update if using event manager
+                if event_manager and execution_id:
+                    await event_manager.update_execution_status(
+                        execution_id, "planning", f"Executing preflight tools: {required_tools}"
+                    )
+
+                # Execute each tool in the sequence
+                for tool_name in required_tools:
+                    try:
+                        logger.debug(f"Executing preflight tool: {tool_name}")
+
+                        # Send tool start event if using event manager
+                        if event_manager and execution_id:
+                            await event_manager.update_execution_status(
+                                execution_id, "executing", f"Running {tool_name}"
+                            )
+
+                        # Execute the tool based on its name
+                        if tool_name == "describe_table":
+                            result = await self._execute_describe_table_tool(workflow, action_history_manager)
+                        elif tool_name == "search_external_knowledge":
+                            result = await self._execute_search_external_knowledge_tool(workflow, action_history_manager)
+                        elif tool_name == "read_query":
+                            result = await self._execute_read_query_tool(workflow, action_history_manager)
+                        elif tool_name == "get_table_ddl":
+                            result = await self._execute_get_table_ddl_tool(workflow, action_history_manager)
+                        else:
+                            logger.warning(f"Unknown preflight tool: {tool_name}")
+                            continue
+
+                        # Yield the action if successful
+                        if result:
+                            yield result
+
+                        # Send tool completion event if using event manager
+                        if event_manager and execution_id:
+                            await event_manager.update_execution_status(
+                                execution_id, "executing", f"Completed {tool_name}"
+                            )
+
+                    except Exception as e:
+                        logger.error(f"Error executing preflight tool {tool_name}: {e}")
+                        # Send error event if using event manager
+                        if event_manager and execution_id:
+                            await event_manager.update_execution_status(
+                                execution_id, "error", f"Failed {tool_name}: {str(e)}"
+                            )
+                        # Continue with next tool unless configured to fail fast
+                        continue
+
             finally:
                 # Restore original metadata
                 workflow.metadata = original_metadata
-        """
-        Execute original preflight tools implementation (for existing tools).
 
-        Args:
-            workflow: The workflow instance
-            action_history_manager: Action history manager for logging
-
-        Yields:
-            ActionHistory: Actions generated during preflight execution
-
-        Raises:
-            ValueError: If SQL syntax validation fails
-        """
-        # Use execution event manager if provided, otherwise fall back to action_history_manager
-        event_manager = (
-            self.execution_event_manager
-            if hasattr(self, "execution_event_manager") and self.execution_event_manager
-            else None
-        )
-
-        required_tools = workflow.metadata.get("required_tool_sequence", [])
-        if not required_tools:
-            logger.debug("No required tool sequence specified, skipping preflight")
-            return
-
-        logger.info(f"Starting preflight tool execution: {required_tools}")
-
-        # Send preflight plan update if using event manager
-        if event_manager and execution_id:
-            await event_manager.update_execution_status(
-                execution_id, "planning", f"Executing preflight tools: {required_tools}"
-            )
-
-        # ========== Enhanced SQL Validation ==========
-        # Extract and validate SQL syntax BEFORE executing any tools
-        task = workflow.task
-        sql_query = self._extract_sql_from_task(task.task)
-
-        # Perform comprehensive SQL validation
-        sql_validation_result = self._validate_sql_syntax_comprehensive(sql_query)
-        if not sql_validation_result["valid"]:
-            # Record syntax error if using event manager
-            if event_manager and execution_id:
-                await event_manager.record_llm_interaction(
-                    execution_id,
-                    "syntax_validation",
-                    f"Validate SQL: {sql_query}",
-                    error=sql_validation_result["error"],
-                )
-
-            # Continue with partial execution but mark the issue
-            logger.warning(f"SQL syntax issues detected: {sql_validation_result['error']}")
-            # Store validation results for context injection
-            workflow.metadata["sql_validation_result"] = sql_validation_result
-        else:
-            logger.info("SQL syntax validation passed")
-            workflow.metadata["sql_validation_result"] = sql_validation_result
-        # ========== END Enhanced SQL Validation ==========
-
-        # Perform syntax validation
-        is_valid, error_message = self._validate_sql_syntax(sql_query, task.task)
-
-        if not is_valid:
-            # Record syntax validation failure
-            if hasattr(self, "execution_status") and self.execution_status:
-                self.execution_status.mark_syntax_validation(False)
-                self.execution_status.add_error("syntax_error", error_message)
-
-            # Record error if using event manager
-            if event_manager and execution_id:
-                await event_manager.record_llm_interaction(
-                    execution_id, "syntax_validation", f"Validate SQL: {sql_query}", error=error_message
-                )
-
-            # Create error action for syntax validation failure
-            error_action = ActionHistory.create_action(
-                role=ActionRole.SYSTEM,
-                action_type="sql_syntax_validation",
-                messages=f"SQL syntax validation failed: {error_message}",
-                input_data={
-                    "sql_query": sql_query,
-                    "task": task.task,
-                },
-                output={
-                    "success": False,
-                    "error": error_message,
-                    "error_type": "sql_syntax_error",
-                },
-                status=ActionStatus.FAILED,
-            )
-            action_history_manager.add_action(error_action)
-            yield error_action
-
-            # Create workflow completion action with FAILED status
-            complete_action = ActionHistory.create_action(
-                role=ActionRole.SYSTEM,
-                action_type="workflow_completion",
-                messages=f"Task terminated: {error_message}",
-                input={"source": "sql_syntax_validation"},
-                output={"reason": "sql_syntax_error", "error": error_message},
-                status=ActionStatus.FAILED,
-            )
-            action_history_manager.add_action(complete_action)
-            yield complete_action
-
-            # Log termination
-            logger.error(f"SQL syntax validation failed, terminating task: {error_message}")
-
-            # Raise exception to terminate execution
-            raise ValueError(f"SQL syntax error: {error_message}")
-        # ========== END SQL Syntax Validation Check ==========
-
-        # Start preflight monitoring if available
-        execution_id = f"preflight_{id(workflow)}"
-        if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
-            self.plan_hooks.monitor.start_preflight(execution_id, required_tools)
-
-        # Extract task information for tool parameters
-        catalog = task.catalog_name or ""
-        database = task.database_name or ""
-        schema = task.schema_name or ""
-
-        # Parse SQL to extract table names for tool calls
-        table_names = self._parse_table_names_from_sql(sql_query)
-
-        # ========== Table Existence Check ==========
-        # Check table existence before running schema-dependent tools
-        schema_dependent_tools = {"describe_table", "get_table_ddl"}
-        if any(tool in required_tools for tool in schema_dependent_tools) and table_names:
-            table_existence = {}
-            for table_name in table_names:
-                check_result = await self._execute_preflight_tool(
-                    "check_table_exists", sql_query, [table_name], catalog, database, schema
-                )
-                table_existence[table_name] = check_result
-
-                # Check for missing tables and log warnings
-                if check_result is None:
-                    logger.warning(f"Table existence check failed for '{table_name}' - check_result is None")
-                elif not check_result.get("success") or not check_result.get("result", {}).get("table_exists", True):
-                    suggestions = check_result.get("result", {}).get("suggestions", [])
-                    if suggestions:
-                        logger.warning(f"Table '{table_name}' not found. Did you mean: {', '.join(suggestions)}?")
-                    else:
-                        logger.warning(f"Table '{table_name}' not found in database")
-
-            # Adjust tool sequence based on table existence
-            required_tools = self._adjust_tool_sequence_for_missing_tables(required_tools, table_names, table_existence)
-        # ========== END Table Existence Check ==========
-
-        all_success = True
-        tool_results = {}
-
-        for tool_name in required_tools:
-            start_time = time.time()
-            cache_hit = False
-
-            # 生成工具调用ID
-            tool_call_id = f"preflight_{tool_name}_{start_time}"
-
-            try:
-                logger.info(f"Executing preflight tool: {tool_name}")
-
-                # Record tool call start if using event manager
-                if event_manager and execution_id:
-                    await event_manager.record_tool_execution(
-                        execution_id,
-                        tool_name,
-                        tool_call_id,
-                        {
-                            "tool_name": tool_name,
-                            "sql_query": sql_query,
-                            "table_names": table_names,
-                            "catalog": catalog,
-                            "database": database,
-                            "schema": schema,
-                        },
-                    )
-
-                # Create action for tool execution
-                tool_action = ActionHistory.create_action(
-                    role=ActionRole.TOOL,
-                    action_type=f"preflight_{tool_name}",
-                    messages=f"Executing preflight tool: {tool_name}",
-                    input_data={
-                        "tool_name": tool_name,
-                        "sql_query": sql_query,
-                        "table_names": table_names,
-                        "catalog": catalog,
-                        "database": database,
-                        "schema": schema,
-                    },
-                    status=ActionStatus.PROCESSING,
-                )
-                action_history_manager.add_action(tool_action)
-
-                # Execute the specific tool
-                result = await self._execute_preflight_tool(
-                    tool_name, sql_query, table_names, catalog, database, schema
-                )
-
-                execution_time = time.time() - start_time
-
-                # Check if this was a cache hit
-                cache_hit = result.get("cached", False)
-
-                # Update action with result
-                success = result.get("success", False)
-                tool_action.status = ActionStatus.SUCCESS if success else ActionStatus.FAILED
-                tool_action.output = result
-                tool_action.messages = f"Preflight tool {tool_name}: {'SUCCESS' if success else 'FAILED'}"
-
-                # Record tool result if using event manager
-                if event_manager and execution_id:
-                    await event_manager.record_tool_execution(
-                        execution_id,
-                        tool_name,
-                        tool_call_id,
-                        {
-                            "tool_name": tool_name,
-                            "sql_query": sql_query,
-                            "table_names": table_names,
-                            "catalog": catalog,
-                            "database": database,
-                            "schema": schema,
-                        },
-                        result=result,
-                        execution_time=execution_time,
-                    )
-
-                # 更新执行状态跟踪
-                error_type = None
-                if not success:
-                    error_desc = result.get("error", "Unknown error")
-                    error_type = self._classify_error_type(error_desc, tool_name)
-                    if hasattr(self, "execution_status") and self.execution_status:
-                        self.execution_status.add_error(error_type, error_desc)
-
-                if hasattr(self, "execution_status") and self.execution_status:
-                    self.execution_status.add_tool_execution(tool_name, success, execution_time, error_type)
-
-                # Record error if using event manager
-                if not success and event_manager and execution_id:
-                    await event_manager.record_llm_interaction(
-                        execution_id, "tool_error", f"Tool {tool_name} failed", error=error_desc
-                    )
-
-                # Record in monitor
-                if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
-                    self.plan_hooks.monitor.record_preflight_tool_call(
-                        execution_id,
-                        tool_name,
-                        success,
-                        cache_hit,
-                        execution_time,
-                        result.get("error") if not success else None,
-                    )
-
-                # Store result for context injection and monitoring
-                tool_results[tool_name] = result
-
-                # Inject results into workflow context
-                self._inject_tool_result_into_context(workflow, tool_name, result)
-
-                if not success:
-                    error_desc = result.get("error", "Unknown error")
-                    # Enhanced error classification
-                    error_type = self._classify_error_type(error_desc, tool_name)
-                    recovery_suggestions = self._get_recovery_suggestions(error_type)
-
-                    # Store enhanced error data in result
-                    enhanced_result = dict(result)
-                    enhanced_result["error_type"] = error_type
-                    enhanced_result["recovery_suggestions"] = recovery_suggestions
-                    tool_results[tool_name] = enhanced_result
-
-                    logger.warning(f"Preflight tool {tool_name} failed ({error_type}): {error_desc}")
-
-                    # Send appropriate error events based on error type
-                    if error_type == "database_connection":
-                        error_action = await self._send_db_connection_error_event(sql_query, error_desc)
-                        if action_history_manager:
-                            action_history_manager.add_action(error_action)
-                        yield error_action
-                    elif error_type == "table_not_found" and tool_name in ["describe_table", "get_table_ddl"]:
-                        # Extract table name from the error or tool parameters
-                        table_name = table_names[0] if table_names else "unknown"
-                        error_action = await self._send_table_not_found_event(table_name, error_desc)
-                        if action_history_manager:
-                            action_history_manager.add_action(error_action)
-                        yield error_action
-
-                        # Try fallback search_table for suggestions
-                        if tool_name == "describe_table":
-                            try:
-                                logger.info(f"Attempting fallback search_table for missing table: {table_name}")
-                                search_result = await self._execute_preflight_tool(
-                                    "search_table", sql_query, [table_name], catalog, database, schema
-                                )
-
-                                if search_result.get("success", False):
-                                    # Extract suggestions from search results
-                                    search_data = search_result.get("result", {})
-                                    suggestions = []
-
-                                    # Get table names from search results
-                                    if "metadata" in search_data:
-                                        for meta in search_data["metadata"]:
-                                            if "table_name" in meta:
-                                                suggestions.append(meta["table_name"])
-
-                                    if suggestions:
-                                        logger.info(
-                                            f"Found {len(suggestions)} similar tables via search_table fallback"
-                                        )
-                                        # Emit a tool result event with suggestions
-                                        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
-
-                                        fallback_action = ActionHistory.create_action(
-                                            role=ActionRole.TOOL,
-                                            action_type="tool_call_result",
-                                            messages=f"Search found {len(suggestions)} similar tables for '{table_name}'",
-                                            input={"original_table": table_name, "search_tool": "search_table"},
-                                            output={
-                                                "tool_name": "search_table",
-                                                "success": True,
-                                                "suggestions": suggestions[:5],  # Limit to top 5
-                                                "fallback_for": tool_name,
-                                            },
-                                            status=ActionStatus.SUCCESS,
-                                        )
-                                        if action_history_manager:
-                                            action_history_manager.add_action(fallback_action)
-                                        yield fallback_action
-                            except Exception as fallback_e:
-                                logger.warning(f"Fallback search_table failed for {table_name}: {str(fallback_e)}")
-                    elif tool_name == "validate_sql_syntax":
-                        error_action = await self._send_syntax_error_event(sql_query, error_desc)
-                        if action_history_manager:
-                            action_history_manager.add_action(error_action)
-                        yield error_action
-
-                    # Log recovery suggestions
-                    if recovery_suggestions:
-                        logger.info(f"Recovery suggestions for {error_type}: {recovery_suggestions[0]}")
-
-                    all_success = False
-
-            except Exception as e:
-                execution_time = time.time() - start_time
-                logger.error(f"Preflight tool {tool_name} execution error: {e}")
-                all_success = False
-
-                # 创建工具调用失败结果事件
-                error_result_action = ActionHistory.create_action(
-                    role=ActionRole.TOOL,
-                    action_type=f"preflight_{tool_name}_result",
-                    messages=f"Preflight tool {tool_name} failed: {str(e)}",
-                    input_data={
-                        "tool_call_id": tool_call_id,
-                        "tool_name": tool_name,
-                        "execution_time": execution_time,
-                        "cache_hit": False,
-                    },
-                    output={"success": False, "error": str(e)},
-                    status=ActionStatus.FAILED,
-                )
-                action_history_manager.add_action(error_result_action)
-                yield error_result_action
-
-                # 更新执行计划状态为失败 (通过error action体现)
-
-                # Record error in monitor
-                if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
-                    self.plan_hooks.monitor.record_preflight_tool_call(
-                        execution_id, tool_name, False, False, execution_time, str(e)
-                    )
-
-                # Update action with error
-                if "tool_action" in locals():
-                    tool_action.status = ActionStatus.FAILED
-                    tool_action.output = {"success": False, "error": str(e)}
-                    tool_action.messages = f"Preflight tool {tool_name} failed: {str(e)}"
-
-        # 标记预检执行完成
-        if hasattr(self, "execution_status") and self.execution_status:
-            self.execution_status.mark_preflight_complete(all_success)
-
-        # End preflight monitoring
-        preflight_summary = {}
-        if hasattr(self, "plan_hooks") and self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
-            preflight_summary = self.plan_hooks.monitor.end_preflight(execution_id)
-
-            # Generate fail-safe report annotation if there were failures
-            if not all_success:
-                fail_safe_annotation = self.plan_hooks.monitor.generate_fail_safe_report_annotation(execution_id)
-                if fail_safe_annotation:
-                    # Store annotation in workflow for later use in report generation
-                    workflow.metadata["fail_safe_annotation"] = fail_safe_annotation
-                    logger.info("Generated fail-safe report annotation due to preflight tool failures")
-
-        # Prepare preflight results for LLM context
-        preflight_results_for_llm = []
-        for tool_name, result in tool_results.items():
-            impact_analysis = self._analyze_tool_failure_impact(tool_name, result)
-            preflight_results_for_llm.append(
-                {
-                    "tool_name": tool_name,
-                    "success": result.get("success", False),
-                    "error": result.get("error", ""),
-                    "impact_analysis": impact_analysis,
-                }
-            )
-
-        # Inject preflight results into workflow for LLM access
-        workflow.metadata["preflight_results"] = preflight_results_for_llm
-
-        logger.info(f"Preflight tool execution completed: {'SUCCESS' if all_success else 'PARTIAL_SUCCESS'}")
-        if preflight_summary:
-            logger.info(f"Preflight summary: {preflight_summary}")
-        return
-
-    async def _execute_preflight_tool(
-        self, tool_name: str, sql_query: str, table_names: list, catalog: str, database: str, schema: str
-    ) -> dict:
-        """Execute a specific preflight tool with caching and batch support."""
+    async def _execute_describe_table_tool(self, workflow, action_history_manager):
+        """Execute describe_table preflight tool."""
         try:
-            # Check cache first for cacheable operations
-            cache_key_params = {"catalog": catalog, "database": database, "schema": schema}
+            task = workflow.task
+            sql_query = self._extract_sql_from_task(task.task)
+            table_names = self._extract_table_names_from_sql(sql_query)
 
-            if tool_name == "describe_table":
-                if not table_names:
-                    return {"success": False, "error": "No table names found in SQL query"}
+            result = await self._execute_preflight_tool(
+                "describe_table", sql_query, table_names,
+                task.catalog_name, task.database_name, task.schema_name
+            )
 
-                # Check cache first
-                table_name = table_names[0]
-                cache_key_params["table_name"] = table_name
-
-                if hasattr(self, "plan_hooks") and self.plan_hooks and self.plan_hooks.enable_query_caching:
-                    cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
-                    if cached_result is not None:
-                        logger.info(f"Cache hit for {tool_name} on table {table_name}")
-                        return cached_result
-
-                # Execute the tool with explicit parameters
-                try:
-                    result = self.db_func_tool.describe_table(
-                        table_name=table_name,
-                        catalog=catalog or "default_catalog",  # Provide default catalog
-                        database=database or "",  # Allow empty but explicit
-                        schema_name=schema or "",  # Allow empty but explicit
-                    )
-                except Exception as e:
-                    return {"success": False, "error": f"describe_table execution failed: {str(e)}"}
-                result_dict = (
-                    result.__dict__
-                    if hasattr(result, "__dict__")
-                    else {"success": False, "error": "Invalid result format"}
+            if result.get("success"):
+                # Create action for successful tool execution
+                action = ActionHistory.create_action(
+                    role=ActionRole.ASSISTANT,
+                    action_type="tool_call",
+                    input=f"Describe table structure for {table_names[0] if table_names else 'unknown table'}",
+                    output=result,
+                    tool_name="describe_table"
                 )
-
-                # Cache successful results
-                if (
-                    result_dict.get("success", False)
-                    and hasattr(self, "plan_hooks")
-                    and self.plan_hooks
-                    and self.plan_hooks.enable_query_caching
-                ):
-                    self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
-                    logger.debug(f"Cached result for {tool_name} on table {table_name}")
-
-                return result_dict
-
-            elif tool_name == "search_external_knowledge":
-                # Search for StarRocks SQL review rules
-                query = "StarRocks 3.3 SQL审查规则"
-
-                # Check cache
-                cache_key_params["query_text"] = query
-                cache_key_params["domain"] = "database"
-                cache_key_params["layer1"] = "sql_review"
-                cache_key_params["layer2"] = "starrocks"
-
-                if hasattr(self, "plan_hooks") and self.plan_hooks and self.plan_hooks.enable_query_caching:
-                    cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
-                    if cached_result is not None:
-                        logger.info(f"Cache hit for {tool_name} with query '{query}'")
-                        return cached_result
-
-                result = self.context_search_tools.search_external_knowledge(
-                    query_text=query, domain="database", layer1="sql_review", layer2="starrocks", top_n=5
-                )
-                result_dict = (
-                    result.__dict__
-                    if hasattr(result, "__dict__")
-                    else {"success": False, "error": "Invalid result format"}
-                )
-
-                # Cache successful results
-                if (
-                    result_dict.get("success", False)
-                    and hasattr(self, "plan_hooks")
-                    and self.plan_hooks
-                    and self.plan_hooks.enable_query_caching
-                ):
-                    self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
-
-                return result_dict
-
-            elif tool_name == "check_table_exists" and table_names:
-                # Check table existence with caching for better performance
-                table_name = table_names[0]
-                cache_key_params["table_name"] = table_name
-
-                # Check cache first
-                if hasattr(self, "plan_hooks") and self.plan_hooks and self.plan_hooks.enable_query_caching:
-                    cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
-                    if cached_result is not None:
-                        logger.info(f"Cache hit for {tool_name} on table {table_name}")
-                        return cached_result
-
-                result = self.db_func_tool.check_table_exists(
-                    table_name=table_name, catalog=catalog, database=database, schema_name=schema
-                )
-                result_dict = (
-                    result.__dict__
-                    if hasattr(result, "__dict__")
-                    else {"success": False, "error": "Invalid result format"}
-                )
-
-                # Cache successful results
-                if (
-                    result_dict.get("success", False)
-                    and hasattr(self, "plan_hooks")
-                    and self.plan_hooks
-                    and self.plan_hooks.enable_query_caching
-                ):
-                    self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
-                    logger.debug(f"Cached result for {tool_name} on table {table_name}")
-
-                return result_dict
-
-            elif tool_name == "read_query" and sql_query:
-                # Check cache for read_query (be careful with dynamic data)
-                cache_key_params["sql_query"] = sql_query[:500]  # Limit key size
-
-                if hasattr(self, "plan_hooks") and self.plan_hooks and self.plan_hooks.enable_query_caching:
-                    cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
-                    if cached_result is not None:
-                        logger.info(f"Cache hit for {tool_name} with SQL query")
-                        return cached_result
-
-                # Execute the SQL query for validation
-                result = self.db_func_tool.read_query(sql=sql_query)
-                result_dict = (
-                    result.__dict__
-                    if hasattr(result, "__dict__")
-                    else {"success": False, "error": "Invalid result format"}
-                )
-
-                # Only cache successful, non-destructive SELECT queries
-                if (
-                    result_dict.get("success", False)
-                    and sql_query.strip().upper().startswith("SELECT")
-                    and hasattr(self, "plan_hooks")
-                    and self.plan_hooks
-                    and self.plan_hooks.enable_query_caching
-                ):
-                    self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
-
-                return result_dict
-
-            elif tool_name == "get_table_ddl":
-                if not table_names:
-                    return {"success": False, "error": "No table names found in SQL query"}
-
-                # Check cache first
-                table_name = table_names[0]
-                cache_key_params["table_name"] = table_name
-
-                if hasattr(self, "plan_hooks") and self.plan_hooks and self.plan_hooks.enable_query_caching:
-                    cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
-                    if cached_result is not None:
-                        logger.info(f"Cache hit for {tool_name} on table {table_name}")
-                        return cached_result
-
-                # Get DDL for the first table with explicit parameters
-                try:
-                    result = self.db_func_tool.get_table_ddl(
-                        table_name=table_name,
-                        catalog=catalog or "default_catalog",  # Provide default catalog
-                        database=database or "",  # Allow empty but explicit
-                        schema_name=schema or "",  # Allow empty but explicit
-                    )
-                except Exception as e:
-                    return {"success": False, "error": f"get_table_ddl execution failed: {str(e)}"}
-                result_dict = (
-                    result.__dict__
-                    if hasattr(result, "__dict__")
-                    else {"success": False, "error": "Invalid result format"}
-                )
-
-                # Cache successful results
-                if (
-                    result_dict.get("success", False)
-                    and hasattr(self, "plan_hooks")
-                    and self.plan_hooks
-                    and self.plan_hooks.enable_query_caching
-                ):
-                    self.plan_hooks.query_cache.set(tool_name, result_dict, **cache_key_params)
-
-                return result_dict
-
-            else:
-                return {"success": False, "error": f"Unsupported or insufficient data for tool: {tool_name}"}
+                if action_history_manager:
+                    action_history_manager.add_action(action)
+                return action
 
         except Exception as e:
-            logger.error(f"Error executing preflight tool {tool_name}: {e}")
-            return {"success": False, "error": str(e)}
+            logger.error(f"Error in _execute_describe_table_tool: {e}")
 
+        return None
+
+    async def _execute_search_external_knowledge_tool(self, workflow, action_history_manager):
+        """Execute search_external_knowledge preflight tool."""
+        try:
+            task = workflow.task
+
+            result = await self._execute_preflight_tool(
+                "search_external_knowledge", "", [],  # No SQL/table needed for knowledge search
+                task.catalog_name, task.database_name, task.schema_name
+            )
+
+            if result.get("success"):
+                # Create action for successful tool execution
+                action = ActionHistory.create_action(
+                    role=ActionRole.ASSISTANT,
+                    action_type="tool_call",
+                    input="Search StarRocks SQL review rules and best practices",
+                    output=result,
+                    tool_name="search_external_knowledge"
+                )
+                if action_history_manager:
+                    action_history_manager.add_action(action)
+                return action
+
+        except Exception as e:
+            logger.error(f"Error in _execute_search_external_knowledge_tool: {e}")
+
+        return None
+
+    async def _execute_read_query_tool(self, workflow, action_history_manager):
+        """Execute read_query preflight tool."""
+        try:
+            task = workflow.task
+            sql_query = self._extract_sql_from_task(task.task)
+
+            result = await self._execute_preflight_tool(
+                "read_query", sql_query, [],
+                task.catalog_name, task.database_name, task.schema_name
+            )
+
+            if result.get("success"):
+                # Create action for successful tool execution
+                action = ActionHistory.create_action(
+                    role=ActionRole.ASSISTANT,
+                    action_type="tool_call",
+                    input=f"Execute SQL query for validation: {sql_query[:100]}...",
+                    output=result,
+                    tool_name="read_query"
+                )
+                if action_history_manager:
+                    action_history_manager.add_action(action)
+                return action
+
+        except Exception as e:
+            logger.error(f"Error in _execute_read_query_tool: {e}")
+
+        return None
+
+    async def _execute_get_table_ddl_tool(self, workflow, action_history_manager):
+        """Execute get_table_ddl preflight tool."""
+        try:
+            task = workflow.task
+            sql_query = self._extract_sql_from_task(task.task)
+            table_names = self._extract_table_names_from_sql(sql_query)
+
+            result = await self._execute_preflight_tool(
+                "get_table_ddl", sql_query, table_names,
+                task.catalog_name, task.database_name, task.schema_name
+            )
+
+            if result.get("success"):
+                # Create action for successful tool execution
+                action = ActionHistory.create_action(
+                    role=ActionRole.ASSISTANT,
+                    action_type="tool_call",
+                    input=f"Get DDL for table {table_names[0] if table_names else 'unknown table'}",
+                    output=result,
+                    tool_name="get_table_ddl"
+                )
+                if action_history_manager:
+                    action_history_manager.add_action(action)
+                return action
+
+        except Exception as e:
+            logger.error(f"Error in _execute_get_table_ddl_tool: {e}")
+
+        return None
     def _extract_sql_from_task(self, task_text: str) -> str:
         """Extract SQL query from task text with improved logic."""
         import re
@@ -2023,3 +1582,6 @@ class ChatAgenticNode(GenSQLAgenticNode):
         analysis_keywords = ["分析", "analysis", "统计", "statistics", "趋势", "trend", "对比", "compare"]
         if any(keyword in message for keyword in analysis_keywords):
             return "data_analysis"
+
+        # Default scenario for unmatched inputs
+        return "text2sql"
