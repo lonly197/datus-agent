@@ -16,6 +16,52 @@ from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.path_utils import get_files_from_glob_pattern
 
+# Configuration data classes for v2.4 features
+@dataclass
+class ScenarioConfig:
+    """Scenario-specific configuration."""
+    enabled: bool = True
+    preflight_tools: List[str] = field(default_factory=list)
+    workflow: str = ""
+    system_prompt: str = ""
+    execution_mode: str = "traditional"
+    tool_timeout_seconds: int = 30
+    continue_on_failure: bool = True
+    cache_ttl_seconds: int = 300
+
+@dataclass
+class SQLReviewPreflightConfig:
+    """SQL review preflight configuration (v2.4)."""
+    enabled: bool = True
+    default_tool_sequence: List[str] = field(default_factory=lambda: [
+        "describe_table", "search_external_knowledge", "read_query",
+        "get_table_ddl", "analyze_query_plan", "check_table_conflicts", "validate_partitioning"
+    ])
+    cache_enabled: bool = True
+    cache_ttl_seconds: int = 300
+    tool_timeout_seconds: int = 30
+    continue_on_failure: bool = True
+
+    # Enhanced error handling options
+    error_handling: Dict[str, Any] = field(default_factory=lambda: {
+        "classify_errors": True,
+        "include_recovery_suggestions": True,
+        "detailed_error_context": True
+    })
+
+    # Table existence checking
+    table_existence_check: Dict[str, Any] = field(default_factory=lambda: {
+        "enabled": True,
+        "on_missing": "skip_schema_tools",
+        "max_suggestions": 3
+    })
+
+    # SQL syntax validation configuration
+    syntax_validation: Dict[str, Any] = field(default_factory=lambda: {
+        "strict_mode": True,
+        "use_dialect": True
+    })
+
 
 @dataclass
 class DbConfig:
@@ -188,6 +234,9 @@ class AgentConfig:
     _current_namespace: str
     _current_database: str
     _trajectory_dir: str
+    # v2.4 additions
+    scenarios: Dict[str, ScenarioConfig]
+    sql_review_preflight: SQLReviewPreflightConfig
 
     def __init__(self, nodes: Dict[str, NodeConfig], **kwargs):
         """
@@ -232,6 +281,17 @@ class AgentConfig:
 
         if not isinstance(self.plan_executor_enable_fallback, bool):
             raise ValueError("plan_executor.enable_fallback must be a boolean")
+
+        # Initialize scenario configurations (v2.4)
+        scenarios_config = kwargs.get("scenarios", {})
+        self.scenarios: Dict[str, ScenarioConfig] = {}
+        for scenario_name, scenario_cfg in scenarios_config.items():
+            self.scenarios[scenario_name] = ScenarioConfig(**scenario_cfg)
+
+        # Initialize SQL review preflight configuration (v2.4)
+        plan_executor_config = kwargs.get("plan_executor", {})
+        sql_review_cfg = plan_executor_config.get("sql_review_preflight", {})
+        self.sql_review_preflight = SQLReviewPreflightConfig(**sql_review_cfg)
 
         # Benchmark paths are now fixed at {agent.home}/benchmark/{name}
         # Supported benchmarks: bird_dev, spider2, semantic_layer

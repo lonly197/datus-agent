@@ -16,7 +16,7 @@ from typing import Any, AsyncGenerator, Dict, List
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.tools.func_tool.database import db_function_tool_instance
 from datus.tools.func_tool.context_search import ContextSearchTools
-from datus.tools.date_tools.date_parser import DateParsingTools
+from datus.tools.date_tools.date_parser import DateParserTool
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -86,7 +86,7 @@ class PreflightOrchestrator:
     def _get_date_parsing_tools(self):
         """Lazy initialization of date parsing tools."""
         if self.date_parsing_tools is None:
-            self.date_parsing_tools = DateParsingTools()
+            self.date_parsing_tools = DateParserTool()
         return self.date_parsing_tools
 
     async def run_preflight_tools(
@@ -202,12 +202,12 @@ class PreflightOrchestrator:
                         }
                         if tool_name == "search_table":
                             cache_key_params["query"] = workflow.task.task[:200]
-                    elif tool_name == "describe_table" and table_names:
-                        cache_key_params["table_name"] = table_names[0]
-                    elif tool_name == "search_reference_sql":
-                        cache_key_params["query"] = workflow.task.task[:200]
-                    elif tool_name == "parse_temporal_expressions":
-                        cache_key_params["text"] = workflow.task.task
+                        elif tool_name == "describe_table" and table_names:
+                            cache_key_params["table_name"] = table_names[0]
+                        elif tool_name == "search_reference_sql":
+                            cache_key_params["query"] = workflow.task.task[:200]
+                        elif tool_name == "parse_temporal_expressions":
+                            cache_key_params["text"] = workflow.task.task
 
                         self.plan_hooks.query_cache.set(
                             tool_name, result, **cache_key_params)

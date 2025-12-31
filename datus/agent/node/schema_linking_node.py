@@ -197,14 +197,19 @@ class SchemaLinkingNode(Node):
                 return ""
 
             # Execute semantic search
-            search_results = ext_knowledge_store.search_knowledge(
-                query_text=user_query, subject_path=subject_path, top_n=5
+            # Convert subject_path to domain/layer1/layer2 format
+            domain = subject_path[0] if len(subject_path) > 0 else ""
+            layer1 = subject_path[1] if len(subject_path) > 1 else ""
+            layer2 = subject_path[2] if len(subject_path) > 2 else ""
+
+            search_result = context_search_tools.search_external_knowledge(
+                query_text=user_query, domain=domain, layer1=layer1, layer2=layer2, top_n=5
             )
 
             # Format search results
-            if search_results is not None and len(search_results) > 0:
+            if search_result.success and search_result.result:
                 knowledge_items = []
-                for result in search_results.to_pylist():
+                for result in search_result.result:
                     terminology = result.get("terminology", "")
                     explanation = result.get("explanation", "")
                     if terminology and explanation:

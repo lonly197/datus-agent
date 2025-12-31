@@ -1519,17 +1519,30 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
             try:
                 if scenario == "sql_review":
-                    # Use existing preflight tools for SQL review
-                    async for preflight_action in self.run_preflight_tools(self.workflow, action_history_manager):
+                    # Use new SQL Review Preflight Orchestrator (v2.4)
+                    from datus.agent.node.sql_review_preflight_orchestrator import SQLReviewPreflightOrchestrator
+
+                    sql_review_orchestrator = SQLReviewPreflightOrchestrator(
+                        agent_config=self.agent_config,
+                        plan_hooks=getattr(self, 'plan_hooks', None),
+                        execution_event_manager=getattr(self, 'execution_event_manager', None)
+                    )
+
+                    # Execute all 7 preflight tools with enhanced orchestration
+                    async for preflight_action in sql_review_orchestrator.run_preflight_tools(
+                        workflow=self.workflow,
+                        action_history_manager=action_history_manager,
+                        execution_id=f"sql_review_{int(time.time() * 1000)}"
+                    ):
                         yield preflight_action
 
-                        # Check if this is a validation failure that should terminate execution
+                        # Check if this is a critical failure that should terminate execution
                         if (
-                            preflight_action.action_type == "sql_syntax_validation"
+                            preflight_action.action_type == "preflight_read_query"
                             and preflight_action.status == ActionStatus.FAILED
                         ):
-                            # Stop execution - validation failed
-                            logger.info("SQL syntax validation failed, terminating execution")
+                            # SQL syntax validation failed, terminate execution
+                            logger.info("SQL syntax validation failed during preflight, terminating execution")
                             return
                 elif scenario == "text2sql":
                     # Use PreflightOrchestrator for Text2SQL evidence gathering
@@ -1603,3 +1616,98 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
         # Default scenario for unmatched inputs
         return "text2sql"
+
+
+class ExecutionStatus:
+    """Execution status tracker for preflight and main execution (v2.4)."""
+
+    def __init__(self):
+        self.preflight_completed = False
+        self.syntax_validation_passed = False
+        self.tools_executed = []
+        self.errors_encountered = []
+
+    def mark_preflight_complete(self, success: bool):
+        """Mark preflight execution as completed."""
+        self.preflight_completed = True
+
+    def mark_syntax_validation(self, passed: bool):
+        """Mark syntax validation result."""
+        self.syntax_validation_passed = passed
+
+    def add_tool_execution(self, tool_name: str, success: bool, execution_time: float = None, error_type: str = None):
+        """Add tool execution record with enhanced metadata."""
+        record = {
+            "tool": tool_name,
+            "success": success,
+            "timestamp": time.time(),
+            "execution_time": execution_time,
+            "error_type": error_type
+        }
+        self.tools_executed.append(record)
+
+    def add_error(self, error_type: str, error_msg: str):
+        """Add error record."""
+        self.errors_encountered.append({
+            "type": error_type,
+            "message": error_msg,
+            "timestamp": time.time()
+        })
+
+    async def _dispatch_error_event(self, error_type: str, sql_query: str, error_desc: str, tool_name: str, table_names: list):
+        """根据错误类型分发相应的事件 (v2.4)"""
+        try:
+            if error_type == "permission_error":
+                await self._send_permission_error_event(sql_query, error_desc)
+            elif error_type == "timeout_error":
+                await self._send_timeout_error_event(sql_query, error_desc)
+            elif error_type == "table_not_found":
+                table_name = table_names[0] if table_names else "unknown_table"
+                await self._send_table_not_found_error_event(table_name, error_desc)
+            elif error_type == "connection_error":
+                await self._send_db_connection_error_event(sql_query, error_desc)
+            # 对于其他错误类型，可以添加默认处理或忽略
+
+        except Exception as e:
+            # 错误事件发送失败不应该影响主要流程
+            logger.warning(f"Failed to dispatch error event for {error_type}: {e}")
+
+    async def _send_permission_error_event(self, sql_query: str, error_desc: str):
+        """Send permission error event."""
+        if hasattr(self, 'execution_event_manager') and self.execution_event_manager:
+            await self.execution_event_manager.send_error_event(
+                error_type="permission_error",
+                error_message=error_desc,
+                sql_query=sql_query,
+                severity="high"
+            )
+
+    async def _send_timeout_error_event(self, sql_query: str, error_desc: str):
+        """Send timeout error event."""
+        if hasattr(self, 'execution_event_manager') and self.execution_event_manager:
+            await self.execution_event_manager.send_error_event(
+                error_type="timeout_error",
+                error_message=error_desc,
+                sql_query=sql_query,
+                severity="medium"
+            )
+
+    async def _send_table_not_found_error_event(self, table_name: str, error_desc: str):
+        """Send table not found error event."""
+        if hasattr(self, 'execution_event_manager') and self.execution_event_manager:
+            await self.execution_event_manager.send_error_event(
+                error_type="table_not_found",
+                error_message=error_desc,
+                table_name=table_name,
+                severity="medium"
+            )
+
+    async def _send_db_connection_error_event(self, sql_query: str, error_desc: str):
+        """Send database connection error event."""
+        if hasattr(self, 'execution_event_manager') and self.execution_event_manager:
+            await self.execution_event_manager.send_error_event(
+                error_type="connection_error",
+                error_message=error_desc,
+                sql_query=sql_query,
+                severity="high"
+            )

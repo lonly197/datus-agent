@@ -670,18 +670,21 @@ class DatusAPIService:
         """根据任务类型配置处理参数"""
 
         if task_type == "sql_review":
-            # SQL审查：不使用plan模式，使用专门的审查提示词
+            # SQL审查：使用chat_agentic_plan工作流，启用强制预检工具序列 (v2.4)
             return {
-                "workflow": "chat_agentic",  # 不使用plan模式
-                "plan_mode": False,
-                "auto_execute_plan": False,
-                "system_prompt": "sql_review",  # 专门的SQL审查提示词（会自动添加_system后缀）
-                "output_format": "markdown",  # 指定输出格式
-                "required_tool_sequence": [
-                    "describe_table",  # 获取表结构信息
-                    "search_external_knowledge",  # 检索StarRocks审查规则
-                    "read_query",  # 执行查询验证SQL正确性
-                    "get_table_ddl",  # 获取表DDL定义
+                "workflow": "chat_agentic_plan",  # 使用plan模式专用工作流
+                "plan_mode": False,               # 禁用传统plan模式
+                "auto_execute_plan": False,       # 禁用自动执行
+                "system_prompt": "sql_review",    # 使用专用SQL审查提示词
+                "output_format": "markdown",      # Markdown格式输出
+                "required_tool_sequence": [       # 强制执行7个工具序列 (v2.4完整版)
+                    "describe_table",             # 表结构分析
+                    "search_external_knowledge",  # StarRocks规则检索
+                    "read_query",                 # SQL语法验证
+                    "get_table_ddl",              # DDL定义获取
+                    "analyze_query_plan",         # 查询计划分析 (v2.4新增)
+                    "check_table_conflicts",      # 表冲突检测 (v2.4新增)
+                    "validate_partitioning"       # 分区验证 (v2.4新增)
                 ],
             }
         elif task_type == "data_analysis":
