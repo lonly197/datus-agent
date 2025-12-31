@@ -200,7 +200,6 @@ class SchemaLinkingNode(Node):
             search_results = ext_knowledge_store.search_knowledge(
                 query_text=user_query, subject_path=subject_path, top_n=5
             )
-            )
 
             # Format search results
             if search_results is not None and len(search_results) > 0:
