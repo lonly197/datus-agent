@@ -3466,7 +3466,7 @@ Respond with only the tool name, nothing else."""
                             action_type="thinking",
                             messages=f"Skipped tool execution for todo {item.id} (requires_tool=False)",
                             input_data={"todo_id": item.id},
-                            output={
+                            output_data={
                                 "raw_output": "This step does not require external tool execution",
                                 "emit_chat": True,
                             },
@@ -4110,7 +4110,7 @@ Respond with only the tool name, nothing else."""
                                     action_type="thinking",
                                     messages=f"Domain layers listing for todo {item.id}",
                                     input_data={"todo_id": item.id},
-                                    output={
+                                    output_data={
                                         "raw_output": f"Domain layers exploration completed for: {item.content}",
                                         "emit_chat": True,
                                     },

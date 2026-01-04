@@ -156,7 +156,7 @@ class ExecutionEventManager:
                 "input": input_data,
                 "execution_time": execution_time,
             },
-            output={"result": result, "error": error} if result or error else None,
+            output_data={"result": result, "error": error} if result or error else None,
             status=ActionStatus.SUCCESS if success else ActionStatus.FAILED,
         )
         self.action_history_manager.add_action(action)
@@ -192,7 +192,7 @@ class ExecutionEventManager:
                 "prompt_length": len(prompt) if prompt else 0,
                 "execution_time": execution_time,
             },
-            output={"response": response, "error": error} if response or error else None,
+            output_data={"response": response, "error": error} if response or error else None,
             status=ActionStatus.SUCCESS if success else ActionStatus.FAILED,
         )
         self.action_history_manager.add_action(action)
@@ -214,7 +214,7 @@ class ExecutionEventManager:
             action_type=f"execution_complete_{context.scenario}",
             messages=f"Execution completed: {'SUCCESS' if success else 'FAILED'}",
             input_data={"execution_id": execution_id, "duration": duration},
-            output={
+            output_data={
                 "final_result": final_result,
                 "error": error,
                 "execution_stats": context.execution_status.execution_stats,

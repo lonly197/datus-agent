@@ -256,7 +256,7 @@ class PreflightOrchestrator:
                 action_type=f"preflight_{tool_name}_error",
                 messages=f"Preflight tool {tool_name} failed: {error_desc}",
                 input_data={"tool_name": tool_name},
-                output={"error": error_desc},
+                output_data={"error": error_desc},
                 status=ActionStatus.FAILED,
             )
             action_history_manager.add_action(error_action)
@@ -930,9 +930,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 action = ActionHistory.create_action(
                     role=ActionRole.ASSISTANT,
                     action_type="tool_call",
-                    input=f"Describe table structure for {table_names[0] if table_names else 'unknown table'}",
-                    output=result,
-                    tool_name="describe_table",
+                    messages=f"Describe table structure for {table_names[0] if table_names else 'unknown table'}",
+                    input_data={"table_names": table_names},
+                    output_data=result,
                 )
                 if action_history_manager:
                     action_history_manager.add_action(action)
@@ -962,9 +962,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 action = ActionHistory.create_action(
                     role=ActionRole.ASSISTANT,
                     action_type="tool_call",
-                    input="Search StarRocks SQL review rules and best practices",
-                    output=result,
-                    tool_name="search_external_knowledge",
+                    messages="Search StarRocks SQL review rules and best practices",
+                    input_data={"query": "Search StarRocks SQL review rules and best practices"},
+                    output_data=result,
                 )
                 if action_history_manager:
                     action_history_manager.add_action(action)
@@ -990,9 +990,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 action = ActionHistory.create_action(
                     role=ActionRole.ASSISTANT,
                     action_type="tool_call",
-                    input=f"Execute SQL query for validation: {sql_query[:100]}...",
-                    output=result,
-                    tool_name="read_query",
+                    messages=f"Execute SQL query for validation: {sql_query[:100]}...",
+                    input_data={"sql_query": sql_query[:100]},
+                    output_data=result,
                 )
                 if action_history_manager:
                     action_history_manager.add_action(action)
@@ -1019,9 +1019,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 action = ActionHistory.create_action(
                     role=ActionRole.ASSISTANT,
                     action_type="tool_call",
-                    input=f"Get DDL for table {table_names[0] if table_names else 'unknown table'}",
-                    output=result,
-                    tool_name="get_table_ddl",
+                    messages=f"Get DDL for table {table_names[0] if table_names else 'unknown table'}",
+                    input_data={"table_names": table_names},
+                    output_data=result,
                 )
                 if action_history_manager:
                     action_history_manager.add_action(action)
