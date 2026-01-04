@@ -96,14 +96,19 @@ class DatusAPIService:
         async with self.running_tasks_lock:
             return dict(self.running_tasks)
 
-    async def _run_streaming_workflow_task(self, req: RunWorkflowRequest, current_client: str, task_id: str) -> None:
+    async def _run_streaming_workflow_task(
+        self, req: RunWorkflowRequest, current_client: str, task_id: str, completion_event: asyncio.Event = None
+    ) -> None:
         """Run a streaming workflow task and handle completion."""
         cancelled_by_api = False
 
         try:
             # The actual streaming work is handled by generate_sse_stream
-            # This task just ensures proper cleanup - it will be cancelled when the client disconnects
-            await asyncio.sleep(0)  # Allow task registration to complete
+            # This task waits for completion signal to ensure proper cleanup
+            if completion_event:
+                await completion_event.wait()
+            else:
+                await asyncio.sleep(0)  # Fallback for backward compatibility
 
             # If we get here, the streaming completed successfully
             logger.info(f"Streaming workflow task {task_id} completed successfully")
@@ -133,6 +138,7 @@ class DatusAPIService:
 
     async def _generate_registered_stream(self, task_id: str):
         """Generate stream for a registered task."""
+        completion_event = None
         try:
             # Get the task request from the registry
             running_task = await self.get_running_task(task_id)
@@ -141,6 +147,7 @@ class DatusAPIService:
 
             req_data = running_task.meta.get("request")
             current_client = running_task.meta.get("client")
+            completion_event = running_task.meta.get("completion_event")
 
             if not req_data or not current_client:
                 raise ValueError(f"Invalid task metadata for {task_id}")
@@ -157,15 +164,24 @@ class DatusAPIService:
         except Exception as e:
             logger.error(f"Error in registered stream for task {task_id}: {e}")
             yield f"event: error\ndata: {to_str({'error': str(e)})}\n\n"
+        finally:
+            # Signal that streaming is complete so the background task can cleanup
+            if completion_event:
+                completion_event.set()
 
-    async def _run_chat_research_task(self, req: ChatResearchRequest, current_client: str, task_id: str) -> None:
+    async def _run_chat_research_task(
+        self, req: ChatResearchRequest, current_client: str, task_id: str, completion_event: asyncio.Event = None
+    ) -> None:
         """Run a chat research task and handle completion."""
         cancelled_by_api = False
 
         try:
             # The actual work is handled by _generate_chat_research_stream
-            # This task just ensures proper cleanup - it will be cancelled when the client disconnects
-            await asyncio.sleep(0)  # Allow task registration to complete
+            # This task waits for completion signal to ensure proper cleanup
+            if completion_event:
+                await completion_event.wait()
+            else:
+                await asyncio.sleep(0)  # Fallback for backward compatibility
 
             # If we get here, the streaming completed successfully
             logger.info(f"Chat research task {task_id} completed successfully")
@@ -196,6 +212,7 @@ class DatusAPIService:
 
     async def _generate_chat_research_stream(self, task_id: str):
         """Generate chat research stream for a registered task."""
+        completion_event = None
         try:
             # Get the task request from the registry
             running_task = await self.get_running_task(task_id)
@@ -204,6 +221,7 @@ class DatusAPIService:
 
             req_data = running_task.meta.get("request")
             current_client = running_task.meta.get("client")
+            completion_event = running_task.meta.get("completion_event")
 
             if not req_data or not current_client:
                 raise ValueError(f"Invalid task metadata for {task_id}")
@@ -214,12 +232,16 @@ class DatusAPIService:
             req = ChatResearchRequest(**req_data)
 
             # Generate the stream
-            async for event in self.run_chat_research_stream(req, current_client):
+            async for event in self.run_chat_research_stream(req, current_client, task_id):
                 yield event
 
         except Exception as e:
             logger.error(f"Error in chat research stream for task {task_id}: {e}")
             yield f"data: {to_str({'error': str(e)})}\n\n"
+        finally:
+            # Signal that streaming is complete so the background task can cleanup
+            if completion_event:
+                completion_event.set()
 
     async def _run_sync_workflow_task(self, req: RunWorkflowRequest, current_client: str, task_id: str):
         """Run a synchronous workflow task and return result."""
@@ -751,11 +773,12 @@ class DatusAPIService:
             }
 
     async def run_chat_research_stream(
-        self, request: ChatResearchRequest, client_id: str = None
+        self, request: ChatResearchRequest, client_id: str = None, task_id: str = None
     ) -> AsyncGenerator[str, None]:
         """Execute chat research workflow with DeepResearchEvent streaming."""
 
-        task_id = f"research_{client_id}_{int(time.time())}"
+        if not task_id:
+            task_id = f"research_{client_id}_{int(time.time())}"
 
         try:
             # Get agent for the namespace
@@ -1301,6 +1324,8 @@ def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:
                 # Generate new task_id if not provided
                 task_id = service._generate_task_id(current_client)
                 logger.info(f"Generated new task_id: {task_id}")
+                # Important: update request with generated task_id so it's consistent
+                req.task_id = task_id
 
             # Check if client accepts server-sent events for async mode
             if req.mode == Mode.ASYNC:
@@ -1310,12 +1335,22 @@ def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:
                         status_code=400, detail="For async mode, Accept header must include 'text/event-stream'"
                     )
 
+                # Create completion event to keep task alive
+                completion_event = asyncio.Event()
+
                 # Create and register the streaming task
-                stream_task = asyncio.create_task(service._run_streaming_workflow_task(req, current_client, task_id))
+                stream_task = asyncio.create_task(
+                    service._run_streaming_workflow_task(req, current_client, task_id, completion_event)
+                )
                 await service.register_running_task(
                     task_id,
                     stream_task,
-                    meta={"type": "workflow_stream", "request": req.model_dump(), "client": current_client},
+                    meta={
+                        "type": "workflow_stream",
+                        "request": req.model_dump(),
+                        "client": current_client,
+                        "completion_event": completion_event,
+                    },
                 )
 
                 # Return streaming response
@@ -1372,13 +1407,25 @@ def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:
                 # Generate new task_id if not provided
                 task_id = service._generate_task_id(current_client, "research")
                 logger.info(f"Generated new task_id: {task_id}")
+                # Important: update request with generated task_id so it's consistent
+                req.task_id = task_id
+
+            # Create completion event to keep task alive
+            completion_event = asyncio.Event()
 
             # Create and register the streaming task
-            stream_task = asyncio.create_task(service._run_chat_research_task(req, current_client, task_id))
+            stream_task = asyncio.create_task(
+                service._run_chat_research_task(req, current_client, task_id, completion_event)
+            )
             await service.register_running_task(
                 task_id,
                 stream_task,
-                meta={"type": "chat_research", "request": req.model_dump(), "client": current_client},
+                meta={
+                    "type": "chat_research",
+                    "request": req.model_dump(),
+                    "client": current_client,
+                    "completion_event": completion_event,
+                },
             )
 
             # Return streaming response
