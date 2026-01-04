@@ -1619,8 +1619,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         execution_mode = create_execution_mode(scenario, self.execution_event_manager, execution_context, self)
 
         # Execute using unified execution mode
-        async for action in execution_mode.execute():
-            yield action
+        await execution_mode.execute()
 
         # Yield any remaining events from the event manager
         async for event in self.execution_event_manager.get_events_stream():
