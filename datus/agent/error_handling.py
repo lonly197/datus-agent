@@ -94,7 +94,7 @@ def unified_error_handler(node_type: str, operation: str, log_errors: bool = Tru
                         }
                     )
                 return _create_node_error_result(
-                    self, e.code, str(e), operation, error_details=e.message_args, retryable=retryable
+                    self, e.code, str(e), operation, error_details=e.message_args
                 )
             except ValidationError as e:
                 error_details = {
@@ -112,7 +112,7 @@ def unified_error_handler(node_type: str, operation: str, log_errors: bool = Tru
                     )
                 return _create_node_error_result(
                     self, ErrorCode.COMMON_VALIDATION_FAILED, f"Validation failed: {str(e)}",
-                    operation, error_details=error_details, retryable=retryable
+                    operation, error_details=error_details
                 )
             except (TimeoutError, OSError) as e:
                 # Network/connection related errors
@@ -143,7 +143,7 @@ def unified_error_handler(node_type: str, operation: str, log_errors: bool = Tru
                         }
                     )
                 return _create_node_error_result(
-                    self, ErrorCode.NODE_EXECUTION_FAILED, str(e), operation, retryable=retryable
+                    self, ErrorCode.NODE_EXECUTION_FAILED, str(e), operation
                 )
         return wrapper
     return decorator

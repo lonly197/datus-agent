@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from agents import Tool
 
-from datus.agent.error_handling import ErrorHandlerMixin, NodeErrorResult
+from datus.agent.error_handling import ErrorHandlerMixin
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.node_type import NodeType
 from datus.models.base import LLMBaseModel
