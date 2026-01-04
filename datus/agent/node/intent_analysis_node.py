@@ -54,6 +54,9 @@ class IntentAnalysisNode(Node):
         Returns:
             Dictionary with success status
         """
+        # Store workflow reference for access to metadata
+        self.workflow = workflow
+
         if not self.input:
             self.input = BaseInput()
 
@@ -123,7 +126,14 @@ class IntentAnalysisNode(Node):
         detector = IntentDetector()
 
         # First try heuristic detection (fast)
-        intent_result = detector.detect_intent_heuristic(task_text)
+        heuristic_result = detector.detect_sql_intent_by_keyword(task_text)
+        # Convert heuristic result to IntentResult format
+        from datus.agent.intent_detection import IntentResult
+        intent_result = IntentResult(
+            intent=heuristic_result[1].get('intent', 'unknown'),
+            confidence=float(heuristic_result[1].get('confidence', 0.5)),
+            metadata=heuristic_result[1]
+        )
 
         # If confidence is low and LLM fallback is enabled, try LLM
         use_llm_fallback = getattr(self.agent_config, 'intent_detector_llm_fallback', False) if self.agent_config else False
@@ -136,9 +146,15 @@ class IntentAnalysisNode(Node):
                     model = self.agent_config.get_model()
 
                 if model:
-                    llm_result = await detector.detect_intent_llm(task_text, model)
-                    if llm_result.confidence > intent_result.confidence:
-                        intent_result = llm_result
+                    llm_result = await detector.classify_intent_with_llm(task_text, model)
+                    # Convert LLM result to IntentResult format
+                    llm_confidence = float(llm_result[1])
+                    if llm_confidence > intent_result.confidence:
+                        intent_result = IntentResult(
+                            intent=llm_result[0],
+                            confidence=llm_confidence,
+                            metadata={'llm_fallback': True}
+                        )
                         logger.info("LLM fallback improved intent detection confidence")
             except Exception as e:
                 logger.warning(f"LLM fallback for intent detection failed: {e}")

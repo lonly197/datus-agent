@@ -342,8 +342,8 @@ class PreflightOrchestrator:
                                           execution_time: float, cache_hit: bool, execution_id: str = None) -> None:
         """Send tool call result event."""
         if self.execution_event_manager and execution_id:
-            await self.execution_event_manager.record_tool_result(
-                execution_id, tool_call_id, result, execution_time, cache_hit
+            await self.execution_event_manager.record_tool_execution(
+                execution_id, tool_call_id, tool_call_id, {}, result, None, execution_time
             )
 
     async def _send_diagnostic_info_event(self, message: str, data: Dict[str, Any], execution_id: str = None) -> None:
@@ -585,6 +585,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Returns:
             Dictionary with success status and message
         """
+        # Store workflow reference for access to metadata
+        self.workflow = workflow
+
         # Update database connection if task specifies a different database
         task_database = workflow.task.database_name
         if task_database and self.db_func_tool and task_database != self.db_func_tool.connector.database_name:
@@ -894,7 +897,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         try:
             task = workflow.task
             sql_query = self._extract_sql_from_task(task.task)
-            table_names = self._extract_table_names_from_sql(sql_query)
+            table_names = self._parse_table_names_from_sql(sql_query)
 
             result = await self._execute_preflight_tool(
                 "describe_table", sql_query, table_names,
@@ -981,7 +984,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         try:
             task = workflow.task
             sql_query = self._extract_sql_from_task(task.task)
-            table_names = self._extract_table_names_from_sql(sql_query)
+            table_names = self._parse_table_names_from_sql(sql_query)
 
             result = await self._execute_preflight_tool(
                 "get_table_ddl", sql_query, table_names,
