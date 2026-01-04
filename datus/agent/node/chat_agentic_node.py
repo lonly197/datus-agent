@@ -1619,27 +1619,34 @@ class ChatAgenticNode(GenSQLAgenticNode):
         execution_mode = create_execution_mode(scenario, self.execution_event_manager, execution_context, self)
 
         # Execute using unified execution mode
-        execution_result = None
+        execution_success = True
+        execution_error = None
         try:
-            execution_result = await execution_mode.execute()
+            await execution_mode.execute()
         except Exception as e:
             logger.error(f"Execution mode failed: {e}")
+            execution_success = False
+            execution_error = str(e)
             # Record the error in the event manager
             execution_id = getattr(execution_mode, 'execution_id', f"error_{int(time.time())}")
             await self.execution_event_manager.complete_execution(
                 execution_id,
-                error=str(e)
-            )
-            # Create error result for self.result
-            from datus.utils.error_handling import NodeErrorResult
-            execution_result = NodeErrorResult(
-                success=False,
-                error_message=str(e),
-                error_type="execution_error"
+                error=execution_error
             )
 
-        # Set self.result for update_context compatibility
-        self.result = execution_result
+        # Create result object for update_context compatibility
+        if execution_success:
+            # Create a synthetic success result for update_context
+            from datus.schemas.base import BaseResult
+            self.result = BaseResult(success=True, message="Execution completed successfully")
+        else:
+            # Create error result for self.result
+            from datus.utils.error_handling import NodeErrorResult
+            self.result = NodeErrorResult(
+                success=False,
+                error_message=execution_error,
+                error_type="execution_error"
+            )
 
         # Yield any remaining events from the event manager
         async for event in self.execution_event_manager.get_events_stream():

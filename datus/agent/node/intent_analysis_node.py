@@ -130,10 +130,26 @@ class IntentAnalysisNode(Node):
         # Convert heuristic result to IntentResult format
         from datus.agent.intent_detection import IntentResult
 
+        is_sql_intent, metadata = heuristic_result
+
+        # Derive intent from boolean flag
+        intent = "sql" if is_sql_intent else "unknown"
+
+        # Calculate confidence based on matches
+        total_matches = metadata.get("total_matches", 0)
+        has_patterns = metadata.get("has_sql_patterns", False)
+
+        # Base confidence on total matches, with bonus for pattern matches
+        base_confidence = min(total_matches * 0.2, 0.8)  # Max 0.8 from keyword matches
+        if has_patterns:
+            base_confidence += 0.2  # Bonus for pattern matches
+
+        confidence = min(base_confidence, 1.0)
+
         intent_result = IntentResult(
-            intent=heuristic_result[1].get("intent", "unknown"),
-            confidence=float(heuristic_result[1].get("confidence", 0.5)),
-            metadata=heuristic_result[1],
+            intent=intent,
+            confidence=confidence,
+            metadata=metadata,
         )
 
         # If confidence is low and LLM fallback is enabled, try LLM

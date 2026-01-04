@@ -445,41 +445,6 @@ class Node(ErrorHandlerMixin, ABC):
 
         return node
 
-    def _summarize_input(self) -> Dict[str, Any]:
-        """
-        Generate a summary of the node's input for error context.
-
-        This method can be overridden by subclasses for more specific input summarization.
-
-        Returns:
-            Dictionary containing input summary
-        """
-        summary = {}
-        if not self.input:
-            return summary
-
-        try:
-            # Handle different input types
-            if hasattr(self.input, "__dict__"):
-                for key, value in self.input.__dict__.items():
-                    # Common fields to summarize
-                    if key in ["sql_query", "task", "database_name", "input_text"]:
-                        if isinstance(value, str) and len(value) > 100:
-                            summary[key] = value[:100] + "..."
-                        else:
-                            summary[key] = str(value) if value is not None else None
-            elif isinstance(self.input, dict):
-                for key, value in self.input.items():
-                    if key in ["sql_query", "task", "database_name", "input_text"]:
-                        if isinstance(value, str) and len(value) > 100:
-                            summary[key] = value[:100] + "..."
-                        else:
-                            summary[key] = value
-        except Exception as e:
-            summary["summary_error"] = f"Failed to summarize input: {str(e)}"
-
-        return summary
-
     def _create_error_result(
         self,
         error_code: ErrorCode,
