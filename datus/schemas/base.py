@@ -51,7 +51,7 @@ class BaseInput(BaseModel):
         return cls.model_validate(data)
 
     class Config:
-        extra = "forbid"  # Prevent extra fields not defined in the model
+        extra = "ignore"  # Allow extra fields not defined in the model
 
 
 class BaseResult(BaseModel):
@@ -62,6 +62,7 @@ class BaseResult(BaseModel):
 
     success: bool = Field(..., description="Indicates whether the operation was successful")
     error: Optional[str] = Field(None, description="Error message if operation failed")
+    message: Optional[str] = Field(None, description="Result message")
 
     # Action history and execution stats for agentic nodes
     action_history: Optional[List[dict]] = Field(
@@ -97,7 +98,7 @@ class BaseResult(BaseModel):
         return cls.model_validate(data)
 
     class Config:
-        extra = "forbid"  # Prevent extra fields not defined in the model
+        extra = "ignore"  # Allow extra fields not defined in the model
 
 
 class CommonData(BaseModel):
