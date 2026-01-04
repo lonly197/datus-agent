@@ -62,6 +62,7 @@ class BaseResult(BaseModel):
 
     success: bool = Field(..., description="Indicates whether the operation was successful")
     error: Optional[str] = Field(None, description="Error message if operation failed")
+    message: Optional[str] = Field(None, description="General message or status info")
 
     # Action history and execution stats for agentic nodes
     action_history: Optional[List[dict]] = Field(
