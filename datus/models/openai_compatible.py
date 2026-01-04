@@ -1099,6 +1099,12 @@ class OpenAICompatibleModel(LLMBaseModel):
             "kimi-k2": {"context_length": 256000, "max_tokens": 8192},
             # Qwen Models
             "qwen3-coder": {"context_length": 128000, "max_tokens": 8192},
+            # GLM Models
+            "glm-4": {"context_length": 128000, "max_tokens": 4096},
+            "glm-4-plus": {"context_length": 128000, "max_tokens": 4096},
+            "glm-4-flash": {"context_length": 128000, "max_tokens": 4096},
+            "glm-4-air": {"context_length": 128000, "max_tokens": 4096},
+            "glm-4-long": {"context_length": 1024000, "max_tokens": 4096},
             # Gemini Models
             "gemini-2.5-pro": {"context_length": 1048576, "max_tokens": 65535},
             "gemini-2.5-flash": {"context_length": 1048576, "max_tokens": 8192},
