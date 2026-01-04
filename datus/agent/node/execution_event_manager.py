@@ -235,10 +235,15 @@ class ExecutionEventManager:
                 action = self._event_queue.get_nowait()
                 yield action
             except asyncio.QueueEmpty:
-                # Check if we should stop
+                # Check if we should stop - only stop if no active executions AND queue is empty
+                # We need to continue yielding events even after executions complete if there are queued events
                 if not self._active_executions:
-                    break
-                await asyncio.sleep(0.01)  # Small delay to avoid busy waiting
+                    # Do one final check to ensure queue is truly empty
+                    await asyncio.sleep(0.01)  # Small delay to let any pending puts complete
+                    if self._event_queue.empty():
+                        break
+                else:
+                    await asyncio.sleep(0.01)  # Small delay to avoid busy waiting
 
     def get_active_executions(self) -> Dict[str, ExecutionContext]:
         """Get active executions."""

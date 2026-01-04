@@ -34,7 +34,8 @@ from datus.schemas.reason_sql_node_models import ReasoningResult
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput, SchemaLinkingResult
 from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.db_manager import db_manager_instance
-from datus.utils.error_handling import NodeErrorResult, unified_error_handler
+from datus.utils.error_handling import NodeErrorResult as UtilsNodeErrorResult, unified_error_handler
+from datus.agent.error_handling import NodeErrorResult as AgentNodeErrorResult
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 
@@ -280,7 +281,7 @@ class Node(ErrorHandlerMixin, ABC):
                     self.complete(self.result)
                 else:
                     # Enhanced error handling for failed results
-                    if isinstance(self.result, NodeErrorResult):
+                    if isinstance(self.result, (UtilsNodeErrorResult, AgentNodeErrorResult)):
                         # Already a standardized error result
                         self.fail(self.result.error_message)
                     else:

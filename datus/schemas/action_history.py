@@ -58,9 +58,13 @@ class ActionHistory(BaseModel):
         messages: str,
         input_data: dict,
         output_data: dict = None,
+        output: dict = None,  # Backward compatibility
         status: ActionStatus = ActionStatus.PROCESSING,
     ) -> "ActionHistory":
         import uuid
+
+        # Use output_data if provided, otherwise use output for backward compatibility
+        final_output = output_data if output_data is not None else output
 
         return cls(
             action_id=str(uuid.uuid4()),
@@ -68,7 +72,7 @@ class ActionHistory(BaseModel):
             messages=messages,
             action_type=action_type,
             input=input_data,
-            output=output_data,
+            output=final_output,
             status=status,
         )
 
