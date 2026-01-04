@@ -178,20 +178,25 @@ class ExecutionEventManager:
         response: str = None,
         error: str = None,
         execution_time: float = None,
+        additional_data: Dict[str, Any] = None,
     ):
         """Record LLM interaction."""
         success = response is not None and error is None
+
+        input_data = {
+            "execution_id": execution_id,
+            "interaction_type": interaction_type,
+            "prompt_length": len(prompt) if prompt else 0,
+            "execution_time": execution_time,
+        }
+        if additional_data:
+            input_data["additional_data"] = additional_data
 
         action = ActionHistory.create_action(
             role=ActionRole.ASSISTANT,
             action_type=f"llm_{interaction_type}",
             messages=f"LLM {interaction_type}: {'SUCCESS' if success else 'FAILED'}",
-            input_data={
-                "execution_id": execution_id,
-                "interaction_type": interaction_type,
-                "prompt_length": len(prompt) if prompt else 0,
-                "execution_time": execution_time,
-            },
+            input_data=input_data,
             output_data={"response": response, "error": error} if response or error else None,
             status=ActionStatus.SUCCESS if success else ActionStatus.FAILED,
         )
@@ -254,12 +259,42 @@ class BaseExecutionMode(ABC):
     """
     Base execution mode class.
     基础执行模式类。
+
+    This class provides the foundation for different execution modes (Text2SQL, DataAnalysis, etc.).
+    Each execution mode must register itself with the ExecutionEventManager before performing
+    any operations to ensure proper event tracking and prevent "Execution not found" warnings.
     """
 
     def __init__(self, event_manager: ExecutionEventManager, context: ExecutionContext):
         self.event_manager = event_manager
         self.context = context
         self.execution_id = f"{context.scenario}_{int(time.time() * 1000)}"
+        self._started = False
+
+    async def start(self) -> None:
+        """
+        Register execution with ExecutionEventManager.
+
+        This method must be called before execute() to ensure the execution is properly
+        registered and can emit events. Subsequent calls are idempotent.
+
+        The registration creates an execution start event and adds the execution to the
+        active executions tracking, preventing "Execution X not found" warnings during
+        status updates and tool execution events.
+        """
+        if self._started:
+            return
+
+        await self.event_manager.start_execution(
+            execution_id=self.execution_id,
+            scenario=self.context.scenario,
+            task_data=self.context.task_data,
+            agent_config=self.context.agent_config,
+            model=self.context.model,
+            workflow_metadata=self.context.workflow_metadata,
+        )
+        self._started = True
+        logger.debug(f"Registered execution {self.execution_id} for scenario {self.context.scenario}")
 
     @abstractmethod
     async def execute(self) -> None:

@@ -174,3 +174,68 @@ class TestText2SQLExecutionMode:
         result = call_args[1]  # kwargs
         assert "sql" in result
         assert result["sql"] == "SELECT * FROM users"
+
+    @pytest.mark.asyncio
+    async def test_start_registers_execution(self, execution_mode, mock_agent_config, mock_model):
+        """Test that start() method registers execution with ExecutionEventManager."""
+        # Create mock event manager
+        mock_event_manager = MagicMock()
+        execution_mode.event_manager = mock_event_manager
+
+        # Mock start_execution to return a context
+        mock_context = ExecutionContext(
+            scenario="text2sql",
+            task_data={"task": "test task"},
+            agent_config=mock_agent_config,
+            model=mock_model,
+        )
+        mock_event_manager.start_execution = AsyncMock(return_value=mock_context)
+
+        # Call start method
+        await execution_mode.start()
+
+        # Verify start_execution was called with correct parameters
+        mock_event_manager.start_execution.assert_called_once_with(
+            execution_id=execution_mode.execution_id,
+            scenario="text2sql",
+            task_data={"task": "Show me all users from the users table"},
+            agent_config=mock_agent_config,
+            model=mock_model,
+            workflow_metadata={},
+        )
+
+        # Verify execution is marked as started
+        assert execution_mode._started is True
+
+        # Test idempotency - calling start again should not call start_execution again
+        mock_event_manager.start_execution.reset_mock()
+        await execution_mode.start()
+        mock_event_manager.start_execution.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_execution_manager_integration(self, execution_mode):
+        """Test integration with ExecutionEventManager after start()."""
+        from datus.agent.node.execution_event_manager import ExecutionEventManager
+        from datus.schemas.action_history import ActionHistoryManager
+
+        # Create real event manager and action history manager
+        action_history_manager = ActionHistoryManager()
+        event_manager = ExecutionEventManager(action_history_manager)
+
+        # Replace mock with real event manager
+        execution_mode.event_manager = event_manager
+
+        # Call start - this should register the execution
+        await execution_mode.start()
+
+        # Verify execution is registered
+        assert execution_mode.execution_id in event_manager._active_executions
+
+        # Test that update_execution_status no longer produces warnings
+        # (This would previously log "Execution X not found")
+        with patch('datus.agent.node.execution_event_manager.logger') as mock_logger:
+            await event_manager.update_execution_status(
+                execution_mode.execution_id, "executing", "test step"
+            )
+            # Should not call warning about execution not found
+            mock_logger.warning.assert_not_called()

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
@@ -43,6 +44,56 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from datus.agent.workflow import Workflow
+
+
+def _run_async_stream_to_result(node: "Node") -> BaseResult:
+    """
+    Run node.execute_stream() to completion and materialize result.
+
+    This adaptor allows synchronous runner code (Node.run()) to execute nodes
+    that only implement the async streaming interface (execute_stream).
+
+    The adaptor handles event loop management to avoid conflicts with existing
+    running loops (e.g., pytest-asyncio) by running the async operation in a
+    separate thread with its own event loop.
+
+    ActionHistory events yielded by execute_stream are forwarded to the node's
+    action_history_manager for proper event tracking.
+    """
+    import concurrent.futures
+    import threading
+
+    def _run_async_in_thread():
+        """Run the async operation in a separate thread to avoid event loop conflicts."""
+        async def _consume_stream():
+            """Consume the async generator and collect ActionHistory events."""
+            async for action in node.execute_stream(node.action_history_manager if hasattr(node, 'action_history_manager') else None):
+                try:
+                    # Forward ActionHistory to action_history_manager if available
+                    if hasattr(node, 'action_history_manager') and node.action_history_manager:
+                        node.action_history_manager.add_action(action)
+                except Exception as e:
+                    logger.debug(f"Failed to record action in adaptor: {e}")
+                    # Continue processing - don't fail the whole execution
+            return True
+
+        # Use asyncio.run for clean event loop management
+        return asyncio.run(_consume_stream())
+
+    try:
+        # Run async operation in a thread to avoid conflicts with pytest's event loop
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run_async_in_thread)
+            success = future.result(timeout=60)  # 60 second timeout
+
+        # Return success result
+        from datus.schemas.base import BaseResult
+        return BaseResult(success=True)
+
+    except Exception as e:
+        # Convert async exceptions to error result for consistent error handling
+        from datus.schemas.base import BaseResult
+        return BaseResult(success=False, error=str(e))
 
 
 class Node(ErrorHandlerMixin, ABC):
@@ -268,7 +319,18 @@ class Node(ErrorHandlerMixin, ABC):
             self.start()
 
             if self.type in NodeType.ACTION_TYPES or self.type in NodeType.CONTROL_TYPES:
-                self.execute()
+                # Check if node prefers async streaming over sync execute
+                # This allows sync runner (Node.run) to execute async streaming nodes like ChatAgenticNode
+                if hasattr(self, 'execute_stream') and callable(getattr(self, 'execute_stream')):
+                    # Try to call execute, if it throws NotImplementedError, use async stream adaptor
+                    try:
+                        self.execute()
+                    except NotImplementedError:
+                        # execute not implemented, use async stream adaptor to run execute_stream
+                        self.result = _run_async_stream_to_result(self)
+                else:
+                    # No execute_stream available, use regular execute
+                    self.execute()
 
                 # REFLECT type always completes successfully, others check result
                 logger.debug(

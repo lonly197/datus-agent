@@ -1618,6 +1618,10 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
         execution_mode = create_execution_mode(scenario, self.execution_event_manager, execution_context, self)
 
+        # Register execution with event manager
+        if hasattr(execution_mode, 'start') and callable(getattr(execution_mode, 'start')):
+            await execution_mode.start()
+
         # Execute using unified execution mode
         execution_success = True
         execution_error = None
@@ -1641,7 +1645,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             self.result = BaseResult(success=True, message="Execution completed successfully")
         else:
             # Create error result for self.result
-            from datus.utils.error_handling import NodeErrorResult
+            from datus.agent.error_handling import NodeErrorResult
             self.result = NodeErrorResult(
                 success=False,
                 error_message=execution_error,
