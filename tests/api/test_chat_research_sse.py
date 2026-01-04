@@ -503,11 +503,7 @@ class TestChatResearchPromptParameters:
 
         mock_stream.return_value = mock_enhanced_stream()
 
-        request_data = {
-            "namespace": "test",
-            "task": "审查以下SQL：SELECT * FROM test_table WHERE id = 1",
-            "plan_mode": True
-        }
+        request_data = {"namespace": "test", "task": "审查以下SQL：SELECT * FROM test_table WHERE id = 1", "plan_mode": True}
 
         response = test_client.post(
             "/workflows/chat_research",
@@ -519,14 +515,14 @@ class TestChatResearchPromptParameters:
 
         # Parse SSE events
         response_text = response.text
-        events = [line for line in response_text.split('\n') if line.startswith('data: ')]
+        events = [line for line in response_text.split("\n") if line.startswith("data: ")]
 
         # Verify enhanced preflight events are present
         event_types = []
         for event in events:
             try:
                 event_data = json.loads(event[6:])  # Remove 'data: ' prefix
-                event_types.append(event_data.get('event'))
+                event_types.append(event_data.get("event"))
             except json.JSONDecodeError:
                 continue
 
@@ -558,7 +554,7 @@ class TestChatResearchPromptParameters:
         request_data = {
             "namespace": "test",
             "task": "审查SQL：SELECT * FROM invalid_table WHERE id = 1",
-            "plan_mode": True
+            "plan_mode": True,
         }
 
         response = test_client.post(
@@ -571,16 +567,16 @@ class TestChatResearchPromptParameters:
 
         # Verify error handling events
         response_text = response.text
-        events = [line for line in response_text.split('\n') if line.startswith('data: ')]
+        events = [line for line in response_text.split("\n") if line.startswith("data: ")]
 
         error_events = []
         for event in events:
             try:
                 event_data = json.loads(event[6:])
-                if event_data.get('event') == 'error':
+                if event_data.get("event") == "error":
                     error_events.append(event_data)
             except json.JSONDecodeError:
                 continue
 
         assert len(error_events) > 0
-        assert "not found" in error_events[0].get('error', '').lower()
+        assert "not found" in error_events[0].get("error", "").lower()

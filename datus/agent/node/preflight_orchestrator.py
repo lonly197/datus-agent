@@ -14,9 +14,9 @@ import uuid
 from typing import Any, AsyncGenerator, Dict, List
 
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
-from datus.tools.func_tool.database import db_function_tool_instance
-from datus.tools.func_tool.context_search import ContextSearchTools
 from datus.tools.date_tools.date_parser import DateParserTool
+from datus.tools.func_tool.context_search import ContextSearchTools
+from datus.tools.func_tool.database import db_function_tool_instance
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -25,8 +25,15 @@ logger = get_logger(__name__)
 class PreflightToolResult:
     """Result of a preflight tool execution."""
 
-    def __init__(self, tool_name: str, success: bool, result: Any = None,
-                 error: str = None, execution_time: float = 0.0, cache_hit: bool = False):
+    def __init__(
+        self,
+        tool_name: str,
+        success: bool,
+        result: Any = None,
+        error: str = None,
+        execution_time: float = 0.0,
+        cache_hit: bool = False,
+    ):
         self.tool_name = tool_name
         self.success = success
         self.result = result
@@ -42,7 +49,7 @@ class PreflightToolResult:
             "result": self.result,
             "error": self.error,
             "execution_time": self.execution_time,
-            "cache_hit": self.cache_hit
+            "cache_hit": self.cache_hit,
         }
 
 
@@ -71,16 +78,13 @@ class PreflightOrchestrator:
     def _get_db_func_tool(self):
         """Lazy initialization of DB function tool."""
         if self.db_func_tool is None:
-            self.db_func_tool = db_function_tool_instance(
-                self.agent_config,
-                self.agent_config.current_database
-            )
+            self.db_func_tool = db_function_tool_instance(self.agent_config, self.agent_config.current_database)
         return self.db_func_tool
 
     def _get_context_search_tools(self):
         """Lazy initialization of context search tools."""
         if self.context_search_tools is None:
-            self.context_search_tools = ContextSearchTools()
+            self.context_search_tools = ContextSearchTools(self.agent_config)
         return self.context_search_tools
 
     def _get_date_parsing_tools(self):
@@ -94,7 +98,7 @@ class PreflightOrchestrator:
         workflow,
         action_history_manager: ActionHistoryManager,
         execution_id: str = None,
-        required_tools: List[str] = None
+        required_tools: List[str] = None,
     ) -> AsyncGenerator[ActionHistory, None]:
         """
         Run preflight tools and yield ActionHistory events.
@@ -127,13 +131,16 @@ class PreflightOrchestrator:
 
             # Send tool call start event
             await self._send_tool_call_event(
-                tool_name, tool_call_id, {
+                tool_name,
+                tool_call_id,
+                {
                     "sql_query": sql_query,
                     "table_names": table_names,
                     "catalog": catalog,
                     "database": database,
-                    "schema": schema
-                }, execution_id
+                    "schema": schema,
+                },
+                execution_id,
             )
 
             # Create and yield action for tool start
@@ -163,11 +170,7 @@ class PreflightOrchestrator:
             try:
                 # Check cache first
                 if self.plan_hooks and self.plan_hooks.enable_query_caching:
-                    cache_key_params = {
-                        "catalog": catalog,
-                        "database": database,
-                        "schema": schema
-                    }
+                    cache_key_params = {"catalog": catalog, "database": database, "schema": schema}
 
                     # Add tool-specific parameters
                     if tool_name == "search_table":
@@ -195,11 +198,7 @@ class PreflightOrchestrator:
 
                     # Cache successful results
                     if result and result.get("success") and self.plan_hooks and self.plan_hooks.enable_query_caching:
-                        cache_key_params = {
-                            "catalog": catalog,
-                            "database": database,
-                            "schema": schema
-                        }
+                        cache_key_params = {"catalog": catalog, "database": database, "schema": schema}
                         if tool_name == "search_table":
                             cache_key_params["query"] = workflow.task.task[:200]
                         elif tool_name == "describe_table" and table_names:
@@ -209,8 +208,7 @@ class PreflightOrchestrator:
                         elif tool_name == "parse_temporal_expressions":
                             cache_key_params["text"] = workflow.task.task
 
-                        self.plan_hooks.query_cache.set(
-                            tool_name, result, **cache_key_params)
+                        self.plan_hooks.query_cache.set(tool_name, result, **cache_key_params)
 
             except Exception as e:
                 logger.warning(f"Preflight tool {tool_name} failed: {e}")
@@ -226,7 +224,7 @@ class PreflightOrchestrator:
                 result=result,
                 error=error,
                 execution_time=execution_time,
-                cache_hit=cache_hit
+                cache_hit=cache_hit,
             )
             preflight_results.append(tool_result)
 
@@ -236,7 +234,7 @@ class PreflightOrchestrator:
                 result=tool_result.to_dict(),
                 execution_time=execution_time,
                 cache_hit=cache_hit,
-                execution_id=execution_id
+                execution_id=execution_id,
             )
 
             # Create and yield result action
@@ -252,7 +250,7 @@ class PreflightOrchestrator:
             yield result_action
 
             # Update monitoring
-            if self.plan_hooks and hasattr(self.plan_hooks, 'monitor'):
+            if self.plan_hooks and hasattr(self.plan_hooks, "monitor"):
                 self.plan_hooks.monitor.record_preflight_tool_call(
                     execution_id, tool_name, tool_result.success, cache_hit, execution_time, error
                 )
@@ -263,8 +261,7 @@ class PreflightOrchestrator:
         logger.info(f"Preflight execution completed for {len(preflight_results)} tools")
 
     async def _execute_preflight_tool(
-        self, tool_name: str, sql_query: str, table_names: List[str],
-        catalog: str, database: str, schema: str
+        self, tool_name: str, sql_query: str, table_names: List[str], catalog: str, database: str, schema: str
     ) -> Dict[str, Any]:
         """Execute a specific preflight tool."""
         try:
@@ -287,17 +284,11 @@ class PreflightOrchestrator:
         db_tool = self._get_db_func_tool()
         try:
             # Use semantic search to find relevant tables
-            result = db_tool.search_table(
-                query=query,
-                catalog=catalog,
-                database=database,
-                schema_name=schema,
-                limit=10
-            )
+            result = db_tool.search_table(query=query, catalog=catalog, database=database, schema_name=schema, limit=10)
             return {
                 "success": True,
-                "tables": result.result if hasattr(result, 'result') else [],
-                "count": len(result.result) if hasattr(result, 'result') else 0
+                "tables": result.result if hasattr(result, "result") else [],
+                "count": len(result.result) if hasattr(result, "result") else 0,
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -315,40 +306,26 @@ class PreflightOrchestrator:
         for table_name in table_names[:3]:  # Limit to first 3 tables
             try:
                 result = db_tool.describe_table(
-                    table_name=table_name,
-                    catalog=catalog,
-                    database=database,
-                    schema_name=schema
+                    table_name=table_name, catalog=catalog, database=database, schema_name=schema
                 )
-                if hasattr(result, 'result') and result.result:
-                    results.append({
-                        "table_name": table_name,
-                        "schema": result.result
-                    })
+                if hasattr(result, "result") and result.result:
+                    results.append({"table_name": table_name, "schema": result.result})
             except Exception as e:
                 logger.warning(f"Failed to describe table {table_name}: {e}")
 
-        return {
-            "success": len(results) > 0,
-            "tables_described": results,
-            "count": len(results)
-        }
+        return {"success": len(results) > 0, "tables_described": results, "count": len(results)}
 
     async def _execute_search_reference_sql(self, query: str) -> Dict[str, Any]:
         """Execute reference SQL search."""
         search_tools = self._get_context_search_tools()
         try:
             result = search_tools.search_reference_sql(
-                query_text=query,
-                domain="general",
-                layer1="queries",
-                layer2="examples",
-                top_n=5
+                query_text=query, domain="general", layer1="queries", layer2="examples", top_n=5
             )
             return {
                 "success": True,
-                "reference_sqls": result.result if hasattr(result, 'result') else [],
-                "count": len(result.result) if hasattr(result, 'result') else 0
+                "reference_sqls": result.result if hasattr(result, "result") else [],
+                "count": len(result.result) if hasattr(result, "result") else 0,
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -360,17 +337,17 @@ class PreflightOrchestrator:
             result = date_tools.extract_and_parse_dates(text)
             return {
                 "success": True,
-                "temporal_expressions": result.result if hasattr(result, 'result') else [],
-                "count": len(result.result) if hasattr(result, 'result') else 0
+                "temporal_expressions": result.result if hasattr(result, "result") else [],
+                "count": len(result.result) if hasattr(result, "result") else 0,
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def _extract_sql_from_workflow(self, workflow) -> str:
         """Extract SQL query from workflow task."""
-        if hasattr(workflow, 'task') and workflow.task:
-            return getattr(workflow.task, 'task', '')
-        return ''
+        if hasattr(workflow, "task") and workflow.task:
+            return getattr(workflow.task, "task", "")
+        return ""
 
     def _extract_table_names_from_workflow(self, workflow) -> List[str]:
         """Extract table names from workflow (placeholder implementation)."""
@@ -380,11 +357,11 @@ class PreflightOrchestrator:
 
     def _inject_preflight_results_into_context(self, workflow, results: List[PreflightToolResult]):
         """Inject preflight results into workflow context for prompt access."""
-        if not hasattr(workflow, 'context'):
-            workflow.context = type('Context', (), {})()
+        if not hasattr(workflow, "context"):
+            workflow.context = type("Context", (), {})()
 
         # Initialize preflight_results if not exists
-        if not hasattr(workflow.context, 'preflight_results'):
+        if not hasattr(workflow.context, "preflight_results"):
             workflow.context.preflight_results = []
 
         # Convert results to dict format for template access
@@ -433,9 +410,14 @@ class PreflightOrchestrator:
         # This would integrate with execution_event_manager if available
         logger.debug(f"Tool call started: {tool_name} ({tool_call_id})")
 
-    async def _send_tool_call_result_event(self, tool_call_id: str, result: Dict[str, Any],
-                                           execution_time: float, cache_hit: bool,
-                                           execution_id: str = None):
+    async def _send_tool_call_result_event(
+        self,
+        tool_call_id: str,
+        result: Dict[str, Any],
+        execution_time: float,
+        cache_hit: bool,
+        execution_id: str = None,
+    ):
         """Send tool call result event."""
         # This would integrate with execution_event_manager if available
         logger.debug(f"Tool call completed: {tool_call_id} (cache_hit: {cache_hit}, time: {execution_time:.2f}s)")

@@ -50,10 +50,7 @@ class PreflightOrchestrator:
         self.execution_event_manager = getattr(chat_node, "execution_event_manager", None)
 
     async def execute_enhanced_preflight_tools(
-        self,
-        workflow,
-        action_history_manager: ActionHistoryManager,
-        execution_id: str = None
+        self, workflow, action_history_manager: ActionHistoryManager, execution_id: str = None
     ) -> AsyncGenerator[ActionHistory, None]:
         """
         Execute enhanced preflight tools with proper orchestration.
@@ -96,8 +93,15 @@ class PreflightOrchestrator:
         # Execute tools
         for tool_name in tools_to_execute:
             async for action in self._execute_single_tool(
-                tool_name, sql_query, table_names, catalog, database, schema,
-                workflow, action_history_manager, execution_id
+                tool_name,
+                sql_query,
+                table_names,
+                catalog,
+                database,
+                schema,
+                workflow,
+                action_history_manager,
+                execution_id,
             ):
                 yield action
 
@@ -111,7 +115,7 @@ class PreflightOrchestrator:
         schema: str,
         workflow,
         action_history_manager: ActionHistoryManager,
-        execution_id: str = None
+        execution_id: str = None,
     ) -> AsyncGenerator[ActionHistory, None]:
         """Execute a single preflight tool with full orchestration."""
         start_time = time.time()
@@ -119,13 +123,18 @@ class PreflightOrchestrator:
 
         try:
             # Send tool call start event
-            await self._send_tool_call_event(tool_name, tool_call_id, {
-                "sql_query": sql_query,
-                "table_names": table_names,
-                "catalog": catalog,
-                "database": database,
-                "schema": schema
-            }, execution_id)
+            await self._send_tool_call_event(
+                tool_name,
+                tool_call_id,
+                {
+                    "sql_query": sql_query,
+                    "table_names": table_names,
+                    "catalog": catalog,
+                    "database": database,
+                    "schema": schema,
+                },
+                execution_id,
+            )
 
             # Create and yield action for tool start
             tool_action = ActionHistory.create_action(
@@ -148,11 +157,7 @@ class PreflightOrchestrator:
             # Check enhanced cache first
             cache_hit = False
             if self.plan_hooks and self.plan_hooks.enable_query_caching:
-                cache_key_params = {
-                    "catalog": catalog,
-                    "database": database,
-                    "schema": schema
-                }
+                cache_key_params = {"catalog": catalog, "database": database, "schema": schema}
 
                 if tool_name == "analyze_query_plan":
                     cache_key_params["sql_query"] = sql_query
@@ -166,7 +171,7 @@ class PreflightOrchestrator:
                     result = cached_result
                 else:
                     # Check if batch processing is available for this tool
-                    batch_processor = getattr(self.plan_hooks, 'batch_processor', None)
+                    batch_processor = getattr(self.plan_hooks, "batch_processor", None)
                     if batch_processor and tool_name in ["check_table_conflicts", "validate_partitioning"]:
                         # Add to batch for later processing
                         batch_size = batch_processor.get_batch_size(tool_name)
@@ -180,7 +185,9 @@ class PreflightOrchestrator:
                                     if batch_result.get("success", False):
                                         batch_cache_params = cache_key_params.copy()
                                         batch_cache_params["table_name"] = batch_result.get("table_name", "")
-                                        self.plan_hooks.query_cache.set_enhanced(tool_name, batch_result, **batch_cache_params)
+                                        self.plan_hooks.query_cache.set_enhanced(
+                                            tool_name, batch_result, **batch_cache_params
+                                        )
 
                     # Execute the tool
                     result = await self._call_enhanced_tool(
@@ -199,7 +206,7 @@ class PreflightOrchestrator:
                 result=result,
                 execution_time=execution_time,
                 cache_hit=cache_hit,
-                execution_id=execution_id
+                execution_id=execution_id,
             )
 
             # Update action with results
@@ -229,7 +236,7 @@ class PreflightOrchestrator:
                     result.get("success", False),
                     cache_hit,
                     execution_time,
-                    result.get("error", "") if not result.get("success", False) else ""
+                    result.get("error", "") if not result.get("success", False) else "",
                 )
 
             yield tool_action
@@ -240,9 +247,7 @@ class PreflightOrchestrator:
             # Send error event
             error_desc = str(e)
             await self._send_diagnostic_info_event(
-                f"Tool execution failed: {tool_name}",
-                {"error": error_desc, "tool_name": tool_name},
-                execution_id
+                f"Tool execution failed: {tool_name}", {"error": error_desc, "tool_name": tool_name}, execution_id
             )
 
             # Create error action
@@ -257,8 +262,9 @@ class PreflightOrchestrator:
             action_history_manager.add_action(error_action)
             yield error_action
 
-    async def _call_enhanced_tool(self, tool_name: str, sql_query: str, table_names: List[str],
-                                  catalog: str, database: str, schema: str) -> Dict[str, Any]:
+    async def _call_enhanced_tool(
+        self, tool_name: str, sql_query: str, table_names: List[str], catalog: str, database: str, schema: str
+    ) -> Dict[str, Any]:
         """Call the appropriate enhanced preflight tool."""
         if tool_name == "analyze_query_plan":
             return self.db_func_tool.analyze_query_plan(sql_query, catalog, database, schema)
@@ -281,7 +287,7 @@ class PreflightOrchestrator:
 
     def _inject_tool_result_into_context(self, workflow, tool_name: str, result: Dict[str, Any]) -> None:
         """Inject tool results into workflow context for LLM consumption."""
-        if not hasattr(workflow, 'context') or not workflow.context:
+        if not hasattr(workflow, "context") or not workflow.context:
             return
 
         try:
@@ -293,9 +299,9 @@ class PreflightOrchestrator:
                     "estimated_cost": result.get("estimated_cost", 0),
                     "join_analysis": result.get("join_analysis", {}),
                     "index_usage": result.get("index_usage", {}),
-                    "warnings": result.get("warnings", [])
+                    "warnings": result.get("warnings", []),
                 }
-                workflow.context.preflight_results = getattr(workflow.context, 'preflight_results', {})
+                workflow.context.preflight_results = getattr(workflow.context, "preflight_results", {})
                 workflow.context.preflight_results["query_plan_analysis"] = analysis_data
 
             elif tool_name == "check_table_conflicts" and result.get("success"):
@@ -304,9 +310,9 @@ class PreflightOrchestrator:
                     "exists_similar": result.get("exists_similar", False),
                     "matches": result.get("matches", []),
                     "duplicate_build_risk": result.get("duplicate_build_risk", "low"),
-                    "layering_violations": result.get("layering_violations", [])
+                    "layering_violations": result.get("layering_violations", []),
                 }
-                workflow.context.preflight_results = getattr(workflow.context, 'preflight_results', {})
+                workflow.context.preflight_results = getattr(workflow.context, "preflight_results", {})
                 workflow.context.preflight_results["table_conflicts"] = conflict_data
 
             elif tool_name == "validate_partitioning" and result.get("success"):
@@ -316,30 +322,38 @@ class PreflightOrchestrator:
                     "partition_info": result.get("partition_info", {}),
                     "issues": result.get("issues", []),
                     "recommended_partition": result.get("recommended_partition", {}),
-                    "performance_impact": result.get("performance_impact", {})
+                    "performance_impact": result.get("performance_impact", {}),
                 }
-                workflow.context.preflight_results = getattr(workflow.context, 'preflight_results', {})
+                workflow.context.preflight_results = getattr(workflow.context, "preflight_results", {})
                 workflow.context.preflight_results["partitioning_validation"] = partitioning_data
 
         except Exception as e:
             logger.warning(f"Failed to inject tool result into context for {tool_name}: {e}")
 
-    async def _send_preflight_plan_update(self, workflow, tools_to_execute: List[str], execution_id: str = None) -> None:
+    async def _send_preflight_plan_update(
+        self, workflow, tools_to_execute: List[str], execution_id: str = None
+    ) -> None:
         """Send preflight plan update event."""
         if self.execution_event_manager and execution_id:
             await self.execution_event_manager.update_execution_status(
                 execution_id, "planning", f"Executing enhanced preflight tools: {tools_to_execute}"
             )
 
-    async def _send_tool_call_event(self, tool_name: str, tool_call_id: str, input_data: Dict[str, Any], execution_id: str = None) -> None:
+    async def _send_tool_call_event(
+        self, tool_name: str, tool_call_id: str, input_data: Dict[str, Any], execution_id: str = None
+    ) -> None:
         """Send tool call start event."""
         if self.execution_event_manager and execution_id:
-            await self.execution_event_manager.record_tool_execution(
-                execution_id, tool_name, tool_call_id, input_data
-            )
+            await self.execution_event_manager.record_tool_execution(execution_id, tool_name, tool_call_id, input_data)
 
-    async def _send_tool_call_result_event(self, tool_call_id: str, result: Dict[str, Any],
-                                          execution_time: float, cache_hit: bool, execution_id: str = None) -> None:
+    async def _send_tool_call_result_event(
+        self,
+        tool_call_id: str,
+        result: Dict[str, Any],
+        execution_time: float,
+        cache_hit: bool,
+        execution_id: str = None,
+    ) -> None:
         """Send tool call result event."""
         if self.execution_event_manager and execution_id:
             await self.execution_event_manager.record_tool_execution(
@@ -370,8 +384,9 @@ class PreflightOrchestrator:
         else:
             return "unknown_error"
 
-    async def _dispatch_error_event(self, error_type: str, sql_query: str, error_desc: str,
-                                   tool_name: str, table_names: List[str]) -> None:
+    async def _dispatch_error_event(
+        self, error_type: str, sql_query: str, error_desc: str, tool_name: str, table_names: List[str]
+    ) -> None:
         """Dispatch error events based on error type."""
         try:
             if error_type == "permission_error":
@@ -390,32 +405,37 @@ class PreflightOrchestrator:
         """Send permission error event."""
         if self.execution_event_manager:
             await self.execution_event_manager.record_llm_interaction(
-                "", "permission_error", f"Database permission error: {error_desc}",
-                additional_data={"sql_query": sql_query}
+                "",
+                "permission_error",
+                f"Database permission error: {error_desc}",
+                additional_data={"sql_query": sql_query},
             )
 
     async def _send_timeout_error_event(self, sql_query: str, error_desc: str) -> None:
         """Send timeout error event."""
         if self.execution_event_manager:
             await self.execution_event_manager.record_llm_interaction(
-                "", "timeout_error", f"Query timeout error: {error_desc}",
-                additional_data={"sql_query": sql_query}
+                "", "timeout_error", f"Query timeout error: {error_desc}", additional_data={"sql_query": sql_query}
             )
 
     async def _send_table_not_found_error_event(self, table_name: str, error_desc: str) -> None:
         """Send table not found error event."""
         if self.execution_event_manager:
             await self.execution_event_manager.record_llm_interaction(
-                "", "table_not_found", f"Table not found: {table_name} - {error_desc}",
-                additional_data={"table_name": table_name}
+                "",
+                "table_not_found",
+                f"Table not found: {table_name} - {error_desc}",
+                additional_data={"table_name": table_name},
             )
 
     async def _send_db_connection_error_event(self, sql_query: str, error_desc: str) -> None:
         """Send database connection error event."""
         if self.execution_event_manager:
             await self.execution_event_manager.record_llm_interaction(
-                "", "connection_error", f"Database connection error: {error_desc}",
-                additional_data={"sql_query": sql_query}
+                "",
+                "connection_error",
+                f"Database connection error: {error_desc}",
+                additional_data={"sql_query": sql_query},
             )
 
     async def _process_tool_batch(self, tool_name: str, batch: List[Tuple], workflow) -> List[Dict[str, Any]]:
@@ -859,7 +879,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         if tool_name == "describe_table":
                             result = await self._execute_describe_table_tool(workflow, action_history_manager)
                         elif tool_name == "search_external_knowledge":
-                            result = await self._execute_search_external_knowledge_tool(workflow, action_history_manager)
+                            result = await self._execute_search_external_knowledge_tool(
+                                workflow, action_history_manager
+                            )
                         elif tool_name == "read_query":
                             result = await self._execute_read_query_tool(workflow, action_history_manager)
                         elif tool_name == "get_table_ddl":
@@ -900,8 +922,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             table_names = self._parse_table_names_from_sql(sql_query)
 
             result = await self._execute_preflight_tool(
-                "describe_table", sql_query, table_names,
-                task.catalog_name, task.database_name, task.schema_name
+                "describe_table", sql_query, table_names, task.catalog_name, task.database_name, task.schema_name
             )
 
             if result.get("success"):
@@ -911,7 +932,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     action_type="tool_call",
                     input=f"Describe table structure for {table_names[0] if table_names else 'unknown table'}",
                     output=result,
-                    tool_name="describe_table"
+                    tool_name="describe_table",
                 )
                 if action_history_manager:
                     action_history_manager.add_action(action)
@@ -928,8 +949,12 @@ class ChatAgenticNode(GenSQLAgenticNode):
             task = workflow.task
 
             result = await self._execute_preflight_tool(
-                "search_external_knowledge", "", [],  # No SQL/table needed for knowledge search
-                task.catalog_name, task.database_name, task.schema_name
+                "search_external_knowledge",
+                "",
+                [],  # No SQL/table needed for knowledge search
+                task.catalog_name,
+                task.database_name,
+                task.schema_name,
             )
 
             if result.get("success"):
@@ -939,7 +964,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     action_type="tool_call",
                     input="Search StarRocks SQL review rules and best practices",
                     output=result,
-                    tool_name="search_external_knowledge"
+                    tool_name="search_external_knowledge",
                 )
                 if action_history_manager:
                     action_history_manager.add_action(action)
@@ -957,8 +982,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             sql_query = self._extract_sql_from_task(task.task)
 
             result = await self._execute_preflight_tool(
-                "read_query", sql_query, [],
-                task.catalog_name, task.database_name, task.schema_name
+                "read_query", sql_query, [], task.catalog_name, task.database_name, task.schema_name
             )
 
             if result.get("success"):
@@ -968,7 +992,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     action_type="tool_call",
                     input=f"Execute SQL query for validation: {sql_query[:100]}...",
                     output=result,
-                    tool_name="read_query"
+                    tool_name="read_query",
                 )
                 if action_history_manager:
                     action_history_manager.add_action(action)
@@ -987,8 +1011,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             table_names = self._parse_table_names_from_sql(sql_query)
 
             result = await self._execute_preflight_tool(
-                "get_table_ddl", sql_query, table_names,
-                task.catalog_name, task.database_name, task.schema_name
+                "get_table_ddl", sql_query, table_names, task.catalog_name, task.database_name, task.schema_name
             )
 
             if result.get("success"):
@@ -998,7 +1021,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     action_type="tool_call",
                     input=f"Get DDL for table {table_names[0] if table_names else 'unknown table'}",
                     output=result,
-                    tool_name="get_table_ddl"
+                    tool_name="get_table_ddl",
                 )
                 if action_history_manager:
                     action_history_manager.add_action(action)
@@ -1008,6 +1031,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             logger.error(f"Error in _execute_get_table_ddl_tool: {e}")
 
         return None
+
     def _extract_sql_from_task(self, task_text: str) -> str:
         """Extract SQL query from task text with improved logic."""
         import re
@@ -1532,15 +1556,15 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
                     sql_review_orchestrator = SQLReviewPreflightOrchestrator(
                         agent_config=self.agent_config,
-                        plan_hooks=getattr(self, 'plan_hooks', None),
-                        execution_event_manager=getattr(self, 'execution_event_manager', None)
+                        plan_hooks=getattr(self, "plan_hooks", None),
+                        execution_event_manager=getattr(self, "execution_event_manager", None),
                     )
 
                     # Execute all 7 preflight tools with enhanced orchestration
                     async for preflight_action in sql_review_orchestrator.run_preflight_tools(
                         workflow=self.workflow,
                         action_history_manager=action_history_manager,
-                        execution_id=f"sql_review_{int(time.time() * 1000)}"
+                        execution_id=f"sql_review_{int(time.time() * 1000)}",
                     ):
                         yield preflight_action
 
@@ -1557,8 +1581,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     from datus.agent.node.preflight_orchestrator import PreflightOrchestrator
 
                     preflight_orchestrator = PreflightOrchestrator(
-                        agent_config=self.agent_config,
-                        plan_hooks=getattr(self, 'plan_hooks', None)
+                        agent_config=self.agent_config, plan_hooks=getattr(self, "plan_hooks", None)
                     )
 
                     # Run preflight tools for Text2SQL
@@ -1566,7 +1589,12 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         workflow=self.workflow,
                         action_history_manager=action_history_manager,
                         execution_id=f"text2sql_preflight_{int(time.time() * 1000)}",
-                        required_tools=["search_table", "describe_table", "search_reference_sql", "parse_temporal_expressions"]
+                        required_tools=[
+                            "search_table",
+                            "describe_table",
+                            "search_reference_sql",
+                            "parse_temporal_expressions",
+                        ],
                     ):
                         yield preflight_action
 
@@ -1650,19 +1678,17 @@ class ExecutionStatus:
             "success": success,
             "timestamp": time.time(),
             "execution_time": execution_time,
-            "error_type": error_type
+            "error_type": error_type,
         }
         self.tools_executed.append(record)
 
     def add_error(self, error_type: str, error_msg: str):
         """Add error record."""
-        self.errors_encountered.append({
-            "type": error_type,
-            "message": error_msg,
-            "timestamp": time.time()
-        })
+        self.errors_encountered.append({"type": error_type, "message": error_msg, "timestamp": time.time()})
 
-    async def _dispatch_error_event(self, error_type: str, sql_query: str, error_desc: str, tool_name: str, table_names: list):
+    async def _dispatch_error_event(
+        self, error_type: str, sql_query: str, error_desc: str, tool_name: str, table_names: list
+    ):
         """根据错误类型分发相应的事件 (v2.4)"""
         try:
             if error_type == "permission_error":
@@ -1682,40 +1708,28 @@ class ExecutionStatus:
 
     async def _send_permission_error_event(self, sql_query: str, error_desc: str):
         """Send permission error event."""
-        if hasattr(self, 'execution_event_manager') and self.execution_event_manager:
+        if hasattr(self, "execution_event_manager") and self.execution_event_manager:
             await self.execution_event_manager.send_error_event(
-                error_type="permission_error",
-                error_message=error_desc,
-                sql_query=sql_query,
-                severity="high"
+                error_type="permission_error", error_message=error_desc, sql_query=sql_query, severity="high"
             )
 
     async def _send_timeout_error_event(self, sql_query: str, error_desc: str):
         """Send timeout error event."""
-        if hasattr(self, 'execution_event_manager') and self.execution_event_manager:
+        if hasattr(self, "execution_event_manager") and self.execution_event_manager:
             await self.execution_event_manager.send_error_event(
-                error_type="timeout_error",
-                error_message=error_desc,
-                sql_query=sql_query,
-                severity="medium"
+                error_type="timeout_error", error_message=error_desc, sql_query=sql_query, severity="medium"
             )
 
     async def _send_table_not_found_error_event(self, table_name: str, error_desc: str):
         """Send table not found error event."""
-        if hasattr(self, 'execution_event_manager') and self.execution_event_manager:
+        if hasattr(self, "execution_event_manager") and self.execution_event_manager:
             await self.execution_event_manager.send_error_event(
-                error_type="table_not_found",
-                error_message=error_desc,
-                table_name=table_name,
-                severity="medium"
+                error_type="table_not_found", error_message=error_desc, table_name=table_name, severity="medium"
             )
 
     async def _send_db_connection_error_event(self, sql_query: str, error_desc: str):
         """Send database connection error event."""
-        if hasattr(self, 'execution_event_manager') and self.execution_event_manager:
+        if hasattr(self, "execution_event_manager") and self.execution_event_manager:
             await self.execution_event_manager.send_error_event(
-                error_type="connection_error",
-                error_message=error_desc,
-                sql_query=sql_query,
-                severity="high"
+                error_type="connection_error", error_message=error_desc, sql_query=sql_query, severity="high"
             )

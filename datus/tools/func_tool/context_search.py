@@ -75,7 +75,7 @@ class ContextSearchTools:
 
         if self.has_ext_knowledge:
             if not self.has_metrics and not self.has_reference_sql:
-                tools.append(trans_to_function_tool(self.list_domain_layers_tree))
+                tools.append(trans_to_function_tool(self.list_subject_tree))
             tools.append(trans_to_function_tool(self.search_external_knowledge))
         return tools
 
@@ -273,9 +273,9 @@ class ContextSearchTools:
 
         Args:
             query_text: Natural language description of the knowledge needed (e.g., "SQL review rules", "partitioning best practices").
-            domain: Business domain filter derived from list_domain_layers_tree.
-            layer1: First-layer subject filter derived from list_domain_layers_tree.
-            layer2: Second-layer subject filter derived from list_domain_layers_tree.
+            domain: Business domain filter derived from list_subject_tree.
+            layer1: First-layer subject filter derived from list_subject_tree.
+            layer2: Second-layer subject filter derived from list_subject_tree.
             top_n: Maximum number of results to return (default 5).
 
         Returns:

@@ -1220,7 +1220,7 @@ class QueryCache:
                 "sql_hash": hashlib.md5(normalized_sql.encode()).hexdigest()[:16],
                 "catalog": kwargs.get("catalog", ""),
                 "database": kwargs.get("database", ""),
-                "schema": kwargs.get("schema", "")
+                "schema": kwargs.get("schema", ""),
             }
             sorted_params = json.dumps(cache_params, sort_keys=True)
             return hashlib.md5(sorted_params.encode()).hexdigest()
@@ -1232,7 +1232,7 @@ class QueryCache:
                 "table_name": kwargs.get("table_name", ""),
                 "catalog": kwargs.get("catalog", ""),
                 "database": kwargs.get("database", ""),
-                "schema": kwargs.get("schema", "")
+                "schema": kwargs.get("schema", ""),
             }
             sorted_params = json.dumps(cache_params, sort_keys=True)
             return hashlib.md5(sorted_params.encode()).hexdigest()
@@ -1248,11 +1248,12 @@ class QueryCache:
 
         # Remove comments
         import re
-        sql = re.sub(r'--.*$', '', sql, flags=re.MULTILINE)
-        sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+
+        sql = re.sub(r"--.*$", "", sql, flags=re.MULTILINE)
+        sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
 
         # Normalize whitespace
-        sql = ' '.join(sql.split())
+        sql = " ".join(sql.split())
 
         # Convert to lowercase for basic normalization
         return sql.lower().strip()
@@ -1426,9 +1427,9 @@ class ToolBatchProcessor:
         import re
 
         # Remove comments and normalize whitespace
-        sql = re.sub(r'--.*$', '', sql, flags=re.MULTILINE)
-        sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
-        sql = ' '.join(sql.split())
+        sql = re.sub(r"--.*$", "", sql, flags=re.MULTILINE)
+        sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
+        sql = " ".join(sql.split())
 
         # Create a hash of the normalized SQL
         return hashlib.md5(sql.lower().encode()).hexdigest()
@@ -1519,7 +1520,7 @@ DEFAULT_PLAN_EXECUTOR_KEYWORD_MAP = {
         "search similar sql",
         "查找相似sql",
     ],
-    "list_domain_layers_tree": [
+    "list_subject_tree": [
         "list domains",
         "查看领域层级",
         "show domain structure",
@@ -3012,7 +3013,9 @@ Respond with only the tool name, nothing else."""
         except Exception as e:
             logger.debug(f"Failed to emit status message: {e}")
 
-    async def _emit_tool_error_event(self, tool_name: str, error_message: str, error_info: Dict[str, Any], kwargs: Dict[str, Any]):
+    async def _emit_tool_error_event(
+        self, tool_name: str, error_message: str, error_info: Dict[str, Any], kwargs: Dict[str, Any]
+    ):
         """Emit error events for failed tool executions."""
         try:
             if self.emit_queue is not None:
@@ -3032,12 +3035,8 @@ Respond with only the tool name, nothing else."""
                         output_data={
                             "error": error_message,
                             "error_type": "connection",
-                            "suggestions": [
-                                "检查数据库服务是否运行",
-                                "验证网络连接",
-                                "确认数据库连接配置"
-                            ],
-                            "can_retry": error_info.get("can_retry", True)
+                            "suggestions": ["检查数据库服务是否运行", "验证网络连接", "确认数据库连接配置"],
+                            "can_retry": error_info.get("can_retry", True),
                         },
                         status=ActionStatus.FAILED,
                     )
@@ -3051,12 +3050,8 @@ Respond with only the tool name, nothing else."""
                         output_data={
                             "error": error_message,
                             "error_type": "table_not_found",
-                            "suggestions": [
-                                "检查表名拼写是否正确",
-                                "确认数据库权限",
-                                "使用search_table工具查找相似表名"
-                            ],
-                            "can_retry": error_info.get("can_retry", True)
+                            "suggestions": ["检查表名拼写是否正确", "确认数据库权限", "使用search_table工具查找相似表名"],
+                            "can_retry": error_info.get("can_retry", True),
                         },
                         status=ActionStatus.FAILED,
                     )
@@ -3073,9 +3068,9 @@ Respond with only the tool name, nothing else."""
                             "suggestions": [
                                 "检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)",
                                 "验证括号和引号是否匹配",
-                                "确认表名和列名拼写是否正确"
+                                "确认表名和列名拼写是否正确",
                             ],
-                            "can_retry": False
+                            "can_retry": False,
                         },
                         status=ActionStatus.FAILED,
                     )
@@ -3090,13 +3085,13 @@ Respond with only the tool name, nothing else."""
                             "error": error_message,
                             "error_type": error_type,
                             "tool_name": tool_name,
-                            "can_retry": error_info.get("can_retry", False)
+                            "can_retry": error_info.get("can_retry", False),
                         },
                         status=ActionStatus.FAILED,
                     )
 
                 # Add to action history and emit
-                if hasattr(self, 'action_history_manager') and self.action_history_manager:
+                if hasattr(self, "action_history_manager") and self.action_history_manager:
                     self.action_history_manager.add_action(error_action)
                 await self._emit_action(error_action)
 
@@ -4107,7 +4102,7 @@ Respond with only the tool name, nothing else."""
                                     except Exception as e:
                                         logger.debug(f"emit_queue put failed for complete_action_db: {e}")
                             executed_any = True
-                        elif matched_tool == "list_domain_layers_tree":
+                        elif matched_tool == "list_subject_tree":
                             # List domain layers tree - placeholder for now
                             try:
                                 note_action = ActionHistory.create_action(
@@ -5253,7 +5248,7 @@ Respond with only the tool name, nothing else."""
                     r"业务.*层级",
                     r"数据.*分层",
                 ],
-                "tool": "list_domain_layers_tree",
+                "tool": "list_subject_tree",
                 "confidence": 0.78,
                 "reason": "Domain and layer exploration",
                 "priority": 2,
@@ -5594,7 +5589,7 @@ Respond with only the tool name, nothing else."""
                     "use_cases": ["explore file system", "find files", "browse directories"],
                     "examples": ["list files in directory", "show me the contents"],
                 },
-                "list_domain_layers_tree": {
+                "list_subject_tree": {
                     "description": "Explore business domain structure and data layers",
                     "use_cases": ["understand data organization", "explore business domains", "view data hierarchy"],
                     "examples": ["show business domains", "explore data layers"],

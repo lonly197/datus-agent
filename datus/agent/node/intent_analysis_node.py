@@ -72,7 +72,7 @@ class IntentAnalysisNode(Node):
         try:
             # Extract task text from workflow
             task_text = ""
-            if hasattr(self.workflow, 'task') and self.workflow.task:
+            if hasattr(self.workflow, "task") and self.workflow.task:
                 task_text = self.workflow.task.task or ""
 
             if not task_text.strip():
@@ -85,9 +85,9 @@ class IntentAnalysisNode(Node):
 
             # Populate workflow metadata
             if self.workflow:
-                self.workflow.metadata['detected_intent'] = intent_result.intent
-                self.workflow.metadata['intent_confidence'] = intent_result.confidence
-                self.workflow.metadata['intent_metadata'] = intent_result.metadata
+                self.workflow.metadata["detected_intent"] = intent_result.intent
+                self.workflow.metadata["intent_confidence"] = intent_result.confidence
+                self.workflow.metadata["intent_metadata"] = intent_result.metadata
 
             # Emit success action with results
             yield ActionHistory(
@@ -110,7 +110,7 @@ class IntentAnalysisNode(Node):
             logger.error(f"Intent analysis failed: {e}")
             yield self._create_error_action(str(e))
 
-    async def _detect_intent(self, task_text: str) -> 'IntentResult':
+    async def _detect_intent(self, task_text: str) -> "IntentResult":
         """
         Detect intent using heuristics with optional LLM fallback.
 
@@ -129,14 +129,17 @@ class IntentAnalysisNode(Node):
         heuristic_result = detector.detect_sql_intent_by_keyword(task_text)
         # Convert heuristic result to IntentResult format
         from datus.agent.intent_detection import IntentResult
+
         intent_result = IntentResult(
-            intent=heuristic_result[1].get('intent', 'unknown'),
-            confidence=float(heuristic_result[1].get('confidence', 0.5)),
-            metadata=heuristic_result[1]
+            intent=heuristic_result[1].get("intent", "unknown"),
+            confidence=float(heuristic_result[1].get("confidence", 0.5)),
+            metadata=heuristic_result[1],
         )
 
         # If confidence is low and LLM fallback is enabled, try LLM
-        use_llm_fallback = getattr(self.agent_config, 'intent_detector_llm_fallback', False) if self.agent_config else False
+        use_llm_fallback = (
+            getattr(self.agent_config, "intent_detector_llm_fallback", False) if self.agent_config else False
+        )
 
         if intent_result.confidence < 0.7 and use_llm_fallback:
             try:
@@ -151,9 +154,7 @@ class IntentAnalysisNode(Node):
                     llm_confidence = float(llm_result[1])
                     if llm_confidence > intent_result.confidence:
                         intent_result = IntentResult(
-                            intent=llm_result[0],
-                            confidence=llm_confidence,
-                            metadata={'llm_fallback': True}
+                            intent=llm_result[0], confidence=llm_confidence, metadata={"llm_fallback": True}
                         )
                         logger.info("LLM fallback improved intent detection confidence")
             except Exception as e:

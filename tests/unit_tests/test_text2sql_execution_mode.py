@@ -7,8 +7,9 @@ Unit tests for Text2SQLExecutionMode.
 """
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from datus.agent.node.execution_event_manager import ExecutionContext, Text2SQLExecutionMode
 from datus.configuration.agent_config import AgentConfig
@@ -43,16 +44,13 @@ class TestText2SQLExecutionMode:
             task_data={"task": "Show me all users from the users table"},
             agent_config=mock_agent_config,
             model=mock_model,
-            workflow_metadata={}
+            workflow_metadata={},
         )
 
     @pytest.fixture
     def execution_mode(self, execution_context):
         """Create Text2SQLExecutionMode instance."""
-        return Text2SQLExecutionMode(
-            event_manager=MagicMock(),
-            context=execution_context
-        )
+        return Text2SQLExecutionMode(event_manager=MagicMock(), context=execution_context)
 
     @pytest.mark.asyncio
     async def test_analyze_query_intent_success(self, execution_mode, mock_model):
@@ -64,7 +62,7 @@ class TestText2SQLExecutionMode:
             "filters": [],
             "aggregations": [],
             "sort_requirements": [],
-            "temporal_aspects": []
+            "temporal_aspects": [],
         }
 
         result = await execution_mode._analyze_query_intent()
@@ -84,28 +82,22 @@ class TestText2SQLExecutionMode:
         assert result["entities"] == []
 
     @pytest.mark.asyncio
-    @patch('datus.agent.node.execution_event_manager.db_function_tool_instance')
+    @patch("datus.agent.node.execution_event_manager.db_function_tool_instance")
     async def test_link_schema_success(self, mock_db_tool_func, execution_mode, mock_agent_config):
         """Test successful schema linking."""
         # Setup mocks
         mock_db_tool = MagicMock()
         mock_db_tool.search_table.return_value = MagicMock(
             success=True,
-            result=[
-                {"table_name": "users", "relevance_score": 0.9},
-                {"table_name": "orders", "relevance_score": 0.7}
-            ]
+            result=[{"table_name": "users", "relevance_score": 0.9}, {"table_name": "orders", "relevance_score": 0.7}],
         )
         mock_db_tool.describe_table.return_value = MagicMock(
-            success=True,
-            result={"columns": [{"name": "id", "type": "INTEGER"}]}
+            success=True, result={"columns": [{"name": "id", "type": "INTEGER"}]}
         )
         mock_db_tool_func.return_value = mock_db_tool
 
         # Mock _analyze_query_intent to return entities
-        execution_mode._analyze_query_intent = AsyncMock(return_value={
-            "entities": ["users"]
-        })
+        execution_mode._analyze_query_intent = AsyncMock(return_value={"entities": ["users"]})
 
         result = await execution_mode._link_schema()
 
@@ -121,12 +113,7 @@ class TestText2SQLExecutionMode:
         mock_model.generate.return_value = "SELECT id, name FROM users WHERE active = 1;"
 
         intent = {"query_type": "SELECT", "entities": ["users"]}
-        schema_info = {
-            "tables": [{
-                "table_name": "users",
-                "schema": {"columns": [{"name": "id", "type": "INTEGER"}]}
-            }]
-        }
+        schema_info = {"tables": [{"table_name": "users", "schema": {"columns": [{"name": "id", "type": "INTEGER"}]}}]}
 
         result = await execution_mode._generate_sql(intent, schema_info)
 
@@ -135,17 +122,13 @@ class TestText2SQLExecutionMode:
         mock_model.generate.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch('datus.agent.node.execution_event_manager.db_function_tool_instance')
+    @patch("datus.agent.node.execution_event_manager.db_function_tool_instance")
     async def test_validate_sql_syntax_success(self, mock_db_tool_func, execution_mode):
         """Test successful SQL syntax validation."""
         # Setup mock
         mock_db_tool = MagicMock()
         mock_db_tool.validate_sql_syntax.return_value = MagicMock(
-            success=True,
-            result={
-                "tables_referenced": ["users"],
-                "sql_type": "SELECT"
-            }
+            success=True, result={"tables_referenced": ["users"], "sql_type": "SELECT"}
         )
         mock_db_tool_func.return_value = mock_db_tool
 
@@ -159,7 +142,7 @@ class TestText2SQLExecutionMode:
     async def test_validate_sql_syntax_failure(self, execution_mode):
         """Test SQL syntax validation failure."""
         # Mock the db_function_tool_instance to raise an exception
-        with patch('datus.agent.node.execution_event_manager.db_function_tool_instance') as mock_func:
+        with patch("datus.agent.node.execution_event_manager.db_function_tool_instance") as mock_func:
             mock_func.side_effect = Exception("Database error")
 
             result = await execution_mode._validate_sql_syntax("INVALID SQL")
@@ -171,16 +154,12 @@ class TestText2SQLExecutionMode:
     async def test_execute_full_flow(self, execution_mode, mock_model):
         """Test the complete execution flow."""
         # Setup mocks
-        execution_mode._analyze_query_intent = AsyncMock(return_value={
-            "query_type": "SELECT", "entities": ["users"]
-        })
-        execution_mode._link_schema = AsyncMock(return_value={
-            "tables": [{"table_name": "users", "schema": {"columns": []}}]
-        })
+        execution_mode._analyze_query_intent = AsyncMock(return_value={"query_type": "SELECT", "entities": ["users"]})
+        execution_mode._link_schema = AsyncMock(
+            return_value={"tables": [{"table_name": "users", "schema": {"columns": []}}]}
+        )
         execution_mode._generate_sql = AsyncMock(return_value="SELECT * FROM users")
-        execution_mode._validate_sql_syntax = AsyncMock(return_value={
-            "valid": True, "tables_referenced": ["users"]
-        })
+        execution_mode._validate_sql_syntax = AsyncMock(return_value={"valid": True, "tables_referenced": ["users"]})
 
         # Mock event manager
         mock_event_manager = MagicMock()

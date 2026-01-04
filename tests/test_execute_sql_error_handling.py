@@ -6,11 +6,12 @@
 Tests for ExecuteSQLNode unified error handling.
 """
 
-import pytest
 from unittest.mock import Mock, patch
 
-from datus.agent.node.execute_sql_node import ExecuteSQLNode
+import pytest
+
 from datus.agent.error_handling import NodeErrorResult
+from datus.agent.node.execute_sql_node import ExecuteSQLNode
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.node_models import ExecuteSQLInput
 from datus.utils.exceptions import ErrorCode
@@ -40,11 +41,8 @@ class TestExecuteSQLErrorHandling:
             node_id="test_execute_sql",
             description="Test ExecuteSQL Node",
             node_type="execute_sql",
-            input_data=ExecuteSQLInput(
-                sql_query="SELECT * FROM test_table",
-                database_name="test_db"
-            ),
-            agent_config=agent_config
+            input_data=ExecuteSQLInput(sql_query="SELECT * FROM test_table", database_name="test_db"),
+            agent_config=agent_config,
         )
         return node
 
@@ -55,7 +53,7 @@ class TestExecuteSQLErrorHandling:
         mock_result.sql_return = "test data"
         mock_result.row_count = 5
 
-        with patch.object(execute_sql_node, '_sql_connector') as mock_connector:
+        with patch.object(execute_sql_node, "_sql_connector") as mock_connector:
             mock_db = Mock()
             mock_db.execute.return_value = mock_result
             mock_connector.return_value = mock_db
@@ -68,7 +66,7 @@ class TestExecuteSQLErrorHandling:
 
     def test_database_connection_failed(self, execute_sql_node):
         """Test database connection failure."""
-        with patch.object(execute_sql_node, '_sql_connector', return_value=None):
+        with patch.object(execute_sql_node, "_sql_connector", return_value=None):
             result = execute_sql_node.run()
 
             assert isinstance(result, NodeErrorResult)
@@ -84,10 +82,10 @@ class TestExecuteSQLErrorHandling:
 
         execute_sql_node.input.query_timeout_seconds = 5
 
-        with patch.object(execute_sql_node, '_sql_connector') as mock_connector:
+        with patch.object(execute_sql_node, "_sql_connector") as mock_connector:
             mock_db = Mock()
             # Simulate timeout
-            with patch('datus.agent.node.execute_sql_node.ThreadPoolExecutor') as mock_executor:
+            with patch("datus.agent.node.execute_sql_node.ThreadPoolExecutor") as mock_executor:
                 mock_future = Mock()
                 mock_future.result.side_effect = FuturesTimeoutError()
                 mock_executor.return_value.__enter__.return_value.submit.return_value = mock_future
@@ -104,7 +102,7 @@ class TestExecuteSQLErrorHandling:
 
     def test_generic_execution_error(self, execute_sql_node):
         """Test generic SQL execution error."""
-        with patch.object(execute_sql_node, '_sql_connector') as mock_connector:
+        with patch.object(execute_sql_node, "_sql_connector") as mock_connector:
             mock_db = Mock()
             mock_db.execute.side_effect = Exception("Database error")
 

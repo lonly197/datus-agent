@@ -702,18 +702,18 @@ class DatusAPIService:
             # SQL审查：使用chat_agentic_plan工作流，启用强制预检工具序列 (v2.4)
             return {
                 "workflow": "chat_agentic_plan",  # 使用plan模式专用工作流
-                "plan_mode": False,               # 禁用传统plan模式
-                "auto_execute_plan": False,       # 禁用自动执行
-                "system_prompt": "sql_review",    # 使用专用SQL审查提示词
-                "output_format": "markdown",      # Markdown格式输出
-                "required_tool_sequence": [       # 强制执行7个工具序列 (v2.4完整版)
-                    "describe_table",             # 表结构分析
+                "plan_mode": False,  # 禁用传统plan模式
+                "auto_execute_plan": False,  # 禁用自动执行
+                "system_prompt": "sql_review",  # 使用专用SQL审查提示词
+                "output_format": "markdown",  # Markdown格式输出
+                "required_tool_sequence": [  # 强制执行7个工具序列 (v2.4完整版)
+                    "describe_table",  # 表结构分析
                     "search_external_knowledge",  # StarRocks规则检索
-                    "read_query",                 # SQL语法验证
-                    "get_table_ddl",              # DDL定义获取
-                    "analyze_query_plan",         # 查询计划分析 (v2.4新增)
-                    "check_table_conflicts",      # 表冲突检测 (v2.4新增)
-                    "validate_partitioning"       # 分区验证 (v2.4新增)
+                    "read_query",  # SQL语法验证
+                    "get_table_ddl",  # DDL定义获取
+                    "analyze_query_plan",  # 查询计划分析 (v2.4新增)
+                    "check_table_conflicts",  # 表冲突检测 (v2.4新增)
+                    "validate_partitioning",  # 分区验证 (v2.4新增)
                 ],
             }
         elif task_type == "data_analysis":
@@ -734,11 +734,11 @@ class DatusAPIService:
                 "system_prompt": "text2sql_system",
                 "output_format": "json",
                 "required_tool_sequence": [
-                    "search_table",              # 表结构搜索
-                    "describe_table",            # 表详细描述
-                    "search_reference_sql",      # 参考SQL搜索
-                    "parse_temporal_expressions" # 时间表达式解析
-                ]
+                    "search_table",  # 表结构搜索
+                    "describe_table",  # 表详细描述
+                    "search_reference_sql",  # 参考SQL搜索
+                    "parse_temporal_expressions",  # 时间表达式解析
+                ],
             }
         else:  # fallback to text2sql
             # Text2SQL：标准模式（兼容旧版本）

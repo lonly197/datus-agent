@@ -875,7 +875,7 @@ class TestTableExistenceChecking:
         """Test successful table existence check."""
         mock_connector.get_tables.return_value = [
             {"name": "users", "type": "table"},
-            {"name": "orders", "type": "table"}
+            {"name": "orders", "type": "table"},
         ]
 
         result = db_func_tool.check_table_exists("users")
@@ -888,7 +888,7 @@ class TestTableExistenceChecking:
         """Test table existence check when table doesn't exist."""
         mock_connector.get_tables.return_value = [
             {"name": "users", "type": "table"},
-            {"name": "orders", "type": "table"}
+            {"name": "orders", "type": "table"},
         ]
 
         result = db_func_tool.check_table_exists("nonexistent_table")
@@ -902,7 +902,7 @@ class TestTableExistenceChecking:
         mock_connector.get_tables.return_value = [
             {"name": "users", "type": "table"},
             {"name": "user_profiles", "type": "table"},
-            {"name": "user_orders", "type": "table"}
+            {"name": "user_orders", "type": "table"},
         ]
 
         result = db_func_tool.check_table_exists("usr")  # Partial match
@@ -915,9 +915,7 @@ class TestTableExistenceChecking:
     def test_check_table_exists_out_of_scope(self, db_func_tool, mock_connector):
         """Test table existence check for out-of-scope table."""
         # Mock the scoped patterns to exclude certain tables
-        db_func_tool._scoped_patterns = [
-            ScopedTablePattern(raw="allowed_*", table="allowed_*")
-        ]
+        db_func_tool._scoped_patterns = [ScopedTablePattern(raw="allowed_*", table="allowed_*")]
 
         result = db_func_tool.check_table_exists("forbidden_table")
 

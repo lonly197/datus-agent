@@ -6,8 +6,9 @@
 Unit tests for the new text2sql workflow nodes: IntentAnalysisNode and SchemaDiscoveryNode.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from datus.agent.node.intent_analysis_node import IntentAnalysisNode
 from datus.agent.node.schema_discovery_node import SchemaDiscoveryNode
@@ -30,7 +31,7 @@ class TestIntentAnalysisNode:
             database_name="test",
             schema_name="",
             subject_path=[],
-            external_knowledge=""
+            external_knowledge="",
         )
         workflow.metadata = {}
         return workflow
@@ -49,7 +50,7 @@ class TestIntentAnalysisNode:
             description="Test intent analysis",
             node_type="intent_analysis",
             input_data=BaseInput(),
-            agent_config=mock_agent_config
+            agent_config=mock_agent_config,
         )
 
     @pytest.mark.asyncio
@@ -66,12 +67,10 @@ class TestIntentAnalysisNode:
         intent_node.workflow = mock_workflow
 
         # Mock intent detection
-        with patch('datus.agent.intent_detection.IntentDetector') as mock_detector_class:
+        with patch("datus.agent.intent_detection.IntentDetector") as mock_detector_class:
             mock_detector = MagicMock()
             mock_detector.detect_intent_heuristic.return_value = MagicMock(
-                intent="text2sql",
-                confidence=0.9,
-                metadata={"test": "data"}
+                intent="text2sql", confidence=0.9, metadata={"test": "data"}
             )
             mock_detector_class.return_value = mock_detector
 
@@ -117,7 +116,7 @@ class TestIntentAnalysisNode:
         intent_node.workflow = mock_workflow
 
         # Mock intent detection to raise exception
-        with patch('datus.agent.intent_detection.IntentDetector') as mock_detector_class:
+        with patch("datus.agent.intent_detection.IntentDetector") as mock_detector_class:
             mock_detector = MagicMock()
             mock_detector.detect_intent_heuristic.side_effect = Exception("Detection failed")
             mock_detector_class.return_value = mock_detector
@@ -148,7 +147,7 @@ class TestSchemaDiscoveryNode:
             database_name="test_db",
             schema_name="public",
             subject_path=[],
-            external_knowledge=""
+            external_knowledge="",
         )
         workflow.context = MagicMock()
         return workflow
@@ -168,7 +167,7 @@ class TestSchemaDiscoveryNode:
             description="Test schema discovery",
             node_type="schema_discovery",
             input_data=BaseInput(),
-            agent_config=mock_agent_config
+            agent_config=mock_agent_config,
         )
 
     @pytest.mark.asyncio
@@ -185,7 +184,7 @@ class TestSchemaDiscoveryNode:
         schema_node.workflow = mock_workflow
 
         # Mock schema RAG
-        with patch('datus.storage.schema_metadata.SchemaWithValueRAG') as mock_rag_class:
+        with patch("datus.storage.schema_metadata.SchemaWithValueRAG") as mock_rag_class:
             mock_rag = MagicMock()
             mock_schemas = [MagicMock(table_name="users"), MagicMock(table_name="orders")]
             mock_values = [MagicMock(), MagicMock()]
@@ -214,7 +213,7 @@ class TestSchemaDiscoveryNode:
         schema_node.workflow = mock_workflow
 
         # Mock schema RAG to raise exception
-        with patch('datus.storage.schema_metadata.SchemaWithValueRAG') as mock_rag_class:
+        with patch("datus.storage.schema_metadata.SchemaWithValueRAG") as mock_rag_class:
             mock_rag = MagicMock()
             mock_rag.search_tables.side_effect = Exception("Schema search failed")
             mock_rag_class.return_value = mock_rag
@@ -235,7 +234,7 @@ class TestSchemaDiscoveryNode:
         schema_node.workflow = mock_workflow
 
         # Mock schema RAG to return empty results
-        with patch('datus.storage.schema_metadata.SchemaWithValueRAG') as mock_rag_class:
+        with patch("datus.storage.schema_metadata.SchemaWithValueRAG") as mock_rag_class:
             mock_rag = MagicMock()
             mock_rag.search_tables.return_value = ([], [])
             mock_rag_class.return_value = mock_rag

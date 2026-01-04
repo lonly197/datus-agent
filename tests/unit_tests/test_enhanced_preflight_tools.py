@@ -16,11 +16,7 @@ class TestEnhancedPreflightTools:
         """Create a mock workflow with enhanced tool sequence."""
         workflow = MagicMock()
         workflow.metadata = {
-            "required_tool_sequence": [
-                "analyze_query_plan",
-                "check_table_conflicts",
-                "validate_partitioning"
-            ]
+            "required_tool_sequence": ["analyze_query_plan", "check_table_conflicts", "validate_partitioning"]
         }
         workflow.task = SqlTask(
             task="审查SQL：SELECT * FROM test_table WHERE id = 1",
@@ -42,6 +38,7 @@ class TestEnhancedPreflightTools:
         """Create a ChatAgenticNode instance with mocked dependencies."""
         with patch("datus.agent.node.chat_agentic_node.GenSQLAgenticNode.__init__", return_value=None):
             from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
             node = ChatAgenticNode(node_id="test_node", description="Test node", node_type="chat")
 
             # Mock required attributes
@@ -72,20 +69,16 @@ class TestEnhancedPreflightTools:
                     "reason": "full_table_scan",
                     "node": "TableScan(test_table)",
                     "severity": "high",
-                    "recommendation": "Add index on id column"
+                    "recommendation": "Add index on id column",
                 }
             ],
-            "join_analysis": {
-                "join_count": 0,
-                "join_types": [],
-                "join_order_issues": []
-            },
+            "join_analysis": {"join_count": 0, "join_types": [], "join_order_issues": []},
             "index_usage": {
                 "indexes_used": [],
                 "missing_indexes": ["idx_test_table_id"],
-                "index_effectiveness": "poor"
+                "index_effectiveness": "poor",
             },
-            "warnings": []
+            "warnings": [],
         }
         chat_node.db_func_tool.analyze_query_plan.return_value = mock_result
 
@@ -93,12 +86,7 @@ class TestEnhancedPreflightTools:
         chat_node.plan_hooks.query_cache.get_enhanced.return_value = None
 
         result = await orchestrator._call_enhanced_tool(
-            "analyze_query_plan",
-            "SELECT * FROM test_table WHERE id = 1",
-            ["test_table"],
-            "default_catalog",
-            "test",
-            ""
+            "analyze_query_plan", "SELECT * FROM test_table WHERE id = 1", ["test_table"], "default_catalog", "test", ""
         )
 
         assert result["success"] is True
@@ -121,7 +109,7 @@ class TestEnhancedPreflightTools:
                 "name": "test_table",
                 "columns": ["id", "name", "created_at"],
                 "ddl_hash": "abc123",
-                "estimated_rows": 10000
+                "estimated_rows": 10000,
             },
             "matches": [
                 {
@@ -131,11 +119,11 @@ class TestEnhancedPreflightTools:
                     "matching_columns": ["id", "name"],
                     "column_similarity": 0.8,
                     "business_conflict": "可能存在用户数据重复",
-                    "recommendation": "建议评估是否可以复用现有表"
+                    "recommendation": "建议评估是否可以复用现有表",
                 }
             ],
             "duplicate_build_risk": "medium",
-            "layering_violations": []
+            "layering_violations": [],
         }
         chat_node.db_func_tool.check_table_conflicts.return_value = mock_result
 
@@ -148,7 +136,7 @@ class TestEnhancedPreflightTools:
             ["test_table"],
             "default_catalog",
             "test",
-            ""
+            "",
         )
 
         assert result["success"] is True
@@ -167,33 +155,33 @@ class TestEnhancedPreflightTools:
                 "partition_key": "created_at",
                 "partition_type": "time_based",
                 "partition_count": 30,
-                "partition_expression": "date_trunc('day', created_at)"
+                "partition_expression": "date_trunc('day', created_at)",
             },
             "validation_results": {
                 "partition_key_valid": True,
                 "granularity_appropriate": True,
                 "data_distribution_even": False,
-                "pruning_opportunities": True
+                "pruning_opportunities": True,
             },
             "issues": [
                 {
                     "severity": "medium",
                     "issue_type": "uneven_distribution",
                     "description": "某些分区数据量偏大",
-                    "recommendation": "考虑调整分区策略"
+                    "recommendation": "考虑调整分区策略",
                 }
             ],
             "recommended_partition": {
                 "suggested_key": "created_at",
                 "suggested_type": "time_based",
                 "estimated_partitions": 12,
-                "rationale": "建议按月分区以获得更好的数据分布"
+                "rationale": "建议按月分区以获得更好的数据分布",
             },
             "performance_impact": {
                 "query_speed_improvement": "significant",
                 "storage_efficiency": "improved",
-                "maintenance_overhead": "acceptable"
-            }
+                "maintenance_overhead": "acceptable",
+            },
         }
         chat_node.db_func_tool.validate_partitioning.return_value = mock_result
 
@@ -203,7 +191,7 @@ class TestEnhancedPreflightTools:
             ["test_table"],
             "default_catalog",
             "test",
-            ""
+            "",
         )
 
         assert result["success"] is True
@@ -218,19 +206,14 @@ class TestEnhancedPreflightTools:
             "success": True,
             "plan_text": "Cached EXPLAIN output...",
             "estimated_rows": 500,
-            "cached": True
+            "cached": True,
         }
 
         # Mock cache hit
         chat_node.plan_hooks.query_cache.get_enhanced.return_value = cached_result
 
         result = await orchestrator._call_enhanced_tool(
-            "analyze_query_plan",
-            "SELECT * FROM test_table WHERE id = 1",
-            ["test_table"],
-            "default_catalog",
-            "test",
-            ""
+            "analyze_query_plan", "SELECT * FROM test_table WHERE id = 1", ["test_table"], "default_catalog", "test", ""
         )
 
         assert result == cached_result
@@ -248,12 +231,7 @@ class TestEnhancedPreflightTools:
         chat_node.plan_hooks.query_cache.get_enhanced.return_value = None
 
         result = await orchestrator._call_enhanced_tool(
-            "analyze_query_plan",
-            "SELECT * FROM test_table WHERE id = 1",
-            ["test_table"],
-            "default_catalog",
-            "test",
-            ""
+            "analyze_query_plan", "SELECT * FROM test_table WHERE id = 1", ["test_table"], "default_catalog", "test", ""
         )
 
         assert result["success"] is False
@@ -263,16 +241,12 @@ class TestEnhancedPreflightTools:
     async def test_context_injection(self, orchestrator, mock_workflow):
         """Test that tool results are properly injected into workflow context."""
         # Mock successful tool result
-        mock_result = {
-            "success": True,
-            "plan_text": "Test plan",
-            "hotspots": []
-        }
+        mock_result = {"success": True, "plan_text": "Test plan", "hotspots": []}
 
         orchestrator._inject_tool_result_into_context(mock_workflow, "analyze_query_plan", mock_result)
 
         # Verify context was updated
-        assert hasattr(mock_workflow.context, 'preflight_results')
+        assert hasattr(mock_workflow.context, "preflight_results")
         assert "query_plan_analysis" in mock_workflow.context.preflight_results
         assert mock_workflow.context.preflight_results["query_plan_analysis"]["plan_text"] == "Test plan"
 
@@ -281,13 +255,13 @@ class TestEnhancedPreflightTools:
         """Test batch processing of table-related tools."""
         batch = [
             (MagicMock(), {"table_name": "table1", "catalog": "cat", "database": "db", "schema": "sch"}),
-            (MagicMock(), {"table_name": "table2", "catalog": "cat", "database": "db", "schema": "sch"})
+            (MagicMock(), {"table_name": "table2", "catalog": "cat", "database": "db", "schema": "sch"}),
         ]
 
         # Mock db_func_tool responses
         orchestrator.db_func_tool.check_table_conflicts.side_effect = [
             {"success": True, "table_name": "table1"},
-            {"success": True, "table_name": "table2"}
+            {"success": True, "table_name": "table2"},
         ]
 
         results = await orchestrator._process_tool_batch("check_table_conflicts", batch, MagicMock())

@@ -697,7 +697,7 @@ class DBFuncTool:
 
             # Get dialect from agent config or use default
             dialect = None
-            if self.agent_config and hasattr(self.agent_config, 'db_type'):
+            if self.agent_config and hasattr(self.agent_config, "db_type"):
                 dialect = self.agent_config.db_type
 
             # Parse SQL syntax tree
@@ -708,8 +708,7 @@ class DBFuncTool:
 
             # Check for basic SELECT/FROM/INSERT/UPDATE/DELETE structure
             has_main_operation = any(
-                isinstance(node, (exp.Select, exp.Insert, exp.Update, exp.Delete))
-                for node in parsed.walk()
+                isinstance(node, (exp.Select, exp.Insert, exp.Update, exp.Delete)) for node in parsed.walk()
             )
 
             if not has_main_operation:
@@ -725,17 +724,21 @@ class DBFuncTool:
             if issues:
                 return FuncToolResult(success=0, error="; ".join(issues))
 
-            return FuncToolResult(result={
-                "syntax_valid": True,
-                "tables_referenced": tables,
-                "sql_type": type(parsed).__name__,
-                "dialect": dialect or "default"
-            })
+            return FuncToolResult(
+                result={
+                    "syntax_valid": True,
+                    "tables_referenced": tables,
+                    "sql_type": type(parsed).__name__,
+                    "dialect": dialect or "default",
+                }
+            )
 
         except Exception as e:
             return FuncToolResult(success=0, error=f"SQL语法错误: {str(e)}")
 
-    def check_table_exists(self, table_name: str, catalog: Optional[str] = "", database: Optional[str] = "", schema: Optional[str] = "") -> FuncToolResult:
+    def check_table_exists(
+        self, table_name: str, catalog: Optional[str] = "", database: Optional[str] = "", schema: Optional[str] = ""
+    ) -> FuncToolResult:
         """
         Check if a table exists without retrieving its full schema.
 
@@ -761,14 +764,10 @@ class DBFuncTool:
                 return FuncToolResult(success=0, error=f"Table '{table_name}' is outside the scoped context.")
 
             # Get tables list for the specified scope
-            tables = self.connector.get_tables(
-                catalog_name=catalog,
-                database_name=database,
-                schema_name=schema
-            )
+            tables = self.connector.get_tables(catalog_name=catalog, database_name=database, schema_name=schema)
 
             # Extract table names
-            table_names = [t.get('name', '') for t in tables if t.get('name')]
+            table_names = [t.get("name", "") for t in tables if t.get("name")]
             table_exists = table_name in table_names
 
             # Get a few similar table names for suggestions if table doesn't exist
@@ -787,15 +786,17 @@ class DBFuncTool:
                 # Limit suggestions to top 5
                 suggestions = list(set(suggestions))[:5]
 
-            return FuncToolResult(result={
-                "table_exists": table_exists,
-                "available_tables": table_names[:10],  # Return first 10 for context
-                "suggestions": suggestions if not table_exists else [],
-                "catalog": catalog,
-                "database": database,
-                "schema": schema,
-                "table_name": table_name
-            })
+            return FuncToolResult(
+                result={
+                    "table_exists": table_exists,
+                    "available_tables": table_names[:10],  # Return first 10 for context
+                    "suggestions": suggestions if not table_exists else [],
+                    "catalog": catalog,
+                    "database": database,
+                    "schema": schema,
+                    "table_name": table_name,
+                }
+            )
 
         except Exception as e:
             return FuncToolResult(success=0, error=f"Table existence check failed: {str(e)}")
@@ -821,15 +822,15 @@ class DBFuncTool:
         """
         try:
             # Construct EXPLAIN query based on database dialect
-            dialect = getattr(self.connector, 'dialect', '').lower()
+            dialect = getattr(self.connector, "dialect", "").lower()
 
-            if dialect in ['starrocks', 'mysql', 'mariadb']:
+            if dialect in ["starrocks", "mysql", "mariadb"]:
                 explain_query = f"EXPLAIN {sql}"
-            elif dialect in ['postgresql', 'postgres']:
+            elif dialect in ["postgresql", "postgres"]:
                 explain_query = f"EXPLAIN ANALYZE {sql}"
-            elif dialect == 'duckdb':
+            elif dialect == "duckdb":
                 explain_query = f"EXPLAIN QUERY PLAN {sql}"
-            elif dialect == 'sqlite':
+            elif dialect == "sqlite":
                 explain_query = f"EXPLAIN QUERY PLAN {sql}"
             else:
                 # Default fallback
@@ -839,10 +840,7 @@ class DBFuncTool:
             explain_result = self.connector.execute_explain(explain_query, "list")
 
             if not explain_result.success:
-                return FuncToolResult(
-                    success=0,
-                    error=f"Failed to execute EXPLAIN query: {explain_result.error}"
-                )
+                return FuncToolResult(success=0, error=f"Failed to execute EXPLAIN query: {explain_result.error}")
 
             # Parse the execution plan
             plan_analysis = self._parse_execution_plan(explain_result.result, dialect)
@@ -871,17 +869,9 @@ class DBFuncTool:
                 "estimated_rows": 0,
                 "estimated_cost": 0.0,
                 "hotspots": [],
-                "join_analysis": {
-                    "join_count": 0,
-                    "join_types": [],
-                    "join_order_issues": []
-                },
-                "index_usage": {
-                    "indexes_used": [],
-                    "missing_indexes": [],
-                    "index_effectiveness": "unknown"
-                },
-                "warnings": []
+                "join_analysis": {"join_count": 0, "join_types": [], "join_order_issues": []},
+                "index_usage": {"indexes_used": [], "missing_indexes": [], "index_effectiveness": "unknown"},
+                "warnings": [],
             }
 
             # Convert plan data to string for analysis
@@ -893,11 +883,11 @@ class DBFuncTool:
             analysis["plan_text"] = plan_text
 
             # Parse based on dialect
-            if dialect in ['starrocks', 'mysql', 'mariadb']:
+            if dialect in ["starrocks", "mysql", "mariadb"]:
                 self._parse_mysql_like_plan(plan_text, analysis)
-            elif dialect in ['postgresql', 'postgres']:
+            elif dialect in ["postgresql", "postgres"]:
                 self._parse_postgres_plan(plan_text, analysis)
-            elif dialect in ['duckdb', 'sqlite']:
+            elif dialect in ["duckdb", "sqlite"]:
                 self._parse_sqlite_plan(plan_text, analysis)
             else:
                 # Generic parsing for unknown dialects
@@ -914,7 +904,7 @@ class DBFuncTool:
                 "error": f"Plan parsing failed: {str(e)}",
                 "plan_text": str(plan_data) if plan_data else "",
                 "hotspots": [],
-                "warnings": ["Failed to parse execution plan"]
+                "warnings": ["Failed to parse execution plan"],
             }
 
     def check_table_conflicts(
@@ -948,10 +938,7 @@ class DBFuncTool:
             # Get target table metadata
             target_metadata = self._get_table_metadata(target_coordinate)
             if not target_metadata:
-                return FuncToolResult(
-                    success=0,
-                    error=f"Target table '{table_name}' not found in metadata store"
-                )
+                return FuncToolResult(success=0, error=f"Target table '{table_name}' not found in metadata store")
 
             # Search for similar tables
             similar_tables = self._find_similar_tables(target_coordinate, target_metadata)
@@ -976,7 +963,7 @@ class DBFuncTool:
                 catalog_name=coordinate.catalog,
                 database_name=coordinate.database,
                 schema_name=coordinate.schema,
-                dialect=self.connector.dialect
+                dialect=self.connector.dialect,
             )
 
             if schemas:
@@ -987,8 +974,8 @@ class DBFuncTool:
                     "database": schema.database_name,
                     "schema": schema.schema_name,
                     "columns": schema.columns or [],
-                    "table_type": getattr(schema, 'table_type', 'table'),
-                    "ddl_hash": self._calculate_ddl_hash(schema)
+                    "table_type": getattr(schema, "table_type", "table"),
+                    "ddl_hash": self._calculate_ddl_hash(schema),
                 }
 
             return None
@@ -1001,15 +988,14 @@ class DBFuncTool:
         import hashlib
 
         # Create a normalized representation of table structure
-        ddl_components = [
-            schema.table_name or "",
-            str(sorted(schema.columns or [], key=lambda x: x.get('name', '')))
-        ]
+        ddl_components = [schema.table_name or "", str(sorted(schema.columns or [], key=lambda x: x.get("name", "")))]
 
         ddl_string = "|".join(ddl_components)
         return hashlib.md5(ddl_string.encode()).hexdigest()[:16]
 
-    def _find_similar_tables(self, target_coordinate: TableCoordinate, target_metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _find_similar_tables(
+        self, target_coordinate: TableCoordinate, target_metadata: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """Find tables similar to the target table."""
         similar_tables = []
 
@@ -1054,22 +1040,23 @@ class DBFuncTool:
                 database_name="",
                 schema_name="",
                 table_type="full",
-                top_n=50  # Get more candidates for name matching
+                top_n=50,  # Get more candidates for name matching
             )
 
             if metadata:
-                for row in metadata.select([
-                    "catalog_name", "database_name", "schema_name",
-                    "table_name", "table_type", "identifier"
-                ]).to_pylist():
-                    candidates.append({
-                        "table_name": row.get("table_name", ""),
-                        "catalog": row.get("catalog_name", ""),
-                        "database": row.get("database_name", ""),
-                        "schema": row.get("schema_name", ""),
-                        "table_type": row.get("table_type", ""),
-                        "identifier": row.get("identifier", "")
-                    })
+                for row in metadata.select(
+                    ["catalog_name", "database_name", "schema_name", "table_name", "table_type", "identifier"]
+                ).to_pylist():
+                    candidates.append(
+                        {
+                            "table_name": row.get("table_name", ""),
+                            "catalog": row.get("catalog_name", ""),
+                            "database": row.get("database_name", ""),
+                            "schema": row.get("schema_name", ""),
+                            "table_type": row.get("table_type", ""),
+                            "identifier": row.get("identifier", ""),
+                        }
+                    )
 
             # Also search for exact name matches in different schemas/databases
             # This would require additional queries against the schema store
@@ -1082,10 +1069,10 @@ class DBFuncTool:
     def _is_same_table(self, candidate: Dict[str, Any], target: TableCoordinate) -> bool:
         """Check if candidate table is the same as target table."""
         return (
-            candidate.get("table_name") == target.table and
-            candidate.get("catalog") == target.catalog and
-            candidate.get("database") == target.database and
-            candidate.get("schema") == target.schema
+            candidate.get("table_name") == target.table
+            and candidate.get("catalog") == target.catalog
+            and candidate.get("database") == target.database
+            and candidate.get("schema") == target.schema
         )
 
     def _calculate_table_similarity(self, target: Dict[str, Any], candidate: Dict[str, Any]) -> float:
@@ -1126,7 +1113,9 @@ class DBFuncTool:
 
         return min(score, 1.0)  # Cap at 1.0
 
-    def _analyze_table_conflicts(self, target_metadata: Dict[str, Any], similar_tables: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _analyze_table_conflicts(
+        self, target_metadata: Dict[str, Any], similar_tables: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         """Analyze conflicts between target table and similar tables."""
         analysis = {
             "success": True,
@@ -1135,12 +1124,12 @@ class DBFuncTool:
                 "name": target_metadata.get("table_name", ""),
                 "columns": [col.get("name", "") for col in target_metadata.get("columns", [])],
                 "ddl_hash": target_metadata.get("ddl_hash", ""),
-                "estimated_rows": 0  # Would need to get from actual table stats
+                "estimated_rows": 0,  # Would need to get from actual table stats
             },
             "matches": [],
             "duplicate_build_risk": "low",
             "layering_violations": [],
-            "error": ""
+            "error": "",
         }
 
         # Analyze each similar table
@@ -1155,7 +1144,7 @@ class DBFuncTool:
                 "matching_columns": [],  # Would need more detailed column comparison
                 "column_similarity": similarity_score,  # Simplified
                 "business_conflict": self._assess_business_conflict(target_metadata, similar),
-                "recommendation": self._generate_conflict_recommendation(conflict_type, similarity_score)
+                "recommendation": self._generate_conflict_recommendation(conflict_type, similarity_score),
             }
 
             analysis["matches"].append(match_info)
@@ -1195,8 +1184,9 @@ class DBFuncTool:
             return "可能存在事实表重复建设"
         elif "dim" in target_name and "dim" in candidate_name:
             return "可能存在维度表重复建设"
-        elif any(keyword in target_name for keyword in ["user", "customer", "client"]) and \
-             any(keyword in candidate_name for keyword in ["user", "customer", "client"]):
+        elif any(keyword in target_name for keyword in ["user", "customer", "client"]) and any(
+            keyword in candidate_name for keyword in ["user", "customer", "client"]
+        ):
             return "可能存在用户相关数据重复"
 
         return "表结构相似，建议进一步评估业务需求"
@@ -1227,8 +1217,7 @@ class DBFuncTool:
 
         elif "dws_" in target_name:
             # DWS layer aggregations should be unique
-            duplicate_aggregations = [t for t in similar_tables
-                                    if "dws_" in t.get("table_name", "").lower()]
+            duplicate_aggregations = [t for t in similar_tables if "dws_" in t.get("table_name", "").lower()]
             if duplicate_aggregations:
                 violations.append("DWS层存在相似汇总逻辑，可能存在重复计算")
 
@@ -1264,17 +1253,11 @@ class DBFuncTool:
 
             # Get table DDL for partitioning analysis
             ddl_result = self.get_table_ddl(
-                table_name=table_name,
-                catalog=catalog,
-                database=database,
-                schema_name=schema_name
+                table_name=table_name, catalog=catalog, database=database, schema_name=schema_name
             )
 
             if not ddl_result.success:
-                return FuncToolResult(
-                    success=0,
-                    error=f"Cannot retrieve table DDL: {ddl_result.error}"
-                )
+                return FuncToolResult(success=0, error=f"Cannot retrieve table DDL: {ddl_result.error}")
 
             ddl_text = ddl_result.result.get("ddl", "")
 
@@ -1295,7 +1278,7 @@ class DBFuncTool:
                 "issues": validation_results.get("issues", []),
                 "recommended_partition": recommendations.get("recommended_partition", {}),
                 "performance_impact": recommendations.get("performance_impact", {}),
-                "error": ""
+                "error": "",
             }
 
             return FuncToolResult(result=result)
@@ -1312,7 +1295,7 @@ class DBFuncTool:
             "partition_count": 0,
             "partition_expression": "",
             "partition_values": [],
-            "subpartition_info": {}
+            "subpartition_info": {},
         }
 
         if not ddl_text:
@@ -1337,9 +1320,9 @@ class DBFuncTool:
 
         # StarRocks partitioning patterns
         starrocks_patterns = [
-            r'partitioned\s+by\s+\(([^)]+)\)',  # PARTITIONED BY (column)
-            r'partition\s+by\s+\(([^)]+)\)',     # PARTITION BY (column)
-            r'partitioned\s+by\s+date_trunc\([^)]+\)',  # PARTITIONED BY date_trunc
+            r"partitioned\s+by\s+\(([^)]+)\)",  # PARTITIONED BY (column)
+            r"partition\s+by\s+\(([^)]+)\)",  # PARTITION BY (column)
+            r"partitioned\s+by\s+date_trunc\([^)]+\)",  # PARTITIONED BY date_trunc
         ]
 
         for pattern in starrocks_patterns:
@@ -1372,23 +1355,27 @@ class DBFuncTool:
         else:
             info["partition_count"] = 10  # Default estimate
 
-    def _validate_partitioning_strategy(self, partition_info: Dict[str, Any], coordinate: TableCoordinate) -> Dict[str, Any]:
+    def _validate_partitioning_strategy(
+        self, partition_info: Dict[str, Any], coordinate: TableCoordinate
+    ) -> Dict[str, Any]:
         """Validate partitioning strategy against best practices."""
         results = {
             "partition_key_valid": True,
             "granularity_appropriate": True,
             "data_distribution_even": True,
             "pruning_opportunities": True,
-            "issues": []
+            "issues": [],
         }
 
         if not partition_info["is_partitioned"]:
-            results["issues"].append({
-                "severity": "medium",
-                "issue_type": "no_partitioning",
-                "description": "表未进行分区，可能影响查询性能和大表维护",
-                "recommendation": "建议根据数据特点和查询模式添加分区"
-            })
+            results["issues"].append(
+                {
+                    "severity": "medium",
+                    "issue_type": "no_partitioning",
+                    "description": "表未进行分区，可能影响查询性能和大表维护",
+                    "recommendation": "建议根据数据特点和查询模式添加分区",
+                }
+            )
             return results
 
         partition_key = partition_info.get("partition_key", "").lower()
@@ -1400,42 +1387,50 @@ class DBFuncTool:
             time_keywords = ["create_time", "update_time", "event_time", "date", "time"]
             if not any(keyword in partition_key for keyword in time_keywords):
                 results["partition_key_valid"] = False
-                results["issues"].append({
-                    "severity": "high",
-                    "issue_type": "poor_key_choice",
-                    "description": f"时间分区键'{partition_key}'不是标准时间字段",
-                    "recommendation": "建议使用create_time、update_time等标准时间字段作为分区键"
-                })
+                results["issues"].append(
+                    {
+                        "severity": "high",
+                        "issue_type": "poor_key_choice",
+                        "description": f"时间分区键'{partition_key}'不是标准时间字段",
+                        "recommendation": "建议使用create_time、update_time等标准时间字段作为分区键",
+                    }
+                )
 
         elif partition_type == "range":
             # Range partitioning validation
             if not partition_key:
                 results["partition_key_valid"] = False
-                results["issues"].append({
-                    "severity": "high",
-                    "issue_type": "missing_partition_key",
-                    "description": "分区表缺少明确的partition_key定义",
-                    "recommendation": "明确指定分区键字段"
-                })
+                results["issues"].append(
+                    {
+                        "severity": "high",
+                        "issue_type": "missing_partition_key",
+                        "description": "分区表缺少明确的partition_key定义",
+                        "recommendation": "明确指定分区键字段",
+                    }
+                )
 
         # Check partition granularity
         partition_count = partition_info.get("partition_count", 0)
         if partition_count > 1000:
             results["granularity_appropriate"] = False
-            results["issues"].append({
-                "severity": "medium",
-                "issue_type": "too_many_partitions",
-                "description": f"分区数量({partition_count})过多，可能影响查询性能",
-                "recommendation": "考虑增大分区粒度或使用动态分区"
-            })
+            results["issues"].append(
+                {
+                    "severity": "medium",
+                    "issue_type": "too_many_partitions",
+                    "description": f"分区数量({partition_count})过多，可能影响查询性能",
+                    "recommendation": "考虑增大分区粒度或使用动态分区",
+                }
+            )
         elif partition_count < 3:
             results["granularity_appropriate"] = False
-            results["issues"].append({
-                "severity": "low",
-                "issue_type": "too_few_partitions",
-                "description": f"分区数量({partition_count})过少，限制了分区裁剪效果",
-                "recommendation": "考虑减小分区粒度以提高查询性能"
-            })
+            results["issues"].append(
+                {
+                    "severity": "low",
+                    "issue_type": "too_few_partitions",
+                    "description": f"分区数量({partition_count})过少，限制了分区裁剪效果",
+                    "recommendation": "考虑减小分区粒度以提高查询性能",
+                }
+            )
 
         # Assess pruning opportunities (simplified)
         # In practice, this would analyze common query patterns
@@ -1444,15 +1439,17 @@ class DBFuncTool:
 
         return results
 
-    def _generate_partitioning_recommendations(self, partition_info: Dict[str, Any], validation_results: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_partitioning_recommendations(
+        self, partition_info: Dict[str, Any], validation_results: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Generate partitioning recommendations and performance impact assessment."""
         recommendations = {
             "recommended_partition": {},
             "performance_impact": {
                 "query_speed_improvement": "unknown",
                 "storage_efficiency": "neutral",
-                "maintenance_overhead": "unknown"
-            }
+                "maintenance_overhead": "unknown",
+            },
         }
 
         if not partition_info["is_partitioned"]:
@@ -1461,13 +1458,13 @@ class DBFuncTool:
                 "suggested_key": "create_time",
                 "suggested_type": "time_based",
                 "estimated_partitions": 30,
-                "rationale": "基于创建时间按月分区，适合大多数业务场景，支持时间范围查询优化"
+                "rationale": "基于创建时间按月分区，适合大多数业务场景，支持时间范围查询优化",
             }
 
             recommendations["performance_impact"] = {
                 "query_speed_improvement": "significant",
                 "storage_efficiency": "improved",
-                "maintenance_overhead": "acceptable"
+                "maintenance_overhead": "acceptable",
             }
 
         else:
@@ -1489,7 +1486,7 @@ class DBFuncTool:
                     "suggested_key": suggested_key,
                     "suggested_type": "time_based",
                     "estimated_partitions": 30,
-                    "rationale": f"建议使用{suggested_key}作为分区键，更符合业务查询模式"
+                    "rationale": f"建议使用{suggested_key}作为分区键，更符合业务查询模式",
                 }
 
             elif any(issue["issue_type"] == "too_many_partitions" for issue in issues):
@@ -1498,84 +1495,92 @@ class DBFuncTool:
                     "suggested_key": partition_key,
                     "suggested_type": "time_based",
                     "estimated_partitions": 12,
-                    "rationale": "建议改用季度或年度分区，减少分区数量"
+                    "rationale": "建议改用季度或年度分区，减少分区数量",
                 }
 
         return recommendations
 
     def _parse_mysql_like_plan(self, plan_text: str, analysis: Dict[str, Any]) -> None:
         """Parse MySQL-like execution plans (MySQL, StarRocks, MariaDB)."""
-        lines = plan_text.strip().split('\n')
+        lines = plan_text.strip().split("\n")
 
         for line in lines:
             line = line.strip().lower()
 
             # Check for table scans
-            if 'table scan' in line or 'all' in line:
-                analysis["hotspots"].append({
-                    "reason": "full_table_scan",
-                    "node": line,
-                    "severity": "high",
-                    "recommendation": "Consider adding appropriate indexes for WHERE conditions"
-                })
-
-            # Check for expensive joins
-            if 'join' in line:
-                analysis["join_analysis"]["join_count"] += 1
-                if 'block nested loop' in line:
-                    analysis["hotspots"].append({
-                        "reason": "expensive_join",
+            if "table scan" in line or "all" in line:
+                analysis["hotspots"].append(
+                    {
+                        "reason": "full_table_scan",
                         "node": line,
                         "severity": "high",
-                        "recommendation": "Consider adding indexes on join columns"
-                    })
+                        "recommendation": "Consider adding appropriate indexes for WHERE conditions",
+                    }
+                )
+
+            # Check for expensive joins
+            if "join" in line:
+                analysis["join_analysis"]["join_count"] += 1
+                if "block nested loop" in line:
+                    analysis["hotspots"].append(
+                        {
+                            "reason": "expensive_join",
+                            "node": line,
+                            "severity": "high",
+                            "recommendation": "Consider adding indexes on join columns",
+                        }
+                    )
                     analysis["join_analysis"]["join_types"].append("block_nested_loop")
 
             # Check for filesort
-            if 'filesort' in line:
-                analysis["hotspots"].append({
-                    "reason": "filesort_operation",
-                    "node": line,
-                    "severity": "medium",
-                    "recommendation": "Consider adding indexes to avoid sorting"
-                })
+            if "filesort" in line:
+                analysis["hotspots"].append(
+                    {
+                        "reason": "filesort_operation",
+                        "node": line,
+                        "severity": "medium",
+                        "recommendation": "Consider adding indexes to avoid sorting",
+                    }
+                )
 
     def _parse_postgres_plan(self, plan_text: str, analysis: Dict[str, Any]) -> None:
         """Parse PostgreSQL execution plans."""
-        lines = plan_text.strip().split('\n')
+        lines = plan_text.strip().split("\n")
 
         for line in lines:
             line = line.strip().lower()
 
             # Check for sequential scans
-            if 'seq scan' in line:
-                analysis["hotspots"].append({
-                    "reason": "sequential_scan",
-                    "node": line,
-                    "severity": "medium",
-                    "recommendation": "Consider adding indexes for better performance"
-                })
+            if "seq scan" in line:
+                analysis["hotspots"].append(
+                    {
+                        "reason": "sequential_scan",
+                        "node": line,
+                        "severity": "medium",
+                        "recommendation": "Consider adding indexes for better performance",
+                    }
+                )
 
             # Check for hash joins
-            if 'hash join' in line:
+            if "hash join" in line:
                 analysis["join_analysis"]["join_count"] += 1
                 analysis["join_analysis"]["join_types"].append("hash_join")
 
             # Check for nested loop joins
-            if 'nested loop' in line:
+            if "nested loop" in line:
                 analysis["join_analysis"]["join_count"] += 1
                 analysis["join_analysis"]["join_types"].append("nested_loop")
 
             # Extract cost estimates
-            if 'cost=' in line:
-                cost_match = line.split('cost=')[1].split()[0]
-                if '..' in cost_match:
-                    total_cost = float(cost_match.split('..')[1])
+            if "cost=" in line:
+                cost_match = line.split("cost=")[1].split()[0]
+                if ".." in cost_match:
+                    total_cost = float(cost_match.split("..")[1])
                     analysis["estimated_cost"] = total_cost
 
             # Extract row estimates
-            if 'rows=' in line:
-                rows_match = line.split('rows=')[1].split()[0]
+            if "rows=" in line:
+                rows_match = line.split("rows=")[1].split()[0]
                 try:
                     row_count = int(float(rows_match))
                     analysis["estimated_rows"] = max(analysis["estimated_rows"], row_count)
@@ -1584,38 +1589,42 @@ class DBFuncTool:
 
     def _parse_sqlite_plan(self, plan_text: str, analysis: Dict[str, Any]) -> None:
         """Parse SQLite/DuckDB execution plans."""
-        lines = plan_text.strip().split('\n')
+        lines = plan_text.strip().split("\n")
 
         for line in lines:
             line = line.strip().lower()
 
             # Check for table scans
-            if 'scan' in line and 'table' in line:
-                analysis["hotspots"].append({
-                    "reason": "table_scan",
-                    "node": line,
-                    "severity": "low",
-                    "recommendation": "Consider query optimization if performance is an issue"
-                })
+            if "scan" in line and "table" in line:
+                analysis["hotspots"].append(
+                    {
+                        "reason": "table_scan",
+                        "node": line,
+                        "severity": "low",
+                        "recommendation": "Consider query optimization if performance is an issue",
+                    }
+                )
 
     def _parse_generic_plan(self, plan_text: str, analysis: Dict[str, Any]) -> None:
         """Generic parsing for unknown dialects."""
-        lines = plan_text.strip().split('\n')
+        lines = plan_text.strip().split("\n")
 
         # Basic heuristics for any execution plan
         for line in lines:
             line = line.strip().lower()
 
             # Look for common performance indicators
-            if any(keyword in line for keyword in ['scan', 'table scan', 'full scan']):
-                analysis["hotspots"].append({
-                    "reason": "potential_scan_operation",
-                    "node": line,
-                    "severity": "medium",
-                    "recommendation": "Review query for potential optimization opportunities"
-                })
+            if any(keyword in line for keyword in ["scan", "table scan", "full scan"]):
+                analysis["hotspots"].append(
+                    {
+                        "reason": "potential_scan_operation",
+                        "node": line,
+                        "severity": "medium",
+                        "recommendation": "Review query for potential optimization opportunities",
+                    }
+                )
 
-            if 'join' in line:
+            if "join" in line:
                 analysis["join_analysis"]["join_count"] += 1
 
         analysis["warnings"].append("Using generic plan analysis - results may be limited")
@@ -1629,7 +1638,9 @@ class DBFuncTool:
             high_severity = len([h for h in hotspots if h.get("severity") == "high"])
             if high_severity > 0:
                 analysis["index_usage"]["index_effectiveness"] = "poor"
-                analysis["index_usage"]["missing_indexes"].append("Consider adding indexes for high-severity operations")
+                analysis["index_usage"]["missing_indexes"].append(
+                    "Consider adding indexes for high-severity operations"
+                )
             else:
                 analysis["index_usage"]["index_effectiveness"] = "fair"
         else:

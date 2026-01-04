@@ -274,12 +274,8 @@ class TestDeepResearchEventConverter:
             output={
                 "error": "SQL语句缺少基本的查询/修改操作关键词(SELECT, INSERT, UPDATE, DELETE等)",
                 "error_type": "syntax",
-                "suggestions": [
-                    "检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)",
-                    "验证括号和引号是否匹配",
-                    "确认表名和列名拼写是否正确"
-                ],
-                "can_retry": False
+                "suggestions": ["检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)", "验证括号和引号是否匹配", "确认表名和列名拼写是否正确"],
+                "can_retry": False,
             },
             status=ActionStatus.FAILED,
             start_time=datetime.now(),
@@ -305,12 +301,8 @@ class TestDeepResearchEventConverter:
             output={
                 "error": "Table 'nonexistent_table' not found or no DDL available",
                 "error_type": "table_not_found",
-                "suggestions": [
-                    "检查表名拼写是否正确",
-                    "确认数据库权限",
-                    "使用search_table工具查找相似表名"
-                ],
-                "can_retry": True
+                "suggestions": ["检查表名拼写是否正确", "确认数据库权限", "使用search_table工具查找相似表名"],
+                "can_retry": True,
             },
             status=ActionStatus.FAILED,
             start_time=datetime.now(),
@@ -336,12 +328,8 @@ class TestDeepResearchEventConverter:
             output={
                 "error": "Connection timeout after 30 seconds",
                 "error_type": "connection",
-                "suggestions": [
-                    "检查数据库服务是否运行",
-                    "验证网络连接",
-                    "确认数据库连接配置"
-                ],
-                "can_retry": True
+                "suggestions": ["检查数据库服务是否运行", "验证网络连接", "确认数据库连接配置"],
+                "can_retry": True,
             },
             status=ActionStatus.FAILED,
             start_time=datetime.now(),
@@ -368,7 +356,7 @@ class TestDeepResearchEventConverter:
                 "error": "Permission denied for table access",
                 "error_type": "permission",
                 "tool_name": "read_query",
-                "can_retry": False
+                "can_retry": False,
             },
             status=ActionStatus.FAILED,
             start_time=datetime.now(),

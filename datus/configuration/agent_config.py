@@ -16,10 +16,12 @@ from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.path_utils import get_files_from_glob_pattern
 
+
 # Configuration data classes for v2.4 features
 @dataclass
 class ScenarioConfig:
     """Scenario-specific configuration."""
+
     enabled: bool = True
     preflight_tools: List[str] = field(default_factory=list)
     workflow: str = ""
@@ -29,38 +31,44 @@ class ScenarioConfig:
     continue_on_failure: bool = True
     cache_ttl_seconds: int = 300
 
+
 @dataclass
 class SQLReviewPreflightConfig:
     """SQL review preflight configuration (v2.4)."""
+
     enabled: bool = True
-    default_tool_sequence: List[str] = field(default_factory=lambda: [
-        "describe_table", "search_external_knowledge", "read_query",
-        "get_table_ddl", "analyze_query_plan", "check_table_conflicts", "validate_partitioning"
-    ])
+    default_tool_sequence: List[str] = field(
+        default_factory=lambda: [
+            "describe_table",
+            "search_external_knowledge",
+            "read_query",
+            "get_table_ddl",
+            "analyze_query_plan",
+            "check_table_conflicts",
+            "validate_partitioning",
+        ]
+    )
     cache_enabled: bool = True
     cache_ttl_seconds: int = 300
     tool_timeout_seconds: int = 30
     continue_on_failure: bool = True
 
     # Enhanced error handling options
-    error_handling: Dict[str, Any] = field(default_factory=lambda: {
-        "classify_errors": True,
-        "include_recovery_suggestions": True,
-        "detailed_error_context": True
-    })
+    error_handling: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "classify_errors": True,
+            "include_recovery_suggestions": True,
+            "detailed_error_context": True,
+        }
+    )
 
     # Table existence checking
-    table_existence_check: Dict[str, Any] = field(default_factory=lambda: {
-        "enabled": True,
-        "on_missing": "skip_schema_tools",
-        "max_suggestions": 3
-    })
+    table_existence_check: Dict[str, Any] = field(
+        default_factory=lambda: {"enabled": True, "on_missing": "skip_schema_tools", "max_suggestions": 3}
+    )
 
     # SQL syntax validation configuration
-    syntax_validation: Dict[str, Any] = field(default_factory=lambda: {
-        "strict_mode": True,
-        "use_dialect": True
-    })
+    syntax_validation: Dict[str, Any] = field(default_factory=lambda: {"strict_mode": True, "use_dialect": True})
 
 
 @dataclass

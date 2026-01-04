@@ -7,8 +7,9 @@ Unit tests for PreflightOrchestrator.
 """
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from datus.agent.node.preflight_orchestrator import PreflightOrchestrator, PreflightToolResult
 from datus.configuration.agent_config import AgentConfig
@@ -40,10 +41,7 @@ class TestPreflightOrchestrator:
     @pytest.fixture
     def orchestrator(self, mock_agent_config, mock_plan_hooks):
         """Create PreflightOrchestrator instance."""
-        return PreflightOrchestrator(
-            agent_config=mock_agent_config,
-            plan_hooks=mock_plan_hooks
-        )
+        return PreflightOrchestrator(agent_config=mock_agent_config, plan_hooks=mock_plan_hooks)
 
     @pytest.fixture
     def mock_workflow(self):
@@ -54,7 +52,7 @@ class TestPreflightOrchestrator:
         workflow.task.database_name = "test_db"
         workflow.task.schema_name = "public"
         workflow.task.task = "Show me all users"
-        workflow.context = type('Context', (), {})()
+        workflow.context = type("Context", (), {})()
         workflow.context.preflight_results = []
         return workflow
 
@@ -70,7 +68,7 @@ class TestPreflightOrchestrator:
             success=True,
             result={"tables": ["users", "orders"]},
             execution_time=1.5,
-            cache_hit=False
+            cache_hit=False,
         )
 
         assert result.tool_name == "search_table"
@@ -87,11 +85,9 @@ class TestPreflightOrchestrator:
     @pytest.mark.asyncio
     async def test_execute_search_table_success(self, orchestrator):
         """Test successful search_table execution."""
-        with patch.object(orchestrator, '_get_db_func_tool') as mock_get_tool:
+        with patch.object(orchestrator, "_get_db_func_tool") as mock_get_tool:
             mock_tool = MagicMock()
-            mock_tool.search_table.return_value = MagicMock(
-                result=[{"table_name": "users"}]
-            )
+            mock_tool.search_table.return_value = MagicMock(result=[{"table_name": "users"}])
             mock_get_tool.return_value = mock_tool
 
             result = await orchestrator._execute_search_table(
@@ -105,11 +101,9 @@ class TestPreflightOrchestrator:
     @pytest.mark.asyncio
     async def test_execute_describe_table_success(self, orchestrator):
         """Test successful describe_table execution."""
-        with patch.object(orchestrator, '_get_db_func_tool') as mock_get_tool:
+        with patch.object(orchestrator, "_get_db_func_tool") as mock_get_tool:
             mock_tool = MagicMock()
-            mock_tool.describe_table.return_value = MagicMock(
-                result={"columns": [{"name": "id", "type": "INTEGER"}]}
-            )
+            mock_tool.describe_table.return_value = MagicMock(result={"columns": [{"name": "id", "type": "INTEGER"}]})
             mock_get_tool.return_value = mock_tool
 
             result = await orchestrator._execute_describe_table(
@@ -123,7 +117,7 @@ class TestPreflightOrchestrator:
     @pytest.mark.asyncio
     async def test_execute_search_reference_sql_success(self, orchestrator):
         """Test successful search_reference_sql execution."""
-        with patch.object(orchestrator, '_get_context_search_tools') as mock_get_tool:
+        with patch.object(orchestrator, "_get_context_search_tools") as mock_get_tool:
             mock_tool = MagicMock()
             mock_tool.search_reference_sql.return_value = MagicMock(
                 result=[{"sql": "SELECT * FROM users", "description": "Get all users"}]
@@ -139,7 +133,7 @@ class TestPreflightOrchestrator:
     @pytest.mark.asyncio
     async def test_execute_parse_temporal_expressions_success(self, orchestrator):
         """Test successful parse_temporal_expressions execution."""
-        with patch.object(orchestrator, '_get_date_parsing_tools') as mock_get_tool:
+        with patch.object(orchestrator, "_get_date_parsing_tools") as mock_get_tool:
             mock_tool = MagicMock()
             mock_tool.extract_and_parse_dates.return_value = MagicMock(
                 result=[{"original": "last month", "parsed": "2024-11-01"}]
@@ -153,20 +147,17 @@ class TestPreflightOrchestrator:
             mock_tool.extract_and_parse_dates.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_run_preflight_tools_with_cache_hit(self, orchestrator, mock_workflow, action_history_manager, mock_plan_hooks):
+    async def test_run_preflight_tools_with_cache_hit(
+        self, orchestrator, mock_workflow, action_history_manager, mock_plan_hooks
+    ):
         """Test preflight execution with cache hit."""
         # Setup cache hit
-        mock_plan_hooks.query_cache.get.return_value = {
-            "success": True,
-            "tables": [{"table_name": "users"}]
-        }
+        mock_plan_hooks.query_cache.get.return_value = {"success": True, "tables": [{"table_name": "users"}]}
 
         # Collect actions
         actions = []
         async for action in orchestrator.run_preflight_tools(
-            workflow=mock_workflow,
-            action_history_manager=action_history_manager,
-            required_tools=["search_table"]
+            workflow=mock_workflow, action_history_manager=action_history_manager, required_tools=["search_table"]
         ):
             actions.append(action)
 
@@ -177,25 +168,25 @@ class TestPreflightOrchestrator:
         assert len(actions) >= 2  # At least tool start and result actions
 
         # Verify results were injected into context
-        assert hasattr(mock_workflow.context, 'preflight_results')
+        assert hasattr(mock_workflow.context, "preflight_results")
         assert len(mock_workflow.context.preflight_results) > 0
 
     @pytest.mark.asyncio
-    async def test_run_preflight_tools_with_cache_miss(self, orchestrator, mock_workflow, action_history_manager, mock_plan_hooks):
+    async def test_run_preflight_tools_with_cache_miss(
+        self, orchestrator, mock_workflow, action_history_manager, mock_plan_hooks
+    ):
         """Test preflight execution with cache miss."""
         # Setup cache miss
         mock_plan_hooks.query_cache.get.return_value = None
 
         # Mock successful tool execution
-        with patch.object(orchestrator, '_execute_search_table') as mock_execute:
+        with patch.object(orchestrator, "_execute_search_table") as mock_execute:
             mock_execute.return_value = {"success": True, "tables": ["users"]}
 
             # Collect actions
             actions = []
             async for action in orchestrator.run_preflight_tools(
-                workflow=mock_workflow,
-                action_history_manager=action_history_manager,
-                required_tools=["search_table"]
+                workflow=mock_workflow, action_history_manager=action_history_manager, required_tools=["search_table"]
             ):
                 actions.append(action)
 
@@ -207,21 +198,21 @@ class TestPreflightOrchestrator:
             mock_execute.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_run_preflight_tools_with_failure(self, orchestrator, mock_workflow, action_history_manager, mock_plan_hooks):
+    async def test_run_preflight_tools_with_failure(
+        self, orchestrator, mock_workflow, action_history_manager, mock_plan_hooks
+    ):
         """Test preflight execution with tool failure."""
         # Setup cache miss
         mock_plan_hooks.query_cache.get.return_value = None
 
         # Mock failed tool execution
-        with patch.object(orchestrator, '_execute_search_table') as mock_execute:
+        with patch.object(orchestrator, "_execute_search_table") as mock_execute:
             mock_execute.side_effect = Exception("Tool failed")
 
             # Collect actions
             actions = []
             async for action in orchestrator.run_preflight_tools(
-                workflow=mock_workflow,
-                action_history_manager=action_history_manager,
-                required_tools=["search_table"]
+                workflow=mock_workflow, action_history_manager=action_history_manager, required_tools=["search_table"]
             ):
                 actions.append(action)
 
@@ -238,15 +229,15 @@ class TestPreflightOrchestrator:
         """Test injecting preflight results into workflow context."""
         results = [
             PreflightToolResult("search_table", True, {"tables": ["users"]}),
-            PreflightToolResult("describe_table", True, {"tables_described": [{"table_name": "users"}]})
+            PreflightToolResult("describe_table", True, {"tables_described": [{"table_name": "users"}]}),
         ]
 
         orchestrator._inject_preflight_results_into_context(mock_workflow, results)
 
         # Verify structured data extraction
-        assert hasattr(mock_workflow.context, 'schema_info')
-        assert hasattr(mock_workflow.context, 'reference_sqls')
-        assert hasattr(mock_workflow.context, 'temporal_expressions')
+        assert hasattr(mock_workflow.context, "schema_info")
+        assert hasattr(mock_workflow.context, "reference_sqls")
+        assert hasattr(mock_workflow.context, "temporal_expressions")
 
         # Verify preflight results
         assert len(mock_workflow.context.preflight_results) == 2

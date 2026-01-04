@@ -80,12 +80,7 @@ class EnhancedPreflightTools:
             return None
 
     async def analyze_query_plan(
-        self,
-        sql: str,
-        catalog: str = "default_catalog",
-        database: str = "",
-        schema: str = "",
-        **kwargs
+        self, sql: str, catalog: str = "default_catalog", database: str = "", schema: str = "", **kwargs
     ) -> FuncToolResult:
         """
         Analyze query execution plan for performance insights.
@@ -102,10 +97,7 @@ class EnhancedPreflightTools:
         try:
             connector = self._get_connector(catalog, database, schema)
             if not connector:
-                return FuncToolResult(
-                    success=0,
-                    error="No database connector available for query plan analysis"
-                )
+                return FuncToolResult(success=0, error="No database connector available for query plan analysis")
 
             # Determine EXPLAIN syntax based on database type
             db_type = connector.dialect.lower()
@@ -129,19 +121,20 @@ class EnhancedPreflightTools:
 
             if not result or not result.success:
                 return FuncToolResult(
-                    success=0,
-                    error=f"Failed to execute EXPLAIN query: {result.error if result else 'Unknown error'}"
+                    success=0, error=f"Failed to execute EXPLAIN query: {result.error if result else 'Unknown error'}"
                 )
 
             plan_text = ""
             if result.sql_return:
                 # Convert result to readable format
-                if hasattr(result.sql_return, 'to_pylist'):
+                if hasattr(result.sql_return, "to_pylist"):
                     plan_rows = result.sql_return.to_pylist()
-                    plan_text = "\n".join([
-                        " | ".join([str(row.get(col, "")) for col in result.sql_return.column_names])
-                        for row in plan_rows
-                    ])
+                    plan_text = "\n".join(
+                        [
+                            " | ".join([str(row.get(col, "")) for col in result.sql_return.column_names])
+                            for row in plan_rows
+                        ]
+                    )
                 else:
                     plan_text = str(result.sql_return)
 
@@ -158,8 +151,8 @@ class EnhancedPreflightTools:
                     "join_analysis": analysis.get("join_analysis", {}),
                     "index_usage": analysis.get("index_usage", {}),
                     "execution_time": execution_time,
-                    "recommendations": analysis.get("recommendations", [])
-                }
+                    "recommendations": analysis.get("recommendations", []),
+                },
             )
 
         except Exception as e:
@@ -174,7 +167,7 @@ class EnhancedPreflightTools:
             "hotspots": [],
             "join_analysis": {},
             "index_usage": {},
-            "recommendations": []
+            "recommendations": [],
         }
 
         if not plan_text:
@@ -185,6 +178,7 @@ class EnhancedPreflightTools:
         # Extract cost estimates
         if "cost=" in plan_lower:
             import re
+
             cost_match = re.search(r"cost=([\d.]+)", plan_lower)
             if cost_match:
                 analysis["estimated_cost"] = float(cost_match.group(1))
@@ -192,6 +186,7 @@ class EnhancedPreflightTools:
         # Extract row estimates
         if "rows=" in plan_lower:
             import re
+
             rows_match = re.search(r"rows=([\d.]+)", plan_lower)
             if rows_match:
                 analysis["estimated_rows"] = float(rows_match.group(1))
@@ -237,12 +232,7 @@ class EnhancedPreflightTools:
         return analysis
 
     async def check_table_conflicts(
-        self,
-        table_name: str,
-        catalog: str = "default_catalog",
-        database: str = "",
-        schema: str = "",
-        **kwargs
+        self, table_name: str, catalog: str = "default_catalog", database: str = "", schema: str = "", **kwargs
     ) -> FuncToolResult:
         """
         Check for table structure conflicts and duplicate builds.
@@ -258,17 +248,11 @@ class EnhancedPreflightTools:
         """
         try:
             if not self.has_schema:
-                return FuncToolResult(
-                    success=0,
-                    error="Schema metadata not available for conflict checking"
-                )
+                return FuncToolResult(success=0, error="Schema metadata not available for conflict checking")
 
             # Get table schema information
             table_info = self.schema_rag.get_table_schema(
-                table_name=table_name,
-                catalog_name=catalog,
-                database_name=database,
-                schema_name=schema
+                table_name=table_name, catalog_name=catalog, database_name=database, schema_name=schema
             )
 
             if not table_info:
@@ -279,8 +263,8 @@ class EnhancedPreflightTools:
                         "matches": [],
                         "duplicate_build_risk": "unknown",
                         "layering_violations": [],
-                        "analysis": "Table not found in schema metadata"
-                    }
+                        "analysis": "Table not found in schema metadata",
+                    },
                 )
 
             # Search for similar table structures
@@ -301,8 +285,8 @@ class EnhancedPreflightTools:
                     "layering_violations": layering_violations,
                     "recommendations": self._generate_conflict_recommendations(
                         similar_tables, layering_violations, duplicate_risk
-                    )
-                }
+                    ),
+                },
             )
 
         except Exception as e:
@@ -316,10 +300,7 @@ class EnhancedPreflightTools:
         try:
             # Get all tables in the same database/schema
             all_tables = self.schema_rag.search_tables(
-                catalog_name=catalog,
-                database_name=database,
-                schema_name=schema,
-                limit=100
+                catalog_name=catalog, database_name=database, schema_name=schema, limit=100
             )
 
             if not all_tables:
@@ -341,12 +322,14 @@ class EnhancedPreflightTools:
                     union = table_columns.union(candidate_columns)
 
                     if union and (len(intersection) / len(union)) > 0.6:  # 60% similarity threshold
-                        similar_tables.append({
-                            "table_name": candidate_table.get("table_name"),
-                            "similarity_score": len(intersection) / len(union),
-                            "shared_columns": list(intersection),
-                            "column_count": candidate_count
-                        })
+                        similar_tables.append(
+                            {
+                                "table_name": candidate_table.get("table_name"),
+                                "similarity_score": len(intersection) / len(union),
+                                "shared_columns": list(intersection),
+                                "column_count": candidate_count,
+                            }
+                        )
 
         except Exception as e:
             logger.warning(f"Error finding similar tables: {e}")
@@ -365,12 +348,7 @@ class EnhancedPreflightTools:
 
         table_lower = table_name.lower()
 
-        layer_patterns = [
-            ("ODS", ods_patterns),
-            ("DWD", dwd_patterns),
-            ("DWS", dws_patterns),
-            ("ADS", ads_patterns)
-        ]
+        layer_patterns = [("ODS", ods_patterns), ("DWD", dwd_patterns), ("DWS", dws_patterns), ("ADS", ads_patterns)]
 
         detected_layers = []
         for layer_name, patterns in layer_patterns:
@@ -414,16 +392,15 @@ class EnhancedPreflightTools:
         return "low"
 
     def _generate_conflict_recommendations(
-        self,
-        similar_tables: List[Dict],
-        violations: List[str],
-        risk_level: str
+        self, similar_tables: List[Dict], violations: List[str], risk_level: str
     ) -> List[str]:
         """Generate recommendations based on conflict analysis."""
         recommendations = []
 
         if risk_level == "high":
-            recommendations.append("HIGH RISK: Significant structural duplication detected - review business requirements")
+            recommendations.append(
+                "HIGH RISK: Significant structural duplication detected - review business requirements"
+            )
             recommendations.append("Consider consolidating similar tables or clarifying business logic differences")
 
         elif risk_level == "medium":
@@ -438,19 +415,12 @@ class EnhancedPreflightTools:
         for similar in similar_tables[:3]:  # Limit to top 3 recommendations
             table_name = similar.get("table_name")
             score = similar.get("similarity_score", 0)
-            recommendations.append(
-                f"Review relationship with similar table '{table_name}' (similarity: {score:.1%})"
-            )
+            recommendations.append(f"Review relationship with similar table '{table_name}' (similarity: {score:.1%})")
 
         return recommendations
 
     async def validate_partitioning(
-        self,
-        table_name: str,
-        catalog: str = "default_catalog",
-        database: str = "",
-        schema: str = "",
-        **kwargs
+        self, table_name: str, catalog: str = "default_catalog", database: str = "", schema: str = "", **kwargs
     ) -> FuncToolResult:
         """
         Validate table partitioning strategy and provide recommendations.
@@ -467,10 +437,7 @@ class EnhancedPreflightTools:
         try:
             connector = self._get_connector(catalog, database, schema)
             if not connector:
-                return FuncToolResult(
-                    success=0,
-                    error="No database connector available for partitioning validation"
-                )
+                return FuncToolResult(success=0, error="No database connector available for partitioning validation")
 
             # Get table DDL
             ddl_result = connector.get_table_ddl(table_name, catalog, database, schema)
@@ -483,8 +450,8 @@ class EnhancedPreflightTools:
                         "validation_results": {},
                         "issues": ["Unable to retrieve table DDL"],
                         "recommended_partition": {},
-                        "performance_impact": {}
-                    }
+                        "performance_impact": {},
+                    },
                 )
 
             ddl_text = ddl_result.result or ""
@@ -494,14 +461,10 @@ class EnhancedPreflightTools:
             validation_results = self._validate_partition_strategy(partition_info, table_name)
 
             # Generate recommendations
-            recommendations = self._generate_partition_recommendations(
-                partition_info, validation_results, table_name
-            )
+            recommendations = self._generate_partition_recommendations(partition_info, validation_results, table_name)
 
             # Assess performance impact
-            performance_impact = self._assess_partition_performance_impact(
-                partition_info, validation_results
-            )
+            performance_impact = self._assess_partition_performance_impact(partition_info, validation_results)
 
             return FuncToolResult(
                 success=1,
@@ -511,8 +474,8 @@ class EnhancedPreflightTools:
                     "validation_results": validation_results,
                     "issues": validation_results.get("issues", []),
                     "recommended_partition": recommendations,
-                    "performance_impact": performance_impact
-                }
+                    "performance_impact": performance_impact,
+                },
             )
 
         except Exception as e:
@@ -527,7 +490,7 @@ class EnhancedPreflightTools:
             "partition_key": None,
             "partition_expression": None,
             "subpartition_type": None,
-            "subpartition_key": None
+            "subpartition_key": None,
         }
 
         ddl_lower = ddl_text.lower()
@@ -564,12 +527,7 @@ class EnhancedPreflightTools:
 
     def _validate_partition_strategy(self, partition_info: Dict, table_name: str) -> Dict[str, Any]:
         """Validate partitioning strategy."""
-        validation_results = {
-            "is_valid": True,
-            "issues": [],
-            "warnings": [],
-            "score": 100
-        }
+        validation_results = {"is_valid": True, "issues": [], "warnings": [], "score": 100}
 
         if not partition_info.get("is_partitioned"):
             # Not partitioned - check if it should be
@@ -606,25 +564,18 @@ class EnhancedPreflightTools:
 
             # Avoid high-cardinality keys
             if any(indicator in key_lower for indicator in ["id", "uuid", "hash"]):
-                validation_results["warnings"].append(
-                    "High-cardinality partition key may cause performance issues"
-                )
+                validation_results["warnings"].append("High-cardinality partition key may cause performance issues")
                 validation_results["score"] -= 10
 
         # Validate partition type
         if partition_type == "HASH" and not any(indicator in partition_key.lower() for indicator in ["id", "key"]):
-            validation_results["warnings"].append(
-                "HASH partitioning typically works best with ID/key columns"
-            )
+            validation_results["warnings"].append("HASH partitioning typically works best with ID/key columns")
             validation_results["score"] -= 10
 
         return validation_results
 
     def _generate_partition_recommendations(
-        self,
-        partition_info: Dict,
-        validation_results: Dict,
-        table_name: str
+        self, partition_info: Dict, validation_results: Dict, table_name: str
     ) -> Dict[str, Any]:
         """Generate partitioning recommendations."""
         recommendations = {}
@@ -661,17 +612,13 @@ class EnhancedPreflightTools:
 
         return recommendations
 
-    def _assess_partition_performance_impact(
-        self,
-        partition_info: Dict,
-        validation_results: Dict
-    ) -> Dict[str, Any]:
+    def _assess_partition_performance_impact(self, partition_info: Dict, validation_results: Dict) -> Dict[str, Any]:
         """Assess performance impact of partitioning strategy."""
         impact = {
             "query_performance": "neutral",
             "storage_efficiency": "neutral",
             "maintenance_overhead": "low",
-            "score": validation_results.get("score", 100)
+            "score": validation_results.get("score", 100),
         }
 
         if not partition_info.get("is_partitioned"):

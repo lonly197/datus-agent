@@ -297,7 +297,7 @@ class Node(ErrorHandlerMixin, ABC):
             error_result = self.create_error_result(
                 ErrorCode.NODE_EXECUTION_FAILED,
                 f"Unexpected error during {self.type} execution: {str(e)}",
-                "node_execution"
+                "node_execution",
             )
             logger.error(f"Node execution failed: {error_result.error}", exc_info=True)
             self.fail(error_result.error)
@@ -459,17 +459,17 @@ class Node(ErrorHandlerMixin, ABC):
 
         try:
             # Handle different input types
-            if hasattr(self.input, '__dict__'):
+            if hasattr(self.input, "__dict__"):
                 for key, value in self.input.__dict__.items():
                     # Common fields to summarize
-                    if key in ['sql_query', 'task', 'database_name', 'input_text']:
+                    if key in ["sql_query", "task", "database_name", "input_text"]:
                         if isinstance(value, str) and len(value) > 100:
                             summary[key] = value[:100] + "..."
                         else:
                             summary[key] = str(value) if value is not None else None
             elif isinstance(self.input, dict):
                 for key, value in self.input.items():
-                    if key in ['sql_query', 'task', 'database_name', 'input_text']:
+                    if key in ["sql_query", "task", "database_name", "input_text"]:
                         if isinstance(value, str) and len(value) > 100:
                             summary[key] = value[:100] + "..."
                         else:
@@ -485,7 +485,7 @@ class Node(ErrorHandlerMixin, ABC):
         error_message: str,
         operation: str,
         error_details: Optional[Dict[str, Any]] = None,
-        retryable: bool = False
+        retryable: bool = False,
     ) -> NodeErrorResult:
         """
         Create a standardized error result for this node.
@@ -501,9 +501,8 @@ class Node(ErrorHandlerMixin, ABC):
             NodeErrorResult with comprehensive error information
         """
         from datus.utils.error_handling import _create_node_error_result
-        return _create_node_error_result(
-            self, error_code, error_message, operation, error_details, retryable
-        )
+
+        return _create_node_error_result(self, error_code, error_message, operation, error_details, retryable)
 
     def _summarize_input(self) -> Dict[str, Any]:
         """
@@ -519,7 +518,7 @@ class Node(ErrorHandlerMixin, ABC):
         summary = {}
 
         # Extract common fields that are useful for debugging
-        common_fields = ['sql_query', 'task', 'database_name', 'table_schemas', 'task_id']
+        common_fields = ["sql_query", "task", "database_name", "table_schemas", "task_id"]
         for field in common_fields:
             if hasattr(input_obj, field):
                 value = getattr(input_obj, field)

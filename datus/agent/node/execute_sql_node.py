@@ -8,9 +8,9 @@ from typing import AsyncGenerator, Dict, Optional
 
 from pydantic import ValidationError
 
+from datus.agent.error_handling import unified_error_handler
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
-from datus.agent.error_handling import unified_error_handler
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import ExecuteSQLInput, ExecuteSQLResult
 from datus.utils.loggings import get_logger
@@ -94,7 +94,7 @@ class ExecuteSQLNode(Node):
             raise DatusException(
                 ErrorCode.DB_CONNECTION_FAILED,
                 "Database connection not initialized in workflow",
-                {"database_name": getattr(self.input, 'database_name', 'unknown') if self.input else {}}
+                {"database_name": getattr(self.input, "database_name", "unknown") if self.input else {}},
             )
 
         logger.debug(f"SQL execution input: {self.input}")
@@ -103,9 +103,7 @@ class ExecuteSQLNode(Node):
         timeout = None
         if hasattr(self.input, "query_timeout_seconds") and self.input.query_timeout_seconds:
             timeout = int(self.input.query_timeout_seconds)
-        elif getattr(self, "agent_config", None) and getattr(
-            self.agent_config, "default_query_timeout_seconds", None
-        ):
+        elif getattr(self, "agent_config", None) and getattr(self.agent_config, "default_query_timeout_seconds", None):
             timeout = int(self.agent_config.default_query_timeout_seconds)
 
         # Run blocking execute in thread and enforce timeout if provided
@@ -124,16 +122,14 @@ class ExecuteSQLNode(Node):
                     try:
                         db_connector.close()
                     except (AttributeError, ConnectionError, Exception) as cleanup_error:
-                        logger.warning(
-                            f"Failed to close database connection during timeout cleanup: {cleanup_error}"
-                        )
+                        logger.warning(f"Failed to close database connection during timeout cleanup: {cleanup_error}")
                     raise DatusException(
                         ErrorCode.DB_EXECUTION_TIMEOUT,
                         f"Query timed out after {timeout} seconds",
                         {
                             "timeout_seconds": timeout,
-                            "sql_preview": self.input.sql_query[:100] if self.input.sql_query else ""
-                        }
+                            "sql_preview": self.input.sql_query[:100] if self.input.sql_query else "",
+                        },
                     )
         else:
             result = db_connector.execute(self.input)

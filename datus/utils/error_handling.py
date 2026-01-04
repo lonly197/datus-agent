@@ -33,7 +33,7 @@ class NodeErrorResult(BaseResult):
         node_context: Optional[Dict[str, Any]] = None,
         retryable: bool = False,
         recovery_suggestions: Optional[List[str]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize unified error result.
@@ -47,11 +47,7 @@ class NodeErrorResult(BaseResult):
             retryable: Whether this error can be retried
             recovery_suggestions: List of suggested recovery actions
         """
-        super().__init__(
-            success=success,
-            error=error_message,
-            **kwargs
-        )
+        super().__init__(success=success, error=error_message, **kwargs)
 
         self.error_code = error_code
         self.error_details = error_details or {}
@@ -61,18 +57,15 @@ class NodeErrorResult(BaseResult):
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
-        base_dict = super().to_dict() if hasattr(super(), 'to_dict') else {
-            'success': self.success,
-            'error': self.error
-        }
+        base_dict = super().to_dict() if hasattr(super(), "to_dict") else {"success": self.success, "error": self.error}
 
         return {
             **base_dict,
-            'error_code': self.error_code,
-            'error_details': self.error_details,
-            'node_context': self.node_context,
-            'retryable': self.retryable,
-            'recovery_suggestions': self.recovery_suggestions
+            "error_code": self.error_code,
+            "error_details": self.error_details,
+            "node_context": self.node_context,
+            "retryable": self.retryable,
+            "recovery_suggestions": self.recovery_suggestions,
         }
 
 
@@ -90,6 +83,7 @@ def unified_error_handler(node_type: str, operation: str):
     Returns:
         Decorated function that handles errors consistently
     """
+
     def decorator(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
@@ -100,46 +94,48 @@ def unified_error_handler(node_type: str, operation: str):
                 logger.error(
                     f"{node_type}.{operation} failed with DatusException: {e}",
                     extra={
-                        'error_code': e.code.code,
-                        'node_type': node_type,
-                        'operation': operation,
-                        'node_id': getattr(self, 'id', 'unknown')
-                    }
+                        "error_code": e.code.code,
+                        "node_type": node_type,
+                        "operation": operation,
+                        "node_id": getattr(self, "id", "unknown"),
+                    },
                 )
                 raise
             except json.JSONDecodeError as e:
                 # Handle JSON parsing errors specifically
                 error_details = {
-                    'json_error': str(e),
-                    'doc': e.doc[:500] + "..." if len(e.doc) > 500 else e.doc,
-                    'pos': e.pos
+                    "json_error": str(e),
+                    "doc": e.doc[:500] + "..." if len(e.doc) > 500 else e.doc,
+                    "pos": e.pos,
                 }
                 return _create_node_error_result(
-                    self, ErrorCode.COMMON_JSON_PARSE_ERROR,
+                    self,
+                    ErrorCode.COMMON_JSON_PARSE_ERROR,
                     f"JSON parsing failed in {operation}: {str(e)}",
-                    operation, error_details
+                    operation,
+                    error_details,
                 )
             except ConnectionError as e:
                 # Handle connection errors
-                error_details = {
-                    'connection_error': str(e),
-                    'operation': operation
-                }
+                error_details = {"connection_error": str(e), "operation": operation}
                 return _create_node_error_result(
-                    self, ErrorCode.DB_CONNECTION_FAILED,
+                    self,
+                    ErrorCode.DB_CONNECTION_FAILED,
                     f"Connection failed during {operation}: {str(e)}",
-                    operation, error_details, retryable=True
+                    operation,
+                    error_details,
+                    retryable=True,
                 )
             except TimeoutError as e:
                 # Handle timeout errors
-                error_details = {
-                    'timeout_error': str(e),
-                    'operation': operation
-                }
+                error_details = {"timeout_error": str(e), "operation": operation}
                 return _create_node_error_result(
-                    self, ErrorCode.DB_EXECUTION_TIMEOUT,
+                    self,
+                    ErrorCode.DB_EXECUTION_TIMEOUT,
                     f"Operation timed out during {operation}: {str(e)}",
-                    operation, error_details, retryable=True
+                    operation,
+                    error_details,
+                    retryable=True,
                 )
             except Exception as e:
                 # Handle all other exceptions
@@ -147,25 +143,24 @@ def unified_error_handler(node_type: str, operation: str):
                     f"{node_type}.{operation} failed with unexpected error: {str(e)}",
                     exc_info=True,
                     extra={
-                        'node_type': node_type,
-                        'operation': operation,
-                        'node_id': getattr(self, 'id', 'unknown'),
-                        'stack_trace': traceback.format_exc()
-                    }
+                        "node_type": node_type,
+                        "operation": operation,
+                        "node_id": getattr(self, "id", "unknown"),
+                        "stack_trace": traceback.format_exc(),
+                    },
                 )
 
                 return _create_node_error_result(
-                    self, ErrorCode.NODE_EXECUTION_FAILED,
+                    self,
+                    ErrorCode.NODE_EXECUTION_FAILED,
                     f"{operation} failed: {str(e)}",
                     operation,
-                    {
-                        'unexpected_error': str(e),
-                        'stack_trace': traceback.format_exc()
-                    },
-                    retryable=_is_retryable_error(e)
+                    {"unexpected_error": str(e), "stack_trace": traceback.format_exc()},
+                    retryable=_is_retryable_error(e),
                 )
 
         return wrapper
+
     return decorator
 
 
@@ -175,7 +170,7 @@ def _create_node_error_result(
     error_message: str,
     operation: str,
     error_details: Optional[Dict[str, Any]] = None,
-    retryable: bool = False
+    retryable: bool = False,
 ) -> NodeErrorResult:
     """
     Create a standardized node error result.
@@ -193,11 +188,11 @@ def _create_node_error_result(
     """
     # Gather node context information
     node_context = {
-        'node_id': getattr(node_instance, 'id', 'unknown'),
-        'node_type': getattr(node_instance, 'type', 'unknown'),
-        'operation': operation,
-        'start_time': getattr(node_instance, 'start_time', None),
-        'input_summary': _summarize_node_input(node_instance)
+        "node_id": getattr(node_instance, "id", "unknown"),
+        "node_type": getattr(node_instance, "type", "unknown"),
+        "operation": operation,
+        "start_time": getattr(node_instance, "start_time", None),
+        "input_summary": _summarize_node_input(node_instance),
     }
 
     # Determine recovery suggestions based on error type
@@ -207,13 +202,10 @@ def _create_node_error_result(
         success=False,
         error_code=error_code.code,
         error_message=error_message,
-        error_details={
-            **(error_details or {}),
-            'stack_trace': traceback.format_exc()
-        },
+        error_details={**(error_details or {}), "stack_trace": traceback.format_exc()},
         node_context=node_context,
         retryable=retryable,
-        recovery_suggestions=recovery_suggestions
+        recovery_suggestions=recovery_suggestions,
     )
 
 
@@ -227,14 +219,14 @@ def _summarize_node_input(node_instance) -> Dict[str, Any]:
     Returns:
         Dictionary with input summary
     """
-    if not hasattr(node_instance, 'input') or not node_instance.input:
+    if not hasattr(node_instance, "input") or not node_instance.input:
         return {}
 
     input_obj = node_instance.input
     summary = {}
 
     # Extract common fields that are useful for debugging
-    common_fields = ['sql_query', 'task', 'database_name', 'table_schemas', 'task_id']
+    common_fields = ["sql_query", "task", "database_name", "table_schemas", "task_id"]
     for field in common_fields:
         if hasattr(input_obj, field):
             value = getattr(input_obj, field)
@@ -266,19 +258,9 @@ def _is_retryable_error(error: Exception) -> bool:
 
     # Check for specific error messages that indicate retryable conditions
     error_message = str(error).lower()
-    retryable_messages = [
-        'connection',
-        'timeout',
-        'network',
-        'temporary',
-        'unavailable',
-        'overload'
-    ]
+    retryable_messages = ["connection", "timeout", "network", "temporary", "unavailable", "overload"]
 
-    return (
-        isinstance(error, retryable_error_types) or
-        any(msg in error_message for msg in retryable_messages)
-    )
+    return isinstance(error, retryable_error_types) or any(msg in error_message for msg in retryable_messages)
 
 
 def _generate_recovery_suggestions(error_code: ErrorCode, operation: str) -> List[str]:
@@ -296,54 +278,34 @@ def _generate_recovery_suggestions(error_code: ErrorCode, operation: str) -> Lis
 
     # Error-code-specific suggestions
     if error_code == ErrorCode.DB_CONNECTION_FAILED:
-        suggestions.extend([
-            "Check database connection settings",
-            "Verify database server is running",
-            "Check network connectivity"
-        ])
+        suggestions.extend(
+            ["Check database connection settings", "Verify database server is running", "Check network connectivity"]
+        )
     elif error_code == ErrorCode.DB_EXECUTION_TIMEOUT:
-        suggestions.extend([
-            "Increase query timeout settings",
-            "Optimize the SQL query",
-            "Check database performance"
-        ])
+        suggestions.extend(["Increase query timeout settings", "Optimize the SQL query", "Check database performance"])
     elif error_code == ErrorCode.COMMON_JSON_PARSE_ERROR:
-        suggestions.extend([
-            "Validate JSON format",
-            "Check for special characters in the input",
-            "Review the prompt template"
-        ])
+        suggestions.extend(
+            ["Validate JSON format", "Check for special characters in the input", "Review the prompt template"]
+        )
     elif error_code == ErrorCode.MODEL_REQUEST_FAILED:
-        suggestions.extend([
-            "Check API key and authentication",
-            "Verify model service availability",
-            "Check rate limits and quotas"
-        ])
+        suggestions.extend(
+            ["Check API key and authentication", "Verify model service availability", "Check rate limits and quotas"]
+        )
     elif error_code == ErrorCode.NODE_EXECUTION_FAILED:
-        suggestions.extend([
-            "Review input parameters",
-            "Check system resources",
-            "Enable debug logging for more details"
-        ])
+        suggestions.extend(
+            ["Review input parameters", "Check system resources", "Enable debug logging for more details"]
+        )
 
     # Operation-specific suggestions
-    if operation == 'sql_execution':
-        suggestions.extend([
-            "Validate SQL syntax",
-            "Check table and column names",
-            "Verify database permissions"
-        ])
-    elif operation == 'schema_linking':
-        suggestions.extend([
-            "Check database schema access",
-            "Verify table metadata availability",
-            "Try with different matching rates"
-        ])
-    elif operation == 'model_generation':
-        suggestions.extend([
-            "Check model configuration",
-            "Validate prompt templates",
-            "Try with different model parameters"
-        ])
+    if operation == "sql_execution":
+        suggestions.extend(["Validate SQL syntax", "Check table and column names", "Verify database permissions"])
+    elif operation == "schema_linking":
+        suggestions.extend(
+            ["Check database schema access", "Verify table metadata availability", "Try with different matching rates"]
+        )
+    elif operation == "model_generation":
+        suggestions.extend(
+            ["Check model configuration", "Validate prompt templates", "Try with different model parameters"]
+        )
 
     return suggestions[:5]  # Limit to top 5 suggestions

@@ -7,8 +7,9 @@ Integration tests for Text2SQL end-to-end flow.
 """
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from datus.api.models import ChatResearchRequest
 from datus.api.service import DatusService
@@ -45,7 +46,7 @@ class TestText2SQLIntegration:
             schema_name="public",
             domain="automotive",
             layer1="sales",
-            layer2="conversion_analysis"
+            layer2="conversion_analysis",
         )
 
     @pytest.mark.asyncio
@@ -68,8 +69,8 @@ class TestText2SQLIntegration:
         assert "describe_table" in config["required_tool_sequence"]
 
     @pytest.mark.asyncio
-    @patch('datus.api.service.DatusService._create_workflow_runner')
-    @patch('datus.api.service.DatusService._create_sql_task')
+    @patch("datus.api.service.DatusService._create_workflow_runner")
+    @patch("datus.api.service.DatusService._create_sql_task")
     async def test_text2sql_workflow_creation(self, mock_create_task, mock_create_runner, service, text2sql_request):
         """Test Text2SQL workflow creation and execution."""
         # Setup mocks
@@ -81,14 +82,14 @@ class TestText2SQLIntegration:
         mock_create_runner.return_value = mock_runner
 
         # Mock the task identification and configuration
-        with patch.object(service, '_identify_task_type', return_value="text2sql"):
-            with patch.object(service, '_configure_task_processing') as mock_config:
+        with patch.object(service, "_identify_task_type", return_value="text2sql"):
+            with patch.object(service, "_configure_task_processing") as mock_config:
                 mock_config.return_value = {
                     "workflow": "text2sql",
                     "plan_mode": False,
                     "system_prompt": "text2sql_system",
                     "output_format": "json",
-                    "required_tool_sequence": ["search_table", "describe_table"]
+                    "required_tool_sequence": ["search_table", "describe_table"],
                 }
 
                 # Execute the chat research
@@ -103,7 +104,7 @@ class TestText2SQLIntegration:
                 assert call_args.namespace == text2sql_request.namespace
 
     @pytest.mark.asyncio
-    @patch('datus.agent.node.preflight_orchestrator.PreflightOrchestrator')
+    @patch("datus.agent.node.preflight_orchestrator.PreflightOrchestrator")
     async def test_preflight_orchestrator_integration(self, mock_preflight_class, service):
         """Test PreflightOrchestrator integration in the service flow."""
         # Setup mock preflight orchestrator
@@ -114,7 +115,7 @@ class TestText2SQLIntegration:
         mock_orchestrator.run_preflight_tools = AsyncMock()
         mock_orchestrator.run_preflight_tools.return_value = [
             MagicMock(action_type="preflight_search_table", status="completed"),
-            MagicMock(action_type="preflight_describe_table", status="completed")
+            MagicMock(action_type="preflight_describe_table", status="completed"),
         ]
 
         # This test would need to be expanded to test the full workflow execution

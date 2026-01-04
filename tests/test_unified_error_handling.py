@@ -32,7 +32,7 @@ class TestNodeErrorResult:
             error_message="Test error",
             error_details={"test": "detail"},
             retryable=True,
-            recovery_suggestions=["Try again"]
+            recovery_suggestions=["Try again"],
         )
 
         assert result.success is False
@@ -63,10 +63,7 @@ class TestErrorHandlerMixin:
         node = MockNode("test_node", "test_type")
 
         result = node.create_error_result(
-            ErrorCode.NODE_EXECUTION_FAILED,
-            "Test execution failed",
-            "test_operation",
-            error_details={"extra": "info"}
+            ErrorCode.NODE_EXECUTION_FAILED, "Test execution failed", "test_operation", error_details={"extra": "info"}
         )
 
         assert isinstance(result, NodeErrorResult)
@@ -90,11 +87,7 @@ class TestErrorHandlerMixin:
     def test_summarize_input_with_dict(self):
         """Test input summarization with dictionary input."""
         node = MockNode()
-        node.input = {
-            "sql_query": "SELECT * FROM test_table",
-            "database_name": "test_db",
-            "other_field": "ignored"
-        }
+        node.input = {"sql_query": "SELECT * FROM test_table", "database_name": "test_db", "other_field": "ignored"}
 
         summary = node.summarize_input()
         assert summary["sql_query"] == "SELECT * FROM test_table"

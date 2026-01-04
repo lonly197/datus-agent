@@ -316,7 +316,7 @@ class Text2SQLExecutionMode(BaseExecutionMode):
             )
             # Check if we should continue on failure
             config = self.context.workflow_metadata or {}
-            if not config.get('text2sql_preflight', {}).get('continue_on_failure', True):
+            if not config.get("text2sql_preflight", {}).get("continue_on_failure", True):
                 # Fail fast - don't continue with invalid SQL
                 await self.event_manager.complete_execution(
                     self.execution_id,
@@ -326,7 +326,7 @@ class Text2SQLExecutionMode(BaseExecutionMode):
                         "schema_info": schema_result,
                         "syntax_validation": syntax_validation,
                         "status": "failed",
-                        "error": "SQL syntax validation failed"
+                        "error": "SQL syntax validation failed",
                     },
                 )
                 return
@@ -388,7 +388,7 @@ Be specific about table names, column names, and business logic. If uncertain, u
                     "aggregations": [],
                     "sort_requirements": [],
                     "temporal_aspects": [],
-                    "error": str(e)
+                    "error": str(e),
                 }
 
         # Fallback if no model available
@@ -398,7 +398,7 @@ Be specific about table names, column names, and business logic. If uncertain, u
             "filters": [],
             "aggregations": [],
             "sort_requirements": [],
-            "temporal_aspects": []
+            "temporal_aspects": [],
         }
 
     async def _link_schema(self):
@@ -410,10 +410,7 @@ Be specific about table names, column names, and business logic. If uncertain, u
                 return {"tables": [], "columns": {}, "error": "No agent config available"}
 
             # Get DB tool instance
-            db_tool = db_function_tool_instance(
-                self.context.agent_config,
-                self.context.agent_config.current_database
-            )
+            db_tool = db_function_tool_instance(self.context.agent_config, self.context.agent_config.current_database)
 
             # Get intent from previous step (this assumes intent analysis was done first)
             intent = await self._analyze_query_intent()
@@ -427,7 +424,7 @@ Be specific about table names, column names, and business logic. If uncertain, u
                     catalog=self.context.agent_config.current_catalog or "",
                     database=self.context.agent_config.current_database or "",
                     schema_name=self.context.agent_config.current_schema or "",
-                    top_n=5
+                    top_n=5,
                 )
             else:
                 # Search for specific entities
@@ -436,10 +433,10 @@ Be specific about table names, column names, and business logic. If uncertain, u
                     catalog=self.context.agent_config.current_catalog or "",
                     database=self.context.agent_config.current_database or "",
                     schema_name=self.context.agent_config.current_schema or "",
-                    top_n=5
+                    top_n=5,
                 )
 
-            if search_result.success and hasattr(search_result, 'result'):
+            if search_result.success and hasattr(search_result, "result"):
                 tables_info = []
                 for table_result in search_result.result:
                     table_name = table_result.get("table_name", "")
@@ -449,25 +446,22 @@ Be specific about table names, column names, and business logic. If uncertain, u
                             table_name=table_name,
                             catalog=self.context.agent_config.current_catalog or "",
                             database=self.context.agent_config.current_database or "",
-                            schema_name=self.context.agent_config.current_schema or ""
+                            schema_name=self.context.agent_config.current_schema or "",
                         )
 
-                        if describe_result.success and hasattr(describe_result, 'result'):
-                            tables_info.append({
-                                "table_name": table_name,
-                                "schema": describe_result.result
-                            })
+                        if describe_result.success and hasattr(describe_result, "result"):
+                            tables_info.append({"table_name": table_name, "schema": describe_result.result})
 
                 return {
                     "tables": tables_info,
-                    "search_results": search_result.result if hasattr(search_result, 'result') else [],
-                    "intent": intent
+                    "search_results": search_result.result if hasattr(search_result, "result") else [],
+                    "intent": intent,
                 }
             else:
                 return {
                     "tables": [],
                     "columns": {},
-                    "error": search_result.error if hasattr(search_result, 'error') else "Search failed"
+                    "error": search_result.error if hasattr(search_result, "error") else "Search failed",
                 }
 
         except Exception as e:
@@ -501,7 +495,9 @@ Be specific about table names, column names, and business logic. If uncertain, u
                                     col_name = col.get("name", "")
                                     col_type = col.get("type", "")
                                     col_comment = col.get("comment", "")
-                                    schema_lines.append(f"  - {col_name} ({col_type}) {f': {col_comment}' if col_comment else ''}")
+                                    schema_lines.append(
+                                        f"  - {col_name} ({col_type}) {f': {col_comment}' if col_comment else ''}"
+                                    )
                     schema_lines.append("")  # Empty line between tables
 
                 schema_context = "\n".join(schema_lines)
@@ -571,8 +567,7 @@ Generate the SQL query:"""
             # Get DB tool instance
             if self.context.agent_config:
                 db_tool = db_function_tool_instance(
-                    self.context.agent_config,
-                    self.context.agent_config.current_database
+                    self.context.agent_config, self.context.agent_config.current_database
                 )
                 result = db_tool.validate_sql_syntax(sql)
 
@@ -580,13 +575,10 @@ Generate the SQL query:"""
                     return {
                         "valid": True,
                         "tables_referenced": result.result.get("tables_referenced", []),
-                        "sql_type": result.result.get("sql_type", "unknown")
+                        "sql_type": result.result.get("sql_type", "unknown"),
                     }
                 else:
-                    return {
-                        "valid": False,
-                        "error": result.error
-                    }
+                    return {"valid": False, "error": result.error}
             else:
                 # Fallback to basic validation if no config
                 return await self._validate_sql(sql)

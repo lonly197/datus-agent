@@ -22,7 +22,7 @@ from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
-F = TypeVar('F')
+F = TypeVar("F")
 
 
 class NodeErrorResult(BaseResult):
@@ -43,13 +43,9 @@ class NodeErrorResult(BaseResult):
         node_context: Optional[Dict[str, Any]] = None,
         retryable: bool = False,
         recovery_suggestions: Optional[List[str]] = None,
-        **kwargs
+        **kwargs,
     ):
-        super().__init__(
-            success=success,
-            error=error_message if error_message else "",
-            **kwargs
-        )
+        super().__init__(success=success, error=error_message if error_message else "", **kwargs)
         self.error_code = error_code
         self.error_details = error_details or {}
         self.node_context = node_context or {}
@@ -72,13 +68,14 @@ def unified_error_handler(node_type: str, operation: str, log_errors: bool = Tru
     Returns:
         Decorated function that returns NodeErrorResult on errors
     """
+
     def decorator(func: F) -> F:
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             try:
                 result = func(self, *args, **kwargs)
                 # If the function returns a result with success=True, return it as-is
-                if hasattr(result, 'success') and result.success:
+                if hasattr(result, "success") and result.success:
                     return result
                 # If no success attribute, assume it's successful and return as-is
                 return result
@@ -87,48 +84,43 @@ def unified_error_handler(node_type: str, operation: str, log_errors: bool = Tru
                 if log_errors:
                     logger.error(
                         f"{node_type}.{operation} failed with DatusException: {e}",
-                        extra={
-                            "error_code": e.code.code,
-                            "node_type": node_type,
-                            "operation": operation
-                        }
+                        extra={"error_code": e.code.code, "node_type": node_type, "operation": operation},
                     )
-                return _create_node_error_result(
-                    self, e.code, str(e), operation, error_details=e.message_args
-                )
+                return _create_node_error_result(self, e.code, str(e), operation, error_details=e.message_args)
             except ValidationError as e:
                 error_details = {
                     "validation_errors": [str(err) for err in e.errors()],
-                    "model_name": getattr(e, '__class__', {}).get('__name__', 'Unknown')
+                    "model_name": getattr(e, "__class__", {}).get("__name__", "Unknown"),
                 }
                 if log_errors:
                     logger.error(
                         f"{node_type}.{operation} failed with validation error: {str(e)}",
-                        extra={
-                            "node_type": node_type,
-                            "operation": operation,
-                            "error_type": "validation_error"
-                        }
+                        extra={"node_type": node_type, "operation": operation, "error_type": "validation_error"},
                     )
                 return _create_node_error_result(
-                    self, ErrorCode.COMMON_VALIDATION_FAILED, f"Validation failed: {str(e)}",
-                    operation, error_details=error_details
+                    self,
+                    ErrorCode.COMMON_VALIDATION_FAILED,
+                    f"Validation failed: {str(e)}",
+                    operation,
+                    error_details=error_details,
                 )
             except (TimeoutError, OSError) as e:
                 # Network/connection related errors
-                error_code = ErrorCode.DB_CONNECTION_TIMEOUT if "timeout" in str(e).lower() else ErrorCode.DB_CONNECTION_FAILED
+                error_code = (
+                    ErrorCode.DB_CONNECTION_TIMEOUT if "timeout" in str(e).lower() else ErrorCode.DB_CONNECTION_FAILED
+                )
                 if log_errors:
                     logger.error(
                         f"{node_type}.{operation} failed with connection error: {str(e)}",
-                        extra={
-                            "node_type": node_type,
-                            "operation": operation,
-                            "error_type": "connection_error"
-                        }
+                        extra={"node_type": node_type, "operation": operation, "error_type": "connection_error"},
                     )
                 return _create_node_error_result(
-                    self, error_code, f"Connection error: {str(e)}",
-                    operation, error_details={"connection_error": str(e)}, retryable=True
+                    self,
+                    error_code,
+                    f"Connection error: {str(e)}",
+                    operation,
+                    error_details={"connection_error": str(e)},
+                    retryable=True,
                 )
             except Exception as e:
                 # Generic error handling
@@ -136,16 +128,12 @@ def unified_error_handler(node_type: str, operation: str, log_errors: bool = Tru
                     logger.error(
                         f"{node_type}.{operation} failed: {str(e)}",
                         exc_info=True,
-                        extra={
-                            "node_type": node_type,
-                            "operation": operation,
-                            "error_type": type(e).__name__
-                        }
+                        extra={"node_type": node_type, "operation": operation, "error_type": type(e).__name__},
                     )
-                return _create_node_error_result(
-                    self, ErrorCode.NODE_EXECUTION_FAILED, str(e), operation
-                )
+                return _create_node_error_result(self, ErrorCode.NODE_EXECUTION_FAILED, str(e), operation)
+
         return wrapper
+
     return decorator
 
 
@@ -155,7 +143,7 @@ def _create_node_error_result(
     error_message: str,
     operation: str,
     error_details: Optional[Dict[str, Any]] = None,
-    retryable: bool = False
+    retryable: bool = False,
 ) -> NodeErrorResult:
     """
     Create a standardized NodeErrorResult with node context.
@@ -173,14 +161,14 @@ def _create_node_error_result(
     """
     # Extract node context
     node_context = {
-        "node_id": getattr(node_instance, 'id', 'unknown'),
-        "node_type": getattr(node_instance, 'type', 'unknown'),
+        "node_id": getattr(node_instance, "id", "unknown"),
+        "node_type": getattr(node_instance, "type", "unknown"),
         "operation": operation,
-        "start_time": getattr(node_instance, 'start_time', None),
+        "start_time": getattr(node_instance, "start_time", None),
     }
 
     # Add input summary if available
-    if hasattr(node_instance, '_summarize_input'):
+    if hasattr(node_instance, "_summarize_input"):
         try:
             node_context["input_summary"] = node_instance._summarize_input()
         except Exception:
@@ -188,11 +176,9 @@ def _create_node_error_result(
 
     # Enhanced error details
     enhanced_details = error_details or {}
-    enhanced_details.update({
-        "stack_trace": traceback.format_exc(),
-        "operation": operation,
-        "timestamp": __import__('time').time()
-    })
+    enhanced_details.update(
+        {"stack_trace": traceback.format_exc(), "operation": operation, "timestamp": __import__("time").time()}
+    )
 
     # Generate recovery suggestions and retryable flag based on error type
     recovery_suggestions = []
@@ -202,27 +188,27 @@ def _create_node_error_result(
         recovery_suggestions = [
             "Check database connection string and credentials",
             "Verify database server is running and accessible",
-            "Check network connectivity and firewall settings"
+            "Check network connectivity and firewall settings",
         ]
         retryable = True
     elif error_code == ErrorCode.DB_EXECUTION_TIMEOUT:
         recovery_suggestions = [
             "Consider optimizing the SQL query",
             "Check database performance and indexes",
-            "Increase timeout limit if appropriate"
+            "Increase timeout limit if appropriate",
         ]
         retryable = True
     elif error_code == ErrorCode.COMMON_VALIDATION_FAILED:
         recovery_suggestions = [
             "Verify input data format and required fields",
             "Check data types and constraints",
-            "Review input validation rules"
+            "Review input validation rules",
         ]
     elif error_code == ErrorCode.MODEL_REQUEST_FAILED:
         recovery_suggestions = [
             "Check LLM service availability and API keys",
             "Verify model configuration and parameters",
-            "Retry the request or use a different model"
+            "Retry the request or use a different model",
         ]
         retryable = True
 
@@ -233,7 +219,7 @@ def _create_node_error_result(
         error_details=enhanced_details,
         node_context=node_context,
         retryable=retryable,
-        recovery_suggestions=recovery_suggestions
+        recovery_suggestions=recovery_suggestions,
     )
 
 
@@ -251,7 +237,7 @@ class ErrorHandlerMixin:
         error_message: str,
         operation: str,
         error_details: Optional[Dict[str, Any]] = None,
-        retryable: bool = False
+        retryable: bool = False,
     ) -> NodeErrorResult:
         """
         Create a standardized error result for this node.
@@ -266,16 +252,9 @@ class ErrorHandlerMixin:
         Returns:
             NodeErrorResult with complete node context
         """
-        return _create_node_error_result(
-            self, error_code, error_message, operation, error_details, retryable
-        )
+        return _create_node_error_result(self, error_code, error_message, operation, error_details, retryable)
 
-    def log_node_error(
-        self,
-        error: Exception,
-        operation: str,
-        additional_context: Optional[Dict[str, Any]] = None
-    ):
+    def log_node_error(self, error: Exception, operation: str, additional_context: Optional[Dict[str, Any]] = None):
         """
         Log a node error with consistent formatting.
 
@@ -285,10 +264,10 @@ class ErrorHandlerMixin:
             additional_context: Additional context to include in logs
         """
         log_context = {
-            "node_id": getattr(self, 'id', 'unknown'),
-            "node_type": getattr(self, 'type', 'unknown'),
+            "node_id": getattr(self, "id", "unknown"),
+            "node_type": getattr(self, "type", "unknown"),
             "operation": operation,
-            "error_type": type(error).__name__
+            "error_type": type(error).__name__,
         }
 
         if additional_context:
@@ -297,7 +276,7 @@ class ErrorHandlerMixin:
         logger.error(
             f"Node {getattr(self, 'type', 'unknown')} operation '{operation}' failed: {str(error)}",
             exc_info=True,
-            extra=log_context
+            extra=log_context,
         )
 
     def summarize_input(self) -> Dict[str, Any]:
@@ -308,21 +287,21 @@ class ErrorHandlerMixin:
             Dictionary containing input summary
         """
         summary = {}
-        if not hasattr(self, 'input') or not self.input:
+        if not hasattr(self, "input") or not self.input:
             return summary
 
         try:
             # Handle different input types
-            if hasattr(self.input, '__dict__'):
+            if hasattr(self.input, "__dict__"):
                 for key, value in self.input.__dict__.items():
-                    if key in ['sql_query', 'task', 'database_name', 'table_schemas', 'input_text']:
+                    if key in ["sql_query", "task", "database_name", "table_schemas", "input_text"]:
                         if isinstance(value, str) and len(value) > 100:
                             summary[key] = value[:100] + "..."
                         else:
                             summary[key] = str(value)
             elif isinstance(self.input, dict):
                 for key, value in self.input.items():
-                    if key in ['sql_query', 'task', 'database_name', 'input_text']:
+                    if key in ["sql_query", "task", "database_name", "input_text"]:
                         if isinstance(value, str) and len(value) > 100:
                             summary[key] = value[:100] + "..."
                         else:
@@ -334,9 +313,7 @@ class ErrorHandlerMixin:
 
 
 def with_error_recovery(
-    max_retries: int = 3,
-    backoff_factor: float = 1.0,
-    retryable_errors: Optional[List[Type[Exception]]] = None
+    max_retries: int = 3, backoff_factor: float = 1.0, retryable_errors: Optional[List[Type[Exception]]] = None
 ):
     """
     Decorator that adds retry logic with exponential backoff for retryable errors.
@@ -364,7 +341,7 @@ def with_error_recovery(
                     if attempt == max_retries or not any(isinstance(e, err_type) for err_type in retryable_errors):
                         raise
 
-                    wait_time = backoff_factor * (2 ** attempt)
+                    wait_time = backoff_factor * (2**attempt)
                     logger.warning(
                         f"Attempt {attempt + 1} failed for {func.__name__}, retrying in {wait_time}s: {str(e)}"
                     )
@@ -381,7 +358,7 @@ def with_error_recovery(
                     if attempt == max_retries or not any(isinstance(e, err_type) for err_type in retryable_errors):
                         raise
 
-                    wait_time = backoff_factor * (2 ** attempt)
+                    wait_time = backoff_factor * (2**attempt)
                     logger.warning(
                         f"Attempt {attempt + 1} failed for {func.__name__}, retrying in {wait_time}s: {str(e)}"
                     )

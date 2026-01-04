@@ -116,7 +116,7 @@ def test_available_tools_sql_only(build_context_tools):
     assert tool_names == {"list_subject_tree", "search_reference_sql"}
 
 
-def test_list_domain_layers_tree_combined(build_context_tools):
+def test_list_subject_tree_combined(build_context_tools):
     tools, _, _, _ = build_context_tools(
         metric_cfg={"entries": METRIC_ENTRIES},
         sql_cfg={"entries": SQL_ENTRIES},

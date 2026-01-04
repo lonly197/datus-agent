@@ -74,7 +74,7 @@ class SchemaDiscoveryNode(Node):
                 return
 
             task = self.workflow.task
-            intent = self.workflow.metadata.get('detected_intent', 'text2sql')
+            intent = self.workflow.metadata.get("detected_intent", "text2sql")
 
             # Get candidate tables based on intent and task
             candidate_tables = await self._discover_candidate_tables(task, intent)
@@ -103,7 +103,9 @@ class SchemaDiscoveryNode(Node):
                 },
             )
 
-            logger.info(f"Schema discovery completed: found {len(candidate_tables)} candidate tables for intent '{intent}'")
+            logger.info(
+                f"Schema discovery completed: found {len(candidate_tables)} candidate tables for intent '{intent}'"
+            )
 
         except Exception as e:
             logger.error(f"Schema discovery failed: {e}")
@@ -126,27 +128,39 @@ class SchemaDiscoveryNode(Node):
         candidate_tables = []
 
         # If tables are explicitly mentioned in the task, use those
-        if hasattr(task, 'tables') and task.tables:
+        if hasattr(task, "tables") and task.tables:
             candidate_tables.extend(task.tables)
 
         # If intent is text2sql, try to extract table hints from the query text
-        if intent == 'text2sql' and hasattr(task, 'task'):
+        if intent == "text2sql" and hasattr(task, "task"):
             task_text = task.task.lower()
 
             # Simple keyword-based table discovery (can be enhanced with RAG)
             table_keywords = [
                 # Common business tables
-                'user', 'users', 'customer', 'customers',
-                'order', 'orders', 'product', 'products',
-                'sale', 'sales', 'transaction', 'transactions',
-                'employee', 'employees', 'department', 'departments',
+                "user",
+                "users",
+                "customer",
+                "customers",
+                "order",
+                "orders",
+                "product",
+                "products",
+                "sale",
+                "sales",
+                "transaction",
+                "transactions",
+                "employee",
+                "employees",
+                "department",
+                "departments",
                 # Add more as needed
             ]
 
             for keyword in table_keywords:
                 if keyword in task_text:
                     # Convert singular/plural variations
-                    table_name = keyword.rstrip('s')  # Simple singularization
+                    table_name = keyword.rstrip("s")  # Simple singularization
                     if table_name not in candidate_tables:
                         candidate_tables.append(table_name)
 
@@ -174,7 +188,7 @@ class SchemaDiscoveryNode(Node):
                     catalog_name=task.catalog_name or "",
                     database_name=task.database_name or "",
                     schema_name=task.schema_name or "",
-                    dialect=task.database_type if hasattr(task, 'database_type') else None
+                    dialect=task.database_type if hasattr(task, "database_type") else None,
                 )
 
                 if schemas:
