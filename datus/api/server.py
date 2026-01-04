@@ -176,6 +176,7 @@ def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> Non
         workers=args.workers if not args.reload else 1,
         log_level="debug" if args.debug else "info",
         access_log=True,
+        reuse_address=True,  # Allow reuse of address even if in TIME_WAIT state
     )
 
 
