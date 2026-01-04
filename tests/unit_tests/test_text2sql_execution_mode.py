@@ -165,13 +165,8 @@ class TestText2SQLExecutionMode:
         mock_event_manager = MagicMock()
         execution_mode.event_manager = mock_event_manager
 
-        # Collect all yielded actions
-        actions = []
-        async for action in execution_mode.execute():
-            actions.append(action)
-
-        # Verify the execution completed
-        assert len(actions) > 0
+        # Execute the mode (it records events through event manager)
+        await execution_mode.execute()
         mock_event_manager.complete_execution.assert_called_once()
 
         # Verify the final result

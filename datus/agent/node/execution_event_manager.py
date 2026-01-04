@@ -257,7 +257,7 @@ class BaseExecutionMode(ABC):
         self.execution_id = f"{context.scenario}_{int(time.time() * 1000)}"
 
     @abstractmethod
-    async def execute(self) -> AsyncGenerator[ActionHistory, None]:
+    async def execute(self) -> None:
         """Execute the specific mode."""
         pass
 
@@ -278,7 +278,7 @@ class BaseExecutionMode(ABC):
 class Text2SQLExecutionMode(BaseExecutionMode):
     """Text2SQL execution mode."""
 
-    async def execute(self) -> AsyncGenerator[ActionHistory, None]:
+    async def execute(self) -> None:
         await self.event_manager.update_execution_status(self.execution_id, "planning", "Analyzing query intent")
 
         # Planning phase - analyze query intent
@@ -604,7 +604,7 @@ class SQLReviewExecutionMode(BaseExecutionMode):
         super().__init__(event_manager, context)
         self.chat_node = chat_node
 
-    async def execute(self) -> AsyncGenerator[ActionHistory, None]:
+    async def execute(self) -> None:
         await self.event_manager.update_execution_status(self.execution_id, "planning", "Initializing SQL review")
 
         # Extract SQL
@@ -667,7 +667,7 @@ class SQLReviewExecutionMode(BaseExecutionMode):
 class DataAnalysisExecutionMode(BaseExecutionMode):
     """Data Analysis execution mode."""
 
-    async def execute(self) -> AsyncGenerator[ActionHistory, None]:
+    async def execute(self) -> None:
         await self.event_manager.update_execution_status(self.execution_id, "planning", "Planning data analysis")
 
         # Data exploration phase
@@ -753,7 +753,7 @@ class DataAnalysisExecutionMode(BaseExecutionMode):
 class SmartQueryExecutionMode(BaseExecutionMode):
     """Smart Query execution mode for intelligent query recommendations."""
 
-    async def execute(self) -> AsyncGenerator[ActionHistory, None]:
+    async def execute(self) -> None:
         await self.event_manager.update_execution_status(
             self.execution_id, "planning", "Understanding query requirements"
         )
@@ -811,7 +811,7 @@ class SmartQueryExecutionMode(BaseExecutionMode):
 class DeepAnalysisExecutionMode(BaseExecutionMode):
     """Deep Analysis execution mode for comprehensive data insights."""
 
-    async def execute(self) -> AsyncGenerator[ActionHistory, None]:
+    async def execute(self) -> None:
         await self.event_manager.update_execution_status(self.execution_id, "planning", "Planning deep analysis")
 
         # Multi-dimensional analysis planning
