@@ -25,6 +25,40 @@ class GlmModel(OpenAICompatibleModel):
         super().__init__(model_config, **kwargs)
         logger.debug(f"Using GLM model: {self.model_name} base Url: {self.base_url}")
 
+    def generate(self, prompt: Any, enable_thinking: bool = False, **kwargs) -> str:
+        """
+        Generate a response from the GLM model with thinking support.
+
+        Args:
+            prompt: The input prompt to send to the model
+            enable_thinking: Enable thinking mode (default: False)
+            **kwargs: Additional generation parameters
+
+        Returns:
+            The generated text response
+        """
+        # Merge default parameters with any provided kwargs
+        params = {
+            "model": self.model_name,
+            "temperature": kwargs.get("temperature", 0.7),
+            "max_tokens": kwargs.get("max_tokens", 1000),
+            "top_p": kwargs.get("top_p", 1.0),
+            **{k: v for k, v in kwargs.items() if k not in ["temperature", "max_tokens", "top_p"]},
+        }
+
+        # Add thinking parameter for GLM API when enabled
+        if enable_thinking:
+            params["thinking"] = {"type": "enabled"}
+
+        # Convert prompt to messages format
+        if isinstance(prompt, list):
+            messages = prompt
+        else:
+            messages = [{"role": "user", "content": str(prompt)}]
+
+        response = self.client.chat.completions.create(messages=messages, **params)
+        return response.choices[0].message.content
+
     def _get_api_key(self) -> str:
         """Get GLM API key from config or environment."""
         api_key = self.model_config.api_key or os.environ.get("GLM_API_KEY") or os.environ.get("ZHIPUAI_API_KEY")

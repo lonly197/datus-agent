@@ -5,7 +5,7 @@
 from datus.models.claude_model import ClaudeModel
 from datus.models.deepseek_model import DeepSeekModel
 from datus.models.gemini_model import GeminiModel
-from datus.models.glm_model import GLMModel
+from datus.models.glm_model import GlmModel
 from datus.models.openai_model import OpenAIModel
 from datus.models.qwen_model import QwenModel
 
@@ -15,5 +15,5 @@ __all__ = [
     "DeepSeekModel",
     "QwenModel",
     "GeminiModel",
-    "GLMModel",
+    "GlmModel",
 ]
