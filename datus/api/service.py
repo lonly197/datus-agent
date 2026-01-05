@@ -859,8 +859,18 @@ class DatusAPIService:
 
             # 处理执行模式覆盖 (优先级高于自动识别)
             execution_mode = getattr(request, 'execution_mode', None)
+            task_type = None  # 初始化 task_type 变量
+
             if execution_mode:
                 task_config = self._configure_task_processing_by_execution_mode(execution_mode, request)
+                # 根据 execution_mode 推导出对应的 task_type
+                execution_mode_to_task_type = {
+                    "text2sql": "text2sql",
+                    "sql_review": "sql_review",
+                    "data_analysis": "data_analysis",
+                    "deep_analysis": "data_analysis",  # deep_analysis 也映射到 data_analysis
+                }
+                task_type = execution_mode_to_task_type.get(execution_mode, "text2sql")  # 默认 fallback 到 text2sql
                 logger.info(f"Using execution mode override: {execution_mode} -> workflow: {task_config.get('workflow')}")
             else:
                 # 智能识别任务类型并配置处理参数 (默认行为)
