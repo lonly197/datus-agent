@@ -108,17 +108,19 @@ def unified_error_handler(node_type: str, operation: str):
                     "doc": e.doc[:500] + "..." if len(e.doc) > 500 else e.doc,
                     "pos": e.pos,
                 }
-                return _create_node_error_result(
+                error_result = _create_node_error_result(
                     self,
                     ErrorCode.COMMON_JSON_PARSE_ERROR,
                     f"JSON parsing failed in {operation}: {str(e)}",
                     operation,
                     error_details,
                 )
+                self.result = error_result
+                return error_result
             except ConnectionError as e:
                 # Handle connection errors
                 error_details = {"connection_error": str(e), "operation": operation}
-                return _create_node_error_result(
+                error_result = _create_node_error_result(
                     self,
                     ErrorCode.DB_CONNECTION_FAILED,
                     f"Connection failed during {operation}: {str(e)}",
@@ -126,10 +128,12 @@ def unified_error_handler(node_type: str, operation: str):
                     error_details,
                     retryable=True,
                 )
+                self.result = error_result
+                return error_result
             except TimeoutError as e:
                 # Handle timeout errors
                 error_details = {"timeout_error": str(e), "operation": operation}
-                return _create_node_error_result(
+                error_result = _create_node_error_result(
                     self,
                     ErrorCode.DB_EXECUTION_TIMEOUT,
                     f"Operation timed out during {operation}: {str(e)}",
@@ -137,6 +141,8 @@ def unified_error_handler(node_type: str, operation: str):
                     error_details,
                     retryable=True,
                 )
+                self.result = error_result
+                return error_result
             except Exception as e:
                 # Handle all other exceptions
                 logger.error(
@@ -150,7 +156,7 @@ def unified_error_handler(node_type: str, operation: str):
                     },
                 )
 
-                return _create_node_error_result(
+                error_result = _create_node_error_result(
                     self,
                     ErrorCode.NODE_EXECUTION_FAILED,
                     f"{operation} failed: {str(e)}",
@@ -158,6 +164,8 @@ def unified_error_handler(node_type: str, operation: str):
                     {"unexpected_error": str(e), "stack_trace": traceback.format_exc()},
                     retryable=_is_retryable_error(e),
                 )
+                self.result = error_result
+                return error_result
 
         return wrapper
 

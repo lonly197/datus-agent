@@ -16,11 +16,11 @@ try:
     from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
     from datus.schemas.base import BaseResult
     from datus.utils.loggings import get_logger
+
+    logger = get_logger(__name__)
 except ImportError:
     # For standalone testing
     logger = None
-
-logger = get_logger(__name__)
 
 
 class ExecutionContext:
