@@ -5,7 +5,7 @@
 import os
 from typing import Dict, List, Union
 
-import google.generativeai as genai
+import google.genai as genai
 
 from datus.configuration.agent_config import ModelConfig
 from datus.models.openai_compatible import OpenAICompatibleModel
@@ -20,8 +20,8 @@ class GeminiModel(OpenAICompatibleModel):
     def __init__(self, model_config: ModelConfig, **kwargs):
         super().__init__(model_config, **kwargs)
         # Initialize Gemini-specific client
-        genai.configure(api_key=self.api_key)
-        self.gemini_model = genai.GenerativeModel(self.model_name)
+        self.client = genai.Client(api_key=self.api_key)
+        self.gemini_model = self.client.models.generate_content
 
     def _get_api_key(self) -> str:
         """Get Gemini API key from config or environment."""
@@ -32,17 +32,21 @@ class GeminiModel(OpenAICompatibleModel):
 
     def generate(self, prompt: Union[str, List[Dict[str, str]]], **kwargs) -> str:
         try:
-            generation_config = genai.types.GenerationConfig(
-                temperature=kwargs.get("temperature", 0.7),
-                max_output_tokens=kwargs.get("max_tokens", 10000),
-                top_p=kwargs.get("top_p", 1.0),
-                top_k=kwargs.get("top_k", 40),
-            )
+            # Convert prompt to string if it's a list
+            if isinstance(prompt, list):
+                prompt_text = "\n".join([msg.get("content", "") for msg in prompt if isinstance(msg, dict)])
+            else:
+                prompt_text = str(prompt)
 
-            response = self.gemini_model.generate_content(
-                prompt,
-                generation_config=generation_config,
-                safety_settings=kwargs.get("safety_settings", None),
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt_text,
+                config={
+                    "temperature": kwargs.get("temperature", 0.7),
+                    "max_output_tokens": kwargs.get("max_tokens", 10000),
+                    "top_p": kwargs.get("top_p", 1.0),
+                    "top_k": kwargs.get("top_k", 40),
+                }
             )
 
             if response.candidates:
@@ -61,9 +65,11 @@ class GeminiModel(OpenAICompatibleModel):
 
     def token_count(self, prompt: str) -> int:
         try:
-            model = genai.GenerativeModel(self.model_name)
-            token_count = model.count_tokens(prompt)
-            return token_count.total_tokens
+            response = self.client.models.count_tokens(
+                model=self.model_name,
+                contents=prompt
+            )
+            return response.total_tokens
         except Exception as e:
             logger.warning(f"Error counting tokens with Gemini: {str(e)}")
             return len(prompt) // 4
