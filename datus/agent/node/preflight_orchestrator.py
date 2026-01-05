@@ -61,16 +61,18 @@ class PreflightOrchestrator:
     emits events, and injects results into workflow context.
     """
 
-    def __init__(self, agent_config: Any, plan_hooks: Any = None):
+    def __init__(self, agent_config: Any, plan_hooks: Any = None, execution_event_manager: Any = None):
         """
         Initialize the preflight orchestrator.
 
         Args:
             agent_config: Agent configuration
             plan_hooks: Plan hooks for caching and monitoring
+            execution_event_manager: Event manager for sending events
         """
         self.agent_config = agent_config
         self.plan_hooks = plan_hooks
+        self.execution_event_manager = execution_event_manager
         self.db_func_tool = None
         self.context_search_tools = None
         self.date_parsing_tools = None
@@ -283,12 +285,59 @@ class PreflightOrchestrator:
         """Execute table search based on query intent."""
         db_tool = self._get_db_func_tool()
         try:
-            # Use semantic search to find relevant tables
-            result = db_tool.search_table(query=query, catalog=catalog, database=database, schema_name=schema, limit=10)
+            # Extract potential table names from query first
+            potential_tables = self._extract_potential_table_names(query)
+            if potential_tables:
+                # If we found potential table names, try to search for them specifically
+                search_results = []
+                for table_name in potential_tables[:3]:  # Limit to first 3 potential tables
+                    try:
+                        # Try to get table info
+                        result = db_tool.describe_table(
+                            table_name=table_name,
+                            catalog=catalog,
+                            database=database,
+                            schema_name=schema
+                        )
+                        if hasattr(result, "success") and result.success:
+                            search_results.append({
+                                "table_name": table_name,
+                                "exists": True,
+                                "schema": result.result if hasattr(result, "result") else None
+                            })
+                        else:
+                            search_results.append({
+                                "table_name": table_name,
+                                "exists": False,
+                                "error": result.error if hasattr(result, "error") else "Table not found"
+                            })
+                    except Exception as e:
+                        search_results.append({
+                            "table_name": table_name,
+                            "exists": False,
+                            "error": str(e)
+                        })
+
+                return {
+                    "success": len([r for r in search_results if r.get("exists")]) > 0,
+                    "tables": search_results,
+                    "count": len(search_results),
+                    "search_method": "direct_table_lookup"
+                }
+
+            # Fallback to semantic search
+            result = db_tool.search_table(
+                query=query,
+                catalog=catalog,
+                database=database,
+                schema_name=schema,
+                top_n=10
+            )
             return {
                 "success": True,
                 "tables": result.result if hasattr(result, "result") else [],
                 "count": len(result.result) if hasattr(result, "result") else 0,
+                "search_method": "semantic_search"
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -349,10 +398,42 @@ class PreflightOrchestrator:
             return getattr(workflow.task, "task", "")
         return ""
 
+    def _extract_potential_table_names(self, query: str) -> List[str]:
+        """Extract potential table names from natural language query."""
+        import re
+
+        # Common table name patterns in Chinese business context
+        table_patterns = [
+            r'\b([a-zA-Z_][a-zA-Z0-9_]*_(?:fact|dim|dws|dwd|ads|dm|tmp))\b',  # Data warehouse patterns
+            r'\b(订单|用户|客户|商品|销售|库存|物流|财务|报表)\b',  # Business entity names
+            r'\b(table|tbl)_([a-zA-Z_][a-zA-Z0-9_]*)\b',  # Generic table prefixes
+        ]
+
+        potential_tables = []
+        query_lower = query.lower()
+
+        for pattern in table_patterns:
+            matches = re.findall(pattern, query_lower, re.IGNORECASE)
+            if matches:
+                # Flatten matches if they're tuples (from capture groups)
+                for match in matches:
+                    if isinstance(match, tuple):
+                        potential_tables.extend([m for m in match if m])
+                    else:
+                        potential_tables.append(match)
+
+        # Remove duplicates and filter
+        unique_tables = list(set(potential_tables))
+        # Filter out very short or generic names
+        filtered_tables = [t for t in unique_tables if len(t) > 2 and not t.isdigit()]
+
+        return filtered_tables
+
     def _extract_table_names_from_workflow(self, workflow) -> List[str]:
-        """Extract table names from workflow (placeholder implementation)."""
-        # This would need to be enhanced to actually parse table names from SQL
-        # For now, return empty list
+        """Extract table names from workflow."""
+        sql_query = self._extract_sql_from_workflow(workflow)
+        if sql_query:
+            return self._extract_potential_table_names(sql_query)
         return []
 
     def _inject_preflight_results_into_context(self, workflow, results: List[PreflightToolResult]):
@@ -367,48 +448,111 @@ class PreflightOrchestrator:
         # Convert results to dict format for template access
         workflow.context.preflight_results = [result.to_dict() for result in results]
 
-        # Extract specific data for template convenience
-        self._extract_structured_data_for_template(workflow, results)
+        # Extract structured data for Text2SQL template
+        self._extract_structured_data_for_text2sql_template(workflow, results)
 
-    def _extract_structured_data_for_template(self, workflow, results: List[PreflightToolResult]):
-        """Extract structured data from results for template access."""
-        # Schema info from describe_table
+    def _extract_structured_data_for_text2sql_template(self, workflow, results: List[PreflightToolResult]):
+        """Extract structured data from preflight results for Text2SQL template access."""
+        # 1. Available tables and schema information
+        available_tables = []
         schema_info = []
+
+        # From search_table results
+        for result in results:
+            if result.tool_name == "search_table" and result.success and result.result:
+                tables = result.result.get("tables", [])
+                if isinstance(tables, list):
+                    for table in tables:
+                        if isinstance(table, dict) and table.get("exists", True):
+                            available_tables.append(table.get("table_name", ""))
+                            if "schema" in table:
+                                schema_info.append(f"Table: {table['table_name']}\n{table['schema']}")
+
+        # From describe_table results (more detailed schema)
         for result in results:
             if result.tool_name == "describe_table" and result.success and result.result:
                 tables = result.result.get("tables_described", [])
                 for table in tables:
-                    schema_info.append(f"Table: {table['table_name']}\n{table['schema']}")
+                    table_name = table.get("table_name", "")
+                    if table_name and table_name not in available_tables:
+                        available_tables.append(table_name)
+                    schema_str = table.get("schema", "")
+                    if schema_str:
+                        schema_info.append(f"Table: {table_name}\n{schema_str}")
 
-        if schema_info:
-            workflow.context.schema_info = "\n\n".join(schema_info)
+        # Store available tables for template
+        if available_tables:
+            workflow.context.available_tables = available_tables
+            workflow.context.schema_info = "\n\n".join(schema_info) if schema_info else ""
 
-        # Reference SQL from search_reference_sql
+        # 2. Reference SQL examples
         reference_sqls = []
         for result in results:
             if result.tool_name == "search_reference_sql" and result.success and result.result:
                 sqls = result.result.get("reference_sqls", [])
-                reference_sqls.extend(sqls)
+                if isinstance(sqls, list):
+                    reference_sqls.extend(sqls)
 
         if reference_sqls:
-            workflow.context.reference_sqls = reference_sqls
+            workflow.context.reference_sql_examples = reference_sqls
 
-        # Temporal expressions from parse_temporal_expressions
-        temporal_expressions = []
+        # 3. Temporal expressions and date parsing results
+        temporal_info = {}
         for result in results:
             if result.tool_name == "parse_temporal_expressions" and result.success and result.result:
                 expressions = result.result.get("temporal_expressions", [])
-                temporal_expressions.extend(expressions)
+                if expressions:
+                    temporal_info["expressions"] = expressions
+                    # Extract any parsed dates
+                    parsed_dates = []
+                    for expr in expressions:
+                        if isinstance(expr, dict) and "parsed_date" in expr:
+                            parsed_dates.append(expr["parsed_date"])
+                    if parsed_dates:
+                        temporal_info["parsed_dates"] = parsed_dates
 
-        if temporal_expressions:
-            workflow.context.temporal_expressions = temporal_expressions
+        if temporal_info:
+            workflow.context.temporal_info = temporal_info
+
+        # 4. Query intent hints from search results
+        query_intent_hints = []
+        for result in results:
+            if result.tool_name == "search_table" and result.success and result.result:
+                search_method = result.result.get("search_method", "")
+                if search_method == "direct_table_lookup":
+                    query_intent_hints.append("Direct table references found in query")
+                elif search_method == "semantic_search":
+                    query_intent_hints.append("Semantic search used to find relevant tables")
+
+        if query_intent_hints:
+            workflow.context.query_intent_hints = query_intent_hints
+
+        # 5. Success/failure summary for template
+        success_summary = {
+            "total_tools": len(results),
+            "successful_tools": len([r for r in results if r.success]),
+            "failed_tools": len([r for r in results if not r.success]),
+            "cache_hits": len([r for r in results if r.cache_hit]),
+        }
+        workflow.context.preflight_summary = success_summary
+
+        logger.info(f"Injected preflight context: {success_summary['successful_tools']}/{success_summary['total_tools']} tools successful")
 
     async def _send_tool_call_event(
         self, tool_name: str, tool_call_id: str, input_data: Dict[str, Any], execution_id: str = None
     ):
         """Send tool call start event."""
-        # This would integrate with execution_event_manager if available
-        logger.debug(f"Tool call started: {tool_name} ({tool_call_id})")
+        if self.execution_event_manager and execution_id:
+            # Send tool call event through execution event manager
+            await self.execution_event_manager.record_tool_execution(
+                execution_id=execution_id,
+                tool_name=f"preflight_{tool_name}",
+                tool_call_id=tool_call_id,
+                input_data=input_data,
+                execution_time=0.0,  # Will be updated on completion
+            )
+        else:
+            logger.debug(f"Tool call started: {tool_name} ({tool_call_id})")
 
     async def _send_tool_call_result_event(
         self,
@@ -419,5 +563,23 @@ class PreflightOrchestrator:
         execution_id: str = None,
     ):
         """Send tool call result event."""
-        # This would integrate with execution_event_manager if available
-        logger.debug(f"Tool call completed: {tool_call_id} (cache_hit: {cache_hit}, time: {execution_time:.2f}s)")
+        if self.execution_event_manager and execution_id:
+            # Update the tool execution record with results
+            success = result.get("success", False)
+            tool_name = result.get("tool_name", "unknown_tool")
+
+            # Send completion event
+            await self.execution_event_manager.record_tool_execution(
+                execution_id=execution_id,
+                tool_name=f"preflight_{tool_name}_result",
+                tool_call_id=f"{tool_call_id}_result",
+                input_data={
+                    "tool_call_id": tool_call_id,
+                    "cache_hit": cache_hit,
+                    "execution_time": execution_time
+                },
+                result=result,
+                execution_time=execution_time,
+            )
+        else:
+            logger.debug(f"Tool call completed: {tool_call_id} (cache_hit: {cache_hit}, time: {execution_time:.2f}s)")

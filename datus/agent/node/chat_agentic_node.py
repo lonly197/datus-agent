@@ -1581,7 +1581,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     from datus.agent.node.preflight_orchestrator import PreflightOrchestrator
 
                     preflight_orchestrator = PreflightOrchestrator(
-                        agent_config=self.agent_config, plan_hooks=getattr(self, "plan_hooks", None)
+                        agent_config=self.agent_config,
+                        plan_hooks=getattr(self, "plan_hooks", None),
+                        execution_event_manager=getattr(self, "execution_event_manager", None)
                     )
 
                     # Run preflight tools for Text2SQL
