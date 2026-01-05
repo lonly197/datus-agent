@@ -117,6 +117,10 @@ class ChatResearchRequest(BaseModel):
     prompt_mode: Optional[str] = Field(
         "append", description="How to merge prompt with system prompt: 'replace' or 'append' (default)"
     )
+    execution_mode: Optional[str] = Field(
+        None,
+        description="Execution mode override. Supports predefined scenarios ('text2sql', 'sql_review', 'data_analysis', 'deep_analysis') or direct workflow names ('chat_agentic_plan', 'metric_to_sql', etc.). Falls back to auto-detection if invalid or unspecified."
+    )
 
 
 class DeepResearchEventType(str, Enum):

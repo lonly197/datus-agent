@@ -717,8 +717,81 @@ class DatusAPIService:
         # 默认Text2SQL
         return "text2sql"
 
+    def _configure_task_processing_by_execution_mode(self, execution_mode: str, request: ChatResearchRequest) -> dict:
+        """根据执行模式配置处理参数 (execution_mode 参数处理)"""
+
+        # 预定义场景模式配置
+        predefined_configs = {
+            "text2sql": {
+                "workflow": "text2sql",
+                "plan_mode": False,
+                "auto_execute_plan": False,
+                "system_prompt": "text2sql_system",
+                "output_format": "json",
+                "required_tool_sequence": [
+                    "search_table",  # 表结构搜索
+                    "describe_table",  # 表详细描述
+                    "search_reference_sql",  # 参考SQL搜索
+                    "parse_temporal_expressions",  # 时间表达式解析
+                ],
+            },
+            "sql_review": {
+                "workflow": "chat_agentic_plan",
+                "plan_mode": False,
+                "auto_execute_plan": False,
+                "system_prompt": "sql_review",
+                "output_format": "markdown",
+                "required_tool_sequence": [
+                    "describe_table",  # 表结构分析
+                    "search_external_knowledge",  # StarRocks规则检索
+                    "read_query",  # SQL语法验证
+                    "get_table_ddl",  # DDL定义获取
+                    "analyze_query_plan",  # 查询计划分析
+                    "check_table_conflicts",  # 表冲突检测
+                    "validate_partitioning",  # 分区验证
+                ],
+            },
+            "data_analysis": {
+                "workflow": "chat_agentic_plan",
+                "plan_mode": True,
+                "auto_execute_plan": True,
+                "system_prompt": "plan_mode",
+                "output_format": "json",
+            },
+            "deep_analysis": {
+                "workflow": "chat_agentic_plan",
+                "plan_mode": True,
+                "auto_execute_plan": False,
+                "system_prompt": "deep_analysis_system",  # 预留未来扩展
+                "output_format": "markdown",
+            }
+        }
+
+        # 1. 首先尝试作为预定义场景处理
+        if execution_mode in predefined_configs:
+            return predefined_configs[execution_mode]
+
+        # 2. 尝试作为workflow名称处理
+        available_workflows = [
+            "chat_agentic", "chat_agentic_plan", "text2sql", "reflection",
+            "fixed", "dynamic", "metric_to_sql", "gensql_agentic"
+        ]
+        if execution_mode in available_workflows:
+            return {
+                "workflow": execution_mode,
+                "plan_mode": False,
+                "auto_execute_plan": False,
+                "system_prompt": "chat_system",
+                "output_format": "json",
+            }
+
+        # 3. 无效的执行模式，记录警告并回退到自动识别
+        logger.warning(f"Invalid execution_mode '{execution_mode}', falling back to auto-detection")
+        task_type = self._identify_task_type(request.task)
+        return self._configure_task_processing(task_type, request)
+
     def _configure_task_processing(self, task_type: str, request: ChatResearchRequest) -> dict:
-        """根据任务类型配置处理参数"""
+        """根据任务类型配置处理参数 (自动识别模式)"""
 
         if task_type == "sql_review":
             # SQL审查：使用chat_agentic_plan工作流，启用强制预检工具序列 (v2.4)
@@ -784,9 +857,16 @@ class DatusAPIService:
             # Get agent for the namespace
             agent = self.get_agent(request.namespace)
 
-            # 智能识别任务类型并配置处理参数
-            task_type = self._identify_task_type(request.task)
-            task_config = self._configure_task_processing(task_type, request)
+            # 处理执行模式覆盖 (优先级高于自动识别)
+            execution_mode = getattr(request, 'execution_mode', None)
+            if execution_mode:
+                task_config = self._configure_task_processing_by_execution_mode(execution_mode, request)
+                logger.info(f"Using execution mode override: {execution_mode} -> workflow: {task_config.get('workflow')}")
+            else:
+                # 智能识别任务类型并配置处理参数 (默认行为)
+                task_type = self._identify_task_type(request.task)
+                task_config = self._configure_task_processing(task_type, request)
+                logger.info(f"Auto-detected task type: {task_type} -> workflow: {task_config.get('workflow')}")
 
             # 使用任务配置的工作流名称
             workflow_name = task_config["workflow"]
