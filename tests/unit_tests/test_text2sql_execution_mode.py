@@ -6,14 +6,12 @@
 Unit tests for Text2SQLExecutionMode.
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from datus.agent.node.execution_event_manager import ExecutionContext, Text2SQLExecutionMode
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
 
 class TestText2SQLExecutionMode:
@@ -233,9 +231,7 @@ class TestText2SQLExecutionMode:
 
         # Test that update_execution_status no longer produces warnings
         # (This would previously log "Execution X not found")
-        with patch('datus.agent.node.execution_event_manager.logger') as mock_logger:
-            await event_manager.update_execution_status(
-                execution_mode.execution_id, "executing", "test step"
-            )
+        with patch("datus.agent.node.execution_event_manager.logger") as mock_logger:
+            await event_manager.update_execution_status(execution_mode.execution_id, "executing", "test step")
             # Should not call warning about execution not found
             mock_logger.warning.assert_not_called()

@@ -9,7 +9,6 @@ Unified scheduler for SQL review preflight tools, coordinating execution of
 both legacy and enhanced tools with caching, batching, and event streaming.
 """
 
-import asyncio
 import time
 import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional

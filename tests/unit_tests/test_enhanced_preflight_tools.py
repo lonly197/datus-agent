@@ -1,10 +1,9 @@
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from datus.agent.node.chat_agentic_node import PreflightOrchestrator
-from datus.schemas.action_history import ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import ActionHistoryManager
 from datus.schemas.node_models import SqlTask
 
 

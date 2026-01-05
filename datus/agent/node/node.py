@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 from agents import Tool
 
 from datus.agent.error_handling import ErrorHandlerMixin
+from datus.agent.error_handling import NodeErrorResult as AgentNodeErrorResult
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.node_type import NodeType
 from datus.models.base import LLMBaseModel
@@ -35,9 +36,8 @@ from datus.schemas.reason_sql_node_models import ReasoningResult
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput, SchemaLinkingResult
 from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.db_manager import db_manager_instance
-from datus.utils.error_handling import NodeErrorResult as UtilsNodeErrorResult, unified_error_handler
-from datus.agent.error_handling import NodeErrorResult as AgentNodeErrorResult
-from datus.utils.exceptions import DatusException, ErrorCode
+from datus.utils.error_handling import NodeErrorResult as UtilsNodeErrorResult
+from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -61,16 +61,18 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
     action_history_manager for proper event tracking.
     """
     import concurrent.futures
-    import threading
 
     def _run_async_in_thread():
         """Run the async operation in a separate thread to avoid event loop conflicts."""
+
         async def _consume_stream():
             """Consume the async generator and collect ActionHistory events."""
-            async for action in node.execute_stream(node.action_history_manager if hasattr(node, 'action_history_manager') else None):
+            async for action in node.execute_stream(
+                node.action_history_manager if hasattr(node, "action_history_manager") else None
+            ):
                 try:
                     # Forward ActionHistory to action_history_manager if available
-                    if hasattr(node, 'action_history_manager') and node.action_history_manager:
+                    if hasattr(node, "action_history_manager") and node.action_history_manager:
                         node.action_history_manager.add_action(action)
                 except Exception as e:
                     logger.debug(f"Failed to record action in adaptor: {e}")
@@ -88,11 +90,13 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
 
         # Return success result
         from datus.schemas.base import BaseResult
+
         return BaseResult(success=True)
 
     except Exception as e:
         # Convert async exceptions to error result for consistent error handling
         from datus.schemas.base import BaseResult
+
         return BaseResult(success=False, error=str(e))
 
 
@@ -321,7 +325,7 @@ class Node(ErrorHandlerMixin, ABC):
             if self.type in NodeType.ACTION_TYPES or self.type in NodeType.CONTROL_TYPES:
                 # Check if node prefers async streaming over sync execute
                 # This allows sync runner (Node.run) to execute async streaming nodes like ChatAgenticNode
-                if hasattr(self, 'execute_stream') and callable(getattr(self, 'execute_stream')):
+                if hasattr(self, "execute_stream") and callable(getattr(self, "execute_stream")):
                     # Try to call execute, if it throws NotImplementedError, use async stream adaptor
                     try:
                         self.execute()

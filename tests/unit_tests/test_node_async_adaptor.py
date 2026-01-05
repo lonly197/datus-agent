@@ -7,7 +7,6 @@ Unit tests for Node async stream adaptor functionality.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -36,11 +35,9 @@ class DummyAsyncStreamNode(Node):
 
     def setup_input(self, input_data):
         """Mock setup input."""
-        pass
 
     def update_context(self, context):
         """Mock update context."""
-        pass
 
     async def execute_stream(self, action_history_manager=None):
         """Mock async streaming execution."""
@@ -63,11 +60,9 @@ class DummyAsyncStreamNode(Node):
 
     def _initialize(self):
         """Mock initialization."""
-        pass
 
     def start(self):
         """Mock start."""
-        pass
 
     def complete(self, result):
         """Mock complete."""
@@ -131,6 +126,7 @@ class TestNodeAsyncAdaptor:
 
         # Verify result is error
         from datus.schemas.base import BaseResult
+
         assert isinstance(result, BaseResult)
         assert result.success is False
         assert "Test failure in async stream" in result.error
@@ -180,9 +176,8 @@ class TestNodeAsyncAdaptor:
         node = DummyAsyncStreamNode()
 
         # Get initial event loop state
-        initial_loop = None
         try:
-            initial_loop = asyncio.get_event_loop()
+            asyncio.get_event_loop()
         except RuntimeError:
             # No event loop exists
             pass

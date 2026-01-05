@@ -1,5 +1,3 @@
-import pytest
-
 from datus.api.service import DatusAPIService
 
 

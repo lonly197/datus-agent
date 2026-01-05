@@ -294,50 +294,41 @@ class PreflightOrchestrator:
                     try:
                         # Try to get table info
                         result = db_tool.describe_table(
-                            table_name=table_name,
-                            catalog=catalog,
-                            database=database,
-                            schema_name=schema
+                            table_name=table_name, catalog=catalog, database=database, schema_name=schema
                         )
                         if hasattr(result, "success") and result.success:
-                            search_results.append({
-                                "table_name": table_name,
-                                "exists": True,
-                                "schema": result.result if hasattr(result, "result") else None
-                            })
+                            search_results.append(
+                                {
+                                    "table_name": table_name,
+                                    "exists": True,
+                                    "schema": result.result if hasattr(result, "result") else None,
+                                }
+                            )
                         else:
-                            search_results.append({
-                                "table_name": table_name,
-                                "exists": False,
-                                "error": result.error if hasattr(result, "error") else "Table not found"
-                            })
+                            search_results.append(
+                                {
+                                    "table_name": table_name,
+                                    "exists": False,
+                                    "error": result.error if hasattr(result, "error") else "Table not found",
+                                }
+                            )
                     except Exception as e:
-                        search_results.append({
-                            "table_name": table_name,
-                            "exists": False,
-                            "error": str(e)
-                        })
+                        search_results.append({"table_name": table_name, "exists": False, "error": str(e)})
 
                 return {
                     "success": len([r for r in search_results if r.get("exists")]) > 0,
                     "tables": search_results,
                     "count": len(search_results),
-                    "search_method": "direct_table_lookup"
+                    "search_method": "direct_table_lookup",
                 }
 
             # Fallback to semantic search
-            result = db_tool.search_table(
-                query=query,
-                catalog=catalog,
-                database=database,
-                schema_name=schema,
-                top_n=10
-            )
+            result = db_tool.search_table(query=query, catalog=catalog, database=database, schema_name=schema, top_n=10)
             return {
                 "success": True,
                 "tables": result.result if hasattr(result, "result") else [],
                 "count": len(result.result) if hasattr(result, "result") else 0,
-                "search_method": "semantic_search"
+                "search_method": "semantic_search",
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -404,9 +395,9 @@ class PreflightOrchestrator:
 
         # Common table name patterns in Chinese business context
         table_patterns = [
-            r'\b([a-zA-Z_][a-zA-Z0-9_]*_(?:fact|dim|dws|dwd|ads|dm|tmp))\b',  # Data warehouse patterns
-            r'\b(订单|用户|客户|商品|销售|库存|物流|财务|报表)\b',  # Business entity names
-            r'\b(table|tbl)_([a-zA-Z_][a-zA-Z0-9_]*)\b',  # Generic table prefixes
+            r"\b([a-zA-Z_][a-zA-Z0-9_]*_(?:fact|dim|dws|dwd|ads|dm|tmp))\b",  # Data warehouse patterns
+            r"\b(订单|用户|客户|商品|销售|库存|物流|财务|报表)\b",  # Business entity names
+            r"\b(table|tbl)_([a-zA-Z_][a-zA-Z0-9_]*)\b",  # Generic table prefixes
         ]
 
         potential_tables = []
@@ -536,7 +527,9 @@ class PreflightOrchestrator:
         }
         workflow.context.preflight_summary = success_summary
 
-        logger.info(f"Injected preflight context: {success_summary['successful_tools']}/{success_summary['total_tools']} tools successful")
+        logger.info(
+            f"Injected preflight context: {success_summary['successful_tools']}/{success_summary['total_tools']} tools successful"
+        )
 
     async def _send_tool_call_event(
         self, tool_name: str, tool_call_id: str, input_data: Dict[str, Any], execution_id: str = None
@@ -565,7 +558,7 @@ class PreflightOrchestrator:
         """Send tool call result event."""
         if self.execution_event_manager and execution_id:
             # Update the tool execution record with results
-            success = result.get("success", False)
+            result.get("success", False)
             tool_name = result.get("tool_name", "unknown_tool")
 
             # Send completion event
@@ -573,11 +566,7 @@ class PreflightOrchestrator:
                 execution_id=execution_id,
                 tool_name=f"preflight_{tool_name}_result",
                 tool_call_id=f"{tool_call_id}_result",
-                input_data={
-                    "tool_call_id": tool_call_id,
-                    "cache_hit": cache_hit,
-                    "execution_time": execution_time
-                },
+                input_data={"tool_call_id": tool_call_id, "cache_hit": cache_hit, "execution_time": execution_time},
                 result=result,
                 execution_time=execution_time,
             )

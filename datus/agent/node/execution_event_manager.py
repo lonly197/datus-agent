@@ -10,11 +10,10 @@ Unified Execution Event Manager for all execution modes.
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Dict
 
 try:
     from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
-    from datus.schemas.base import BaseResult
     from datus.utils.loggings import get_logger
 
     logger = get_logger(__name__)
@@ -299,7 +298,6 @@ class BaseExecutionMode(ABC):
     @abstractmethod
     async def execute(self) -> None:
         """Execute the specific mode."""
-        pass
 
     async def _execute_with_error_handling(self, step_name: str, step_func):
         """Execute a step with error handling."""

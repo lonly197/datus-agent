@@ -4,7 +4,7 @@
 
 """Unit tests for table existence checking functionality."""
 
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock
 
 import pytest
 

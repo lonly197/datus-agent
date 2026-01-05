@@ -46,7 +46,7 @@ class GeminiModel(OpenAICompatibleModel):
                     "max_output_tokens": kwargs.get("max_tokens", 10000),
                     "top_p": kwargs.get("top_p", 1.0),
                     "top_k": kwargs.get("top_k", 40),
-                }
+                },
             )
 
             if response.candidates:
@@ -65,10 +65,7 @@ class GeminiModel(OpenAICompatibleModel):
 
     def token_count(self, prompt: str) -> int:
         try:
-            response = self.client.models.count_tokens(
-                model=self.model_name,
-                contents=prompt
-            )
+            response = self.client.models.count_tokens(model=self.model_name, contents=prompt)
             return response.total_tokens
         except Exception as e:
             logger.warning(f"Error counting tokens with Gemini: {str(e)}")

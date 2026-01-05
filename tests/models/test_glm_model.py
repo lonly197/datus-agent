@@ -53,17 +53,17 @@ class TestGlmModel:
             api_key="",
             model="glm-4",
         )
-        
+
         # Test with GLM_API_KEY
         with patch.dict(os.environ, {"GLM_API_KEY": "env_key_1"}):
             model = GlmModel(model_config=config)
             assert model.api_key == "env_key_1"
-            
+
         # Test with ZHIPUAI_API_KEY
         with patch.dict(os.environ, {"GLM_API_KEY": "", "ZHIPUAI_API_KEY": "env_key_2"}):
             model = GlmModel(model_config=config)
             assert model.api_key == "env_key_2"
-            
+
         # Test missing key
         with patch.dict(os.environ, {"GLM_API_KEY": "", "ZHIPUAI_API_KEY": ""}):
             with pytest.raises(ValueError, match="GLM API key must be provided"):
@@ -77,12 +77,12 @@ class TestGlmModel:
         mock_completion = MagicMock()
         mock_completion.choices = [MagicMock(message=MagicMock(content="Hello from GLM"))]
         mock_client.chat.completions.create.return_value = mock_completion
-        
+
         # We need to patch the client on the instance because it's initialized in __init__
         self.model.client = mock_client
-        
+
         result = self.model.generate("Hello", temperature=0.5, max_tokens=100)
-        
+
         assert result == "Hello from GLM"
         mock_client.chat.completions.create.assert_called_once()
         call_kwargs = mock_client.chat.completions.create.call_args[1]

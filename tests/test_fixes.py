@@ -2,16 +2,18 @@
 """
 Test script for the fixes to SQL review issues.
 """
-import sys
 import os
+import sys
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+
 def test_check_table_exists_fix():
     """Test the fixed check_table_exists method."""
-    from datus.tools.func_tool.database import DBFuncTool
     from unittest.mock import MagicMock
+
+    from datus.tools.func_tool.database import DBFuncTool
 
     # Create a mock DBFuncTool instance
     db_tool = DBFuncTool.__new__(DBFuncTool)
@@ -47,6 +49,7 @@ def test_check_table_exists_fix():
     assert result.success == 0
     assert "Connection failed" in result.error
     print("✅ Exception handling check passed")
+
 
 if __name__ == "__main__":
     test_check_table_exists_fix()

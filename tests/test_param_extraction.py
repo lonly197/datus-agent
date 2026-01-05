@@ -96,7 +96,7 @@ class TestParamExtraction:
             r"(\w+_dwd_\w+)",  # dwd tables
         ]
 
-        content_lower = todo_content.lower()
+        todo_content.lower()
 
         # Try regex patterns
         for pattern in patterns:
@@ -164,7 +164,12 @@ def main():
     print()
 
     # Test case 4: Different todo formats
-    test_cases = ["检查表结构 user_info", "describe table sales_fact_di", "查看表字段 customer_dim", "分析表结构：order_table"]
+    test_cases = [
+        "检查表结构 user_info",
+        "describe table sales_fact_di",
+        "查看表字段 customer_dim",
+        "分析表结构：order_table",
+    ]
 
     print("Test 4 - Different todo formats:")
     for i, test_content in enumerate(test_cases, 1):

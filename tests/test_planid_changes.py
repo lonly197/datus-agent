@@ -10,7 +10,6 @@ This script shows how planId is now properly set based on the context:
 """
 
 from datetime import datetime
-from unittest.mock import MagicMock
 
 
 # Mock the required classes since we can't import the full environment

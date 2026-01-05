@@ -3,32 +3,40 @@
 Simple test script to validate task_id functionality without full imports.
 """
 import asyncio
-import sys
 import os
+import sys
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 
 # Mock the problematic imports to focus on our logic
 class MockAgent:
     pass
 
+
 class MockWorkflowRunner:
     pass
 
+
 # Monkey patch to avoid import issues
 import datus.agent
+
 datus.agent.Agent = MockAgent
 datus.agent.WorkflowRunner = MockWorkflowRunner
 
 # Mock the problematic node imports
 import datus.agent.node
-datus.agent.node.Node = type('MockNode', (), {})
+
+datus.agent.node.Node = type("MockNode", (), {})
+
+from unittest.mock import MagicMock
+
+from fastapi import HTTPException
 
 # Now import our service
-from datus.api.service import DatusAPIService, RunningTask
-from fastapi import HTTPException
-from unittest.mock import MagicMock
+from datus.api.service import DatusAPIService
+
 
 async def test_task_id_functionality():
     """Test our task_id functionality."""
@@ -127,6 +135,7 @@ async def test_task_id_functionality():
 
     print("\n✅ All task_id functionality tests passed!")
     return True
+
 
 if __name__ == "__main__":
     success = asyncio.run(test_task_id_functionality())

@@ -9,6 +9,7 @@ This module provides a concrete implementation of GenSQLAgenticNode specifically
 designed for chat interactions with database and filesystem tool support.
 """
 import asyncio
+import re
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
@@ -19,14 +20,18 @@ except ImportError:
 
 from datus.agent.node.execution_event_manager import (
     ExecutionEventManager,
-    SQLReviewExecutionMode,
     create_execution_mode,
 )
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
-from datus.schemas.chat_agentic_node_models import ChatNodeInput, ChatNodeResult
+from datus.schemas.action_history import (
+    ActionHistory,
+    ActionHistoryManager,
+    ActionRole,
+    ActionStatus,
+)
+from datus.schemas.chat_agentic_node_models import ChatNodeInput
 from datus.schemas.node_models import SQLContext
 from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool import ContextSearchTools, DBFuncTool
@@ -50,7 +55,10 @@ class PreflightOrchestrator:
         self.execution_event_manager = getattr(chat_node, "execution_event_manager", None)
 
     async def execute_enhanced_preflight_tools(
-        self, workflow, action_history_manager: ActionHistoryManager, execution_id: str = None
+        self,
+        workflow,
+        action_history_manager: ActionHistoryManager,
+        execution_id: Optional[str] = None,
     ) -> AsyncGenerator[ActionHistory, None]:
         """
         Execute enhanced preflight tools with proper orchestration.
@@ -78,8 +86,17 @@ class PreflightOrchestrator:
         table_names = self.chat_node._parse_table_names_from_sql(sql_query)
 
         # Separate new enhanced tools from existing ones
-        existing_tools = ["describe_table", "search_external_knowledge", "read_query", "get_table_ddl"]
-        enhanced_tools = ["analyze_query_plan", "check_table_conflicts", "validate_partitioning"]
+        existing_tools = [
+            "describe_table",
+            "search_external_knowledge",
+            "read_query",
+            "get_table_ddl",
+        ]
+        enhanced_tools = [
+            "analyze_query_plan",
+            "check_table_conflicts",
+            "validate_partitioning",
+        ]
 
         all_tools = existing_tools + enhanced_tools
         tools_to_execute = [tool for tool in required_tools if tool in all_tools]
@@ -157,7 +174,11 @@ class PreflightOrchestrator:
             # Check enhanced cache first
             cache_hit = False
             if self.plan_hooks and self.plan_hooks.enable_query_caching:
-                cache_key_params = {"catalog": catalog, "database": database, "schema": schema}
+                cache_key_params = {
+                    "catalog": catalog,
+                    "database": database,
+                    "schema": schema,
+                }
 
                 if tool_name == "analyze_query_plan":
                     cache_key_params["sql_query"] = sql_query
@@ -266,6 +287,8 @@ class PreflightOrchestrator:
         self, tool_name: str, sql_query: str, table_names: List[str], catalog: str, database: str, schema: str
     ) -> Dict[str, Any]:
         """Call the appropriate enhanced preflight tool."""
+        if self.db_func_tool is None:
+            return {"success": False, "error": "DB function tool not initialized"}
         if tool_name == "analyze_query_plan":
             return self.db_func_tool.analyze_query_plan(sql_query, catalog, database, schema)
 
@@ -331,7 +354,7 @@ class PreflightOrchestrator:
             logger.warning(f"Failed to inject tool result into context for {tool_name}: {e}")
 
     async def _send_preflight_plan_update(
-        self, workflow, tools_to_execute: List[str], execution_id: str = None
+        self, workflow, tools_to_execute: List[str], execution_id: Optional[str] = None
     ) -> None:
         """Send preflight plan update event."""
         if self.execution_event_manager and execution_id:
@@ -340,7 +363,7 @@ class PreflightOrchestrator:
             )
 
     async def _send_tool_call_event(
-        self, tool_name: str, tool_call_id: str, input_data: Dict[str, Any], execution_id: str = None
+        self, tool_name: str, tool_call_id: str, input_data: Dict[str, Any], execution_id: Optional[str] = None
     ) -> None:
         """Send tool call start event."""
         if self.execution_event_manager and execution_id:
@@ -352,7 +375,7 @@ class PreflightOrchestrator:
         result: Dict[str, Any],
         execution_time: float,
         cache_hit: bool,
-        execution_id: str = None,
+        execution_id: Optional[str] = None,
     ) -> None:
         """Send tool call result event."""
         if self.execution_event_manager and execution_id:
@@ -360,7 +383,9 @@ class PreflightOrchestrator:
                 execution_id, tool_call_id, tool_call_id, {}, result, None, execution_time
             )
 
-    async def _send_diagnostic_info_event(self, message: str, data: Dict[str, Any], execution_id: str = None) -> None:
+    async def _send_diagnostic_info_event(
+        self, message: str, data: Dict[str, Any], execution_id: Optional[str] = None
+    ) -> None:
         """Send diagnostic information event."""
         if self.execution_event_manager and execution_id:
             await self.execution_event_manager.record_llm_interaction(
@@ -441,6 +466,8 @@ class PreflightOrchestrator:
     async def _process_tool_batch(self, tool_name: str, batch: List[Tuple], workflow) -> List[Dict[str, Any]]:
         """Process a batch of tool calls efficiently."""
         if not batch:
+            return []
+        if self.db_func_tool is None:
             return []
 
         results = []
@@ -1091,8 +1118,6 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
     def _parse_table_names_from_sql(self, sql: str) -> list:
         """Parse table names from SQL query using sqlglot."""
-        import re
-
         import sqlglot
         from sqlglot import exp
 
@@ -1384,7 +1409,11 @@ class ChatAgenticNode(GenSQLAgenticNode):
             output_data={
                 "error": error,
                 "error_type": "syntax",
-                "suggestions": ["检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)", "验证括号和引号是否匹配", "确认表名和列名拼写是否正确"],
+                "suggestions": [
+                    "检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)",
+                    "验证括号和引号是否匹配",
+                    "确认表名和列名拼写是否正确",
+                ],
                 "can_retry": False,
             },
             status=ActionStatus.FAILED,
@@ -1583,7 +1612,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     preflight_orchestrator = PreflightOrchestrator(
                         agent_config=self.agent_config,
                         plan_hooks=getattr(self, "plan_hooks", None),
-                        execution_event_manager=getattr(self, "execution_event_manager", None)
+                        execution_event_manager=getattr(self, "execution_event_manager", None),
                     )
 
                     # Run preflight tools for Text2SQL
@@ -1621,7 +1650,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         execution_mode = create_execution_mode(scenario, self.execution_event_manager, execution_context, self)
 
         # Register execution with event manager
-        if hasattr(execution_mode, 'start') and callable(getattr(execution_mode, 'start')):
+        if hasattr(execution_mode, "start") and callable(getattr(execution_mode, "start")):
             await execution_mode.start()
 
         # Execute using unified execution mode
@@ -1634,25 +1663,20 @@ class ChatAgenticNode(GenSQLAgenticNode):
             execution_success = False
             execution_error = str(e)
             # Record the error in the event manager
-            execution_id = getattr(execution_mode, 'execution_id', f"error_{int(time.time())}")
-            await self.execution_event_manager.complete_execution(
-                execution_id,
-                error=execution_error
-            )
+            execution_id = getattr(execution_mode, "execution_id", f"error_{int(time.time())}")
+            await self.execution_event_manager.complete_execution(execution_id, error=execution_error)
 
         # Create result object for update_context compatibility
         if execution_success:
             # Create a synthetic success result for update_context
             from datus.schemas.base import BaseResult
+
             self.result = BaseResult(success=True, message="Execution completed successfully")
         else:
             # Create error result for self.result
             from datus.agent.error_handling import NodeErrorResult
-            self.result = NodeErrorResult(
-                success=False,
-                error_message=execution_error,
-                error_type="execution_error"
-            )
+
+            self.result = NodeErrorResult(success=False, error_message=execution_error, error_code="execution_error")
 
         # Yield any remaining events from the event manager
         async for event in self.execution_event_manager.get_events_stream():

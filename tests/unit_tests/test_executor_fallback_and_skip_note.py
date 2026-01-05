@@ -3,7 +3,6 @@ import asyncio
 from rich.console import Console
 
 from datus.cli.plan_hooks import PlanModeHooks
-from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
 
 class DummyDBTool:
@@ -61,7 +60,7 @@ def test_executor_fallback_and_skip_note_sync():
     )
 
     # Case 1: fallback should call DB when content does not match any keyword
-    db_tool = DummyDBTool()
+    DummyDBTool()
     # Attach db tool into hooks by monkeypatching attribute expected in executor
     # Note: The executor tries to initialize db_tool internally; to simulate, set attribute that it will use.
     setattr(hooks, "agent_config", hooks)  # noop but prevents attribute errors

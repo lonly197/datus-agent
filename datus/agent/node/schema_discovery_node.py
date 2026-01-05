@@ -12,9 +12,8 @@ from datus.agent.node.node import Node
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
-from datus.schemas.node_models import BaseInput, TableSchema
+from datus.schemas.node_models import BaseInput
 from datus.storage.schema_metadata import SchemaWithValueRAG
-from datus.utils.exceptions import DatusException
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)

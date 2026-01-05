@@ -1,6 +1,6 @@
 import json
 
-from datus.tools.func_tool.plan_tools import PlanTool, SessionTodoStorage, TodoStatus
+from datus.tools.func_tool.plan_tools import PlanTool, TodoStatus
 
 
 def test_todo_write_preserves_requires_tool():

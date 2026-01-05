@@ -4,8 +4,6 @@ Test script for user experience improvements.
 """
 
 import asyncio
-import os
-import sys
 import time
 from enum import Enum
 from typing import Any, Dict, Optional

@@ -6,7 +6,6 @@
 Integration tests for Text2SQL end-to-end flow.
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -93,7 +92,7 @@ class TestText2SQLIntegration:
                 }
 
                 # Execute the chat research
-                result = await service.chat_research(text2sql_request)
+                await service.chat_research(text2sql_request)
 
                 # Verify task was created with correct parameters
                 mock_create_task.assert_called_once()

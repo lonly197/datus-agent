@@ -2,12 +2,11 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from datus.agent.intent_detection import IntentDetector, IntentResult, detect_sql_intent
+from datus.agent.intent_detection import IntentDetector, IntentResult
 from datus.api.models import RunWorkflowRequest
 
 
@@ -19,7 +18,9 @@ class TestIntentDetection:
         detector = IntentDetector()
 
         # Chinese SQL generation query
-        result = detector.detect_sql_intent_by_keyword("从 ODS 试驾表和线索表关联，统计每个月'首次试驾'到'下定'的平均转化周期")
+        result = detector.detect_sql_intent_by_keyword(
+            "从 ODS 试驾表和线索表关联，统计每个月'首次试驾'到'下定'的平均转化周期"
+        )
         assert result[0] is True  # Should detect SQL intent
         assert "试驾" in result[1]["keyword_matches"]
         assert "线索" in result[1]["keyword_matches"]
@@ -197,7 +198,7 @@ class TestAutoInjectionIntegration:
 
             # Verify external knowledge search is available
             available_tools = tools.available_tools()
-            tool_names = [tool.__name__ for tool in available_tools]
+            [tool.__name__ for tool in available_tools]
 
             assert "search_external_knowledge" in str(available_tools)
             assert tools.has_ext_knowledge is True
@@ -221,7 +222,7 @@ class TestAutoInjectionIntegration:
 
             # External knowledge search should not be available
             available_tools = tools.available_tools()
-            tool_names = [tool.__name__ for tool in available_tools]
+            [tool.__name__ for tool in available_tools]
             assert "search_external_knowledge" not in str(available_tools)
 
 

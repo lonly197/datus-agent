@@ -539,7 +539,7 @@ class DatusAPIService:
             agent = self.get_agent(request.namespace)
 
             # Normalize workflow name for backward compatibility
-            original_workflow = request.workflow
+            request.workflow
             request.workflow = self._normalize_workflow_name(request.workflow)
 
             # Create SQL task
@@ -764,7 +764,7 @@ class DatusAPIService:
                 "auto_execute_plan": False,
                 "system_prompt": "deep_analysis_system",  # 预留未来扩展
                 "output_format": "markdown",
-            }
+            },
         }
 
         # 1. 首先尝试作为预定义场景处理
@@ -773,8 +773,14 @@ class DatusAPIService:
 
         # 2. 尝试作为workflow名称处理
         available_workflows = [
-            "chat_agentic", "chat_agentic_plan", "text2sql", "reflection",
-            "fixed", "dynamic", "metric_to_sql", "gensql_agentic"
+            "chat_agentic",
+            "chat_agentic_plan",
+            "text2sql",
+            "reflection",
+            "fixed",
+            "dynamic",
+            "metric_to_sql",
+            "gensql_agentic",
         ]
         if execution_mode in available_workflows:
             return {
@@ -858,7 +864,7 @@ class DatusAPIService:
             agent = self.get_agent(request.namespace)
 
             # 处理执行模式覆盖 (优先级高于自动识别)
-            execution_mode = getattr(request, 'execution_mode', None)
+            execution_mode = getattr(request, "execution_mode", None)
             task_type = None  # 初始化 task_type 变量
 
             if execution_mode:
@@ -871,7 +877,9 @@ class DatusAPIService:
                     "deep_analysis": "data_analysis",  # deep_analysis 也映射到 data_analysis
                 }
                 task_type = execution_mode_to_task_type.get(execution_mode, "text2sql")  # 默认 fallback 到 text2sql
-                logger.info(f"Using execution mode override: {execution_mode} -> workflow: {task_config.get('workflow')}")
+                logger.info(
+                    f"Using execution mode override: {execution_mode} -> workflow: {task_config.get('workflow')}"
+                )
             else:
                 # 智能识别任务类型并配置处理参数 (默认行为)
                 task_type = self._identify_task_type(request.task)
@@ -889,7 +897,11 @@ class DatusAPIService:
                     schema_name=request.schema_name,
                     task=request.task,
                     current_date=request.current_date,
-                    subject_path=[request.domain, request.layer1, request.layer2] if request.domain or request.layer1 or request.layer2 else None,
+                    subject_path=(
+                        [request.domain, request.layer1, request.layer2]
+                        if request.domain or request.layer1 or request.layer2
+                        else None
+                    ),
                     ext_knowledge=request.ext_knowledge,
                     plan_mode=request.plan_mode,
                     mode="async",
@@ -902,9 +914,11 @@ class DatusAPIService:
             workflow_metadata = {
                 "plan_mode": task_config["plan_mode"],
                 "auto_execute_plan": task_config["auto_execute_plan"],
-                "system_prompt": task_config["system_prompt"].replace("_system", "")
-                if task_config["system_prompt"].endswith("_system")
-                else task_config["system_prompt"],
+                "system_prompt": (
+                    task_config["system_prompt"].replace("_system", "")
+                    if task_config["system_prompt"].endswith("_system")
+                    else task_config["system_prompt"]
+                ),
                 "output_format": task_config["output_format"],
                 "task_type": task_type,
                 "prompt": request.prompt,

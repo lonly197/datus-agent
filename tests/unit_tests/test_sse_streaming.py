@@ -10,7 +10,7 @@ import pytest
 
 from datus.api.models import RunWorkflowRequest
 from datus.api.service import generate_sse_stream
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
 
 class TestSSEStreaming:
@@ -112,7 +112,7 @@ class TestSSEStreaming:
 
             # Collect SSE events and measure timing
             events = []
-            start_time = asyncio.get_event_loop().time()
+            asyncio.get_event_loop().time()
 
             async def collect_events():
                 async for event in generate_sse_stream(self.sample_request, "test_client"):

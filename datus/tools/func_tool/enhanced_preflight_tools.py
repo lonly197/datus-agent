@@ -15,7 +15,6 @@ import time
 from typing import Any, Dict, List, Optional
 
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.agent_models import SubAgentConfig
 from datus.storage.metric.store import SemanticMetricsRAG
 from datus.storage.schema_metadata.store import SchemaWithValueRAG
 from datus.tools.db_tools import BaseSqlConnector

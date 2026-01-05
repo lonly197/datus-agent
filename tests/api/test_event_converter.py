@@ -3,9 +3,6 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 from datetime import datetime
-from unittest.mock import MagicMock
-
-import pytest
 
 from datus.api.event_converter import DeepResearchEventConverter
 from datus.api.models import (
@@ -14,7 +11,6 @@ from datus.api.models import (
     DeepResearchEventType,
     ErrorEvent,
     PlanUpdateEvent,
-    TodoItem,
     TodoStatus,
     ToolCallEvent,
     ToolCallResultEvent,
@@ -224,7 +220,6 @@ class TestDeepResearchEventConverter:
 
         # This would require async testing, but for now we'll test the synchronous parts
         # In a real test, we'd use pytest-asyncio or similar
-        pass
 
     def test_plan_id_consistency(self):
         """Test that all events from the same converter share the same planId."""
@@ -274,7 +269,11 @@ class TestDeepResearchEventConverter:
             output={
                 "error": "SQL语句缺少基本的查询/修改操作关键词(SELECT, INSERT, UPDATE, DELETE等)",
                 "error_type": "syntax",
-                "suggestions": ["检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)", "验证括号和引号是否匹配", "确认表名和列名拼写是否正确"],
+                "suggestions": [
+                    "检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)",
+                    "验证括号和引号是否匹配",
+                    "确认表名和列名拼写是否正确",
+                ],
                 "can_retry": False,
             },
             status=ActionStatus.FAILED,

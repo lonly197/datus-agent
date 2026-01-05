@@ -6,8 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import AsyncGenerator, Dict, Optional
 
-from pydantic import ValidationError
-
 from datus.agent.error_handling import unified_error_handler
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
@@ -149,9 +147,11 @@ class ExecuteSQLNode(Node):
                 action_type="database_connection",
                 input={
                     "database_name": self.input.database_name if hasattr(self.input, "database_name") else "",
-                    "sql_query_preview": self.input.sql_query[:50] + "..."
-                    if hasattr(self.input, "sql_query") and len(self.input.sql_query) > 50
-                    else getattr(self.input, "sql_query", ""),
+                    "sql_query_preview": (
+                        self.input.sql_query[:50] + "..."
+                        if hasattr(self.input, "sql_query") and len(self.input.sql_query) > 50
+                        else getattr(self.input, "sql_query", "")
+                    ),
                 },
                 status=ActionStatus.PROCESSING,
             )

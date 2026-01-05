@@ -6,7 +6,6 @@
 Tests for unified error handling in Datus-agent node system.
 """
 
-import pytest
 
 from datus.agent.error_handling import ErrorHandlerMixin, NodeErrorResult
 from datus.utils.exceptions import ErrorCode

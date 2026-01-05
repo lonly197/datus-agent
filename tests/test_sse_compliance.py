@@ -16,25 +16,17 @@ ChatBot接收信息响应结构定义.ts 的要求。
 """
 
 import asyncio
-import json
 import os
 import sys
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datus.api.event_converter import DeepResearchEventConverter
 from datus.api.models import (
-    ChatEvent,
-    CompleteEvent,
     DeepResearchEventType,
-    PlanUpdateEvent,
-    TodoItem,
-    TodoStatus,
-    ToolCallEvent,
-    ToolCallResultEvent,
 )
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
@@ -288,7 +280,11 @@ async def test_chat_research_sse_mock():
                     "message": "Successfully created todo list",
                     "todo_list": {
                         "items": [
-                            {"id": "task_1", "content": "理解业务需求：分析'首次试驾'到'下定'的平均转化周期", "status": "completed"},
+                            {
+                                "id": "task_1",
+                                "content": "理解业务需求：分析'首次试驾'到'下定'的平均转化周期",
+                                "status": "completed",
+                            },
                             {"id": "task_2", "content": "搜索相关表结构：试驾表和线索表", "status": "in_progress"},
                             {"id": "task_3", "content": "分析表字段和关联关系", "status": "pending"},
                             {"id": "task_4", "content": "设计SQL逻辑：识别首次试驾时间、下定时间", "status": "pending"},

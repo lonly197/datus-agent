@@ -4,17 +4,17 @@ Test script for unified execution event manager.
 """
 
 import asyncio
-import sys
 import os
+import sys
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath('.'))
+sys.path.insert(0, os.path.abspath("."))
 
 try:
     from datus.agent.node.execution_event_manager import (
+        ExecutionContext,
         ExecutionEventManager,
         create_execution_mode,
-        ExecutionContext,
     )
     from datus.schemas.action_history import ActionHistoryManager
 
@@ -34,7 +34,7 @@ try:
             task_data={"task": "请审查这个SQL: SELECT * FROM users"},
             agent_config=None,
             model=None,
-            workflow_metadata={}
+            workflow_metadata={},
         )
 
         # Create execution mode
@@ -49,7 +49,7 @@ try:
             context.task_data,
             context.agent_config,
             context.model,
-            context.workflow_metadata
+            context.workflow_metadata,
         )
 
         print("Execution started successfully")

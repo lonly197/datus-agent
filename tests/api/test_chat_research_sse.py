@@ -2,11 +2,9 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -297,7 +295,7 @@ class TestChatResearchPromptParameters:
         request_data = {
             "namespace": "test",
             "task": "Generate SQL query",
-            "prompt": "You are a SQL expert"
+            "prompt": "You are a SQL expert",
             # prompt_mode defaults to "append"
         }
 
@@ -311,7 +309,7 @@ class TestChatResearchPromptParameters:
         """Test that chat research works without prompt parameters (backward compatibility)."""
         request_data = {
             "namespace": "test",
-            "task": "Generate SQL query"
+            "task": "Generate SQL query",
             # No prompt or prompt_mode
         }
 
@@ -503,7 +501,11 @@ class TestChatResearchPromptParameters:
 
         mock_stream.return_value = mock_enhanced_stream()
 
-        request_data = {"namespace": "test", "task": "审查以下SQL：SELECT * FROM test_table WHERE id = 1", "plan_mode": True}
+        request_data = {
+            "namespace": "test",
+            "task": "审查以下SQL：SELECT * FROM test_table WHERE id = 1",
+            "plan_mode": True,
+        }
 
         response = test_client.post(
             "/workflows/chat_research",

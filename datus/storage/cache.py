@@ -21,7 +21,7 @@ from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
-T = TypeVar('T', bound=BaseEmbeddingStore)
+T = TypeVar("T", bound=BaseEmbeddingStore)
 
 
 @lru_cache(maxsize=12)

@@ -6,12 +6,11 @@ Tests the unified text2sql workflow implementation
 
 import asyncio
 import sys
-import tempfile
-import os
 from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
+
 
 async def test_text2sql_workflow():
     """Test the complete text2sql workflow integration"""
@@ -20,16 +19,15 @@ async def test_text2sql_workflow():
     try:
         # Test 1: Import verification
         print("\n📦 Testing imports...")
-        from datus.agent.node.intent_analysis_node import IntentAnalysisNode
-        from datus.agent.node.schema_discovery_node import SchemaDiscoveryNode
         from datus.api.service import DatusAPIService
         from datus.configuration.node_type import NodeType
+
         print("✅ All imports successful")
 
         # Test 2: Node type constants
         print("\n🏷️  Testing node type constants...")
-        assert hasattr(NodeType, 'TYPE_INTENT_ANALYSIS'), "TYPE_INTENT_ANALYSIS missing"
-        assert hasattr(NodeType, 'TYPE_SCHEMA_DISCOVERY'), "TYPE_SCHEMA_DISCOVERY missing"
+        assert hasattr(NodeType, "TYPE_INTENT_ANALYSIS"), "TYPE_INTENT_ANALYSIS missing"
+        assert hasattr(NodeType, "TYPE_SCHEMA_DISCOVERY"), "TYPE_SCHEMA_DISCOVERY missing"
         assert NodeType.TYPE_INTENT_ANALYSIS == "intent_analysis"
         assert NodeType.TYPE_SCHEMA_DISCOVERY == "schema_discovery"
         print("✅ Node type constants verified")
@@ -61,32 +59,37 @@ async def test_text2sql_workflow():
         # Test 4: Workflow file verification
         print("\n📋 Testing workflow configuration...")
         import yaml
-        with open('datus/agent/workflow.yml', 'r') as f:
+
+        with open("datus/agent/workflow.yml", "r") as f:
             wf_config = yaml.safe_load(f)
 
-        workflows = wf_config.get('workflow', {})
-        assert 'text2sql' in workflows, "text2sql workflow missing"
-        text2sql_steps = workflows['text2sql']
-        expected_steps = ['intent_analysis', 'schema_discovery', 'sql_generation', 'syntax_validation', 'execution_preview', 'output']
+        workflows = wf_config.get("workflow", {})
+        assert "text2sql" in workflows, "text2sql workflow missing"
+        text2sql_steps = workflows["text2sql"]
+        expected_steps = [
+            "intent_analysis",
+            "schema_discovery",
+            "sql_generation",
+            "syntax_validation",
+            "execution_preview",
+            "output",
+        ]
         assert text2sql_steps == expected_steps, f"Unexpected steps: {text2sql_steps}"
         print("✅ Workflow configuration verified")
 
         # Test 5: Prompt verification
         print("\n📝 Testing prompt templates...")
-        prompt_file = Path('datus/prompts/prompt_templates/text2sql_system_1.0.j2')
+        prompt_file = Path("datus/prompts/prompt_templates/text2sql_system_1.0.j2")
         assert prompt_file.exists(), "text2sql_system prompt template missing"
-        with open(prompt_file, 'r') as f:
+        with open(prompt_file, "r") as f:
             content = f.read()
-            assert 'Text-to-SQL expert' in content, "Prompt content incorrect"
+            assert "Text-to-SQL expert" in content, "Prompt content incorrect"
         print("✅ Prompt template verified")
 
         # Test 6: Backward compatibility
         print("\n🔄 Testing backward compatibility...")
         # Verify legacy names are mapped correctly
-        legacy_mappings = {
-            "nl2sql": "text2sql",
-            "text2sql_standard": "text2sql"
-        }
+        legacy_mappings = {"nl2sql": "text2sql", "text2sql_standard": "text2sql"}
         for legacy, expected in legacy_mappings.items():
             result = service._normalize_workflow_name(legacy)
             assert result == expected, f"Legacy mapping failed: {legacy} -> {result}"
@@ -106,8 +109,10 @@ async def test_text2sql_workflow():
     except Exception as e:
         print(f"\n❌ Verification failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 if __name__ == "__main__":
     success = asyncio.run(test_text2sql_workflow())

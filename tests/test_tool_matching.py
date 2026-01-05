@@ -107,7 +107,10 @@ class MockPlanModeHooks:
 
         # Enhanced keyword matching with context awareness
         context_aware_mappings = {
-            "database_focus": {"search_table": ["探索", "查找", "找到", "搜索"], "describe_table": ["描述", "检查", "查看"]}
+            "database_focus": {
+                "search_table": ["探索", "查找", "找到", "搜索"],
+                "describe_table": ["描述", "检查", "查看"],
+            }
         }
 
         # Apply context-aware scoring
@@ -147,7 +150,11 @@ class MockPlanModeHooks:
 
         # Simple Chinese pattern recognition for testing
         chinese_patterns = {
-            "search_table": {"verbs": ["探索", "查找", "找到", "搜索"], "nouns": ["表结构", "表", "字段", "数据库"], "confidence": 0.85}
+            "search_table": {
+                "verbs": ["探索", "查找", "找到", "搜索"],
+                "nouns": ["表结构", "表", "字段", "数据库"],
+                "confidence": 0.85,
+            }
         }
 
         for tool_name, pattern_config in chinese_patterns.items():

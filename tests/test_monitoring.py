@@ -16,7 +16,7 @@ import json
 # Define monitoring components locally to avoid import issues
 import time
 from collections import defaultdict, deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 class ExecutionMonitor:
@@ -282,9 +282,11 @@ class ExecutionMonitor:
         report = {
             "summary": {
                 "total_executions": self.metrics["total_executions"],
-                "success_rate": self.metrics["successful_executions"] / self.metrics["total_executions"]
-                if self.metrics["total_executions"] > 0
-                else 0,
+                "success_rate": (
+                    self.metrics["successful_executions"] / self.metrics["total_executions"]
+                    if self.metrics["total_executions"] > 0
+                    else 0
+                ),
                 "total_todos_processed": self.metrics["total_todos_processed"],
                 "cache_hit_rate": cache_hit_rate,
                 "batch_optimizations": self.metrics["batch_optimizations"],
@@ -337,13 +339,12 @@ class ExecutionMonitor:
         report = self.get_monitoring_report()
 
         summary = report["summary"]
-        current = report["current_status"]
+        report["current_status"]
 
         # Calculate some derived metrics
-        avg_execution_time = 0
         total_executions = len(report["recent_executions"])
         if total_executions > 0:
-            avg_execution_time = sum(ex.get("duration", 0) for ex in report["recent_executions"]) / total_executions
+            sum(ex.get("duration", 0) for ex in report["recent_executions"]) / total_executions
 
         # Build dashboard
         dashboard_lines = [
@@ -384,8 +385,8 @@ class ExecutionMonitor:
         trends = report["performance_trends"][-5:]
         if trends:
             for i, trend in enumerate(trends):
-                duration = trend.get("duration", 0)
-                todos = trend.get("todos_count", 0)
+                trend.get("duration", 0)
+                trend.get("todos_count", 0)
                 status_icon = "✅" if trend.get("status") == "completed" else "❌"
                 dashboard_lines.append(".1f")
         else:
@@ -525,7 +526,7 @@ async def test_performance_dashboard():
 
     # Test with empty monitor
     empty_monitor = ExecutionMonitor()
-    empty_dashboard = empty_monitor.generate_performance_dashboard()
+    empty_monitor.generate_performance_dashboard()
     print("✅ Generated empty dashboard (no data)")
 
     print()

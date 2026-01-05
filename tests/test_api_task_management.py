@@ -1,14 +1,14 @@
 """
 Tests for task management API endpoints.
 """
+
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
 
-from datus.api.models import ChatResearchRequest, RunWorkflowRequest
-from datus.api.service import DatusAPIService, RunningTask
+from datus.api.service import DatusAPIService
 
 
 class TestTaskManagement:

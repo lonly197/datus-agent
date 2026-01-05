@@ -12,7 +12,7 @@ consistent error logging and reporting.
 
 import traceback
 from functools import wraps
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+from typing import Any, Dict, List, Optional, Type, TypeVar
 
 from pydantic import ValidationError
 

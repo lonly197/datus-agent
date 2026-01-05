@@ -574,6 +574,7 @@ class AgenticNode(Node):
         Yields:
             ActionHistory: Progress updates during execution
         """
+        yield  # type: ignore
 
     def clear_session(self) -> None:
         """Clear the current session and reset token count."""

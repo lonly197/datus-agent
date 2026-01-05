@@ -1,4 +1,3 @@
-import pytest
 from rich.console import Console
 
 from datus.cli.plan_hooks import PlanModeHooks
