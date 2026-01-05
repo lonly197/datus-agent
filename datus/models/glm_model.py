@@ -3,7 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import os
-from typing import Optional
+from typing import Any
 
 from datus.configuration.agent_config import ModelConfig
 from datus.models.openai_compatible import OpenAICompatibleModel
