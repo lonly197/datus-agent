@@ -352,6 +352,140 @@ class DeepResearchEventConverter:
                         self._recent_assistant_hashes.append(h)
                     events.append(ChatEvent(id=event_id, planId=chat_plan_id, timestamp=timestamp, content=content))
 
+        # Handle SQL generation events
+        elif action.action_type == "sql_generation" and action.status == ActionStatus.SUCCESS:
+            sql_content = ""
+            if action.output and isinstance(action.output, dict):
+                sql = action.output.get("sql_query", "")
+                if sql:
+                    # Wrap as Markdown SQL code block
+                    sql_content = f"```sql\n{sql}\n```"
+
+            if sql_content:
+                # SQL generation events usually don't have a specific planId unless tied to a todo
+                sql_plan_id = todo_id if todo_id else None
+                events.append(
+                    ChatEvent(
+                        id=event_id,
+                        planId=sql_plan_id,
+                        timestamp=timestamp,
+                        content=sql_content,
+                    )
+                )
+
+        # Handle Intent Analysis (convert to ChatEvent for visibility)
+        elif action.action_type == "intent_analysis" and action.status == ActionStatus.SUCCESS:
+            intent = "Unknown"
+            confidence = 0.0
+            if action.output and isinstance(action.output, dict):
+                intent = action.output.get("intent", intent)
+                confidence = action.output.get("confidence", confidence)
+            
+            content = f"🧐 **Intent Detected**: `{intent}` (Confidence: {confidence:.2f})"
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=todo_id,
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # Handle Schema Discovery (convert to ChatEvent for visibility)
+        elif action.action_type == "schema_discovery" and action.status == ActionStatus.SUCCESS:
+            table_count = 0
+            tables = []
+            if action.output and isinstance(action.output, dict):
+                tables = action.output.get("candidate_tables", [])
+                table_count = len(tables)
+            
+            content = f"📂 **Schema Discovery**: Found {table_count} relevant tables."
+            if tables:
+                table_list = ", ".join(tables[:5])
+                if len(tables) > 5:
+                    table_list += f", and {len(tables)-5} more..."
+                content += f"\nTables: `{table_list}`"
+                
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=todo_id,
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # Handle Schema Linking
+        elif action.action_type == "schema_linking" and action.status == ActionStatus.SUCCESS:
+            tables_found = 0
+            if action.output and isinstance(action.output, dict):
+                tables_found = action.output.get("tables_found", 0)
+            
+            content = f"🔗 **Schema Linking**: Linked {tables_found} tables to the query context."
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=todo_id,
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # Handle Knowledge Search
+        elif action.action_type == "knowledge_search" and action.status == ActionStatus.SUCCESS:
+            knowledge_found = False
+            if action.output and isinstance(action.output, dict):
+                knowledge_found = action.output.get("knowledge_found", False)
+            
+            if knowledge_found:
+                content = "📚 **Knowledge Search**: Found relevant external business knowledge."
+                events.append(
+                    ChatEvent(
+                        id=event_id,
+                        planId=todo_id,
+                        timestamp=timestamp,
+                        content=content,
+                    )
+                )
+
+        # Handle SQL Execution
+        elif action.action_type == "sql_execution":
+            if action.status == ActionStatus.SUCCESS:
+                row_count = 0
+                if action.output and isinstance(action.output, dict):
+                    row_count = action.output.get("row_count", 0)
+                content = f"⚡ **SQL Execution**: Successfully executed. Rows returned: {row_count}."
+            else:
+                error = "Unknown error"
+                if action.output and isinstance(action.output, dict):
+                    error = action.output.get("error", error)
+                content = f"❌ **SQL Execution Failed**: {error}"
+
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=todo_id,
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # Handle Reflection Analysis
+        elif action.action_type == "reflection_analysis" and action.status == ActionStatus.SUCCESS:
+            strategy = "UNKNOWN"
+            if action.output and isinstance(action.output, dict):
+                strategy = action.output.get("strategy", strategy)
+            
+            content = f"🤔 **Reflection**: Analyzing results... Strategy: `{strategy}`"
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=todo_id,
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
         # 2. Handle tool calls - ToolCallEvent / ToolCallResultEvent and PlanUpdateEvent for plan tools
         elif action.role == ActionRole.TOOL:
             # 过滤掉内部的todo_update状态管理调用
@@ -535,17 +669,66 @@ class DeepResearchEventConverter:
                 )
             )
 
-        # 6. Handle errors
-        elif action.status == ActionStatus.FAILED:
-            # ErrorEvent should use todo_id if the error is related to a specific todo
-            error_plan_id = todo_id if todo_id else None
+        # 6. Handle workflow initialization
+        elif action.action_type == "workflow_init":
+            # Convert workflow init to a ChatEvent to inform user
+            content = f"🚀 **System Initialization**: {action.messages}"
             events.append(
-                ErrorEvent(
-                    id=event_id, planId=error_plan_id, timestamp=timestamp, error=action.messages or "Unknown error"
+                ChatEvent(
+                    id=event_id,
+                    planId=None,
+                    timestamp=timestamp,
+                    content=content,
                 )
             )
 
-        # 7. Handle report generation
+        # 7. Handle node execution
+        elif action.action_type == "node_execution":
+            # Convert node execution to a status update (ChatEvent with specific formatting or just text)
+            # We can use it to show what the agent is doing
+            node_desc = "Unknown Node"
+            if action.input and isinstance(action.input, dict):
+                node_desc = action.input.get("description", node_desc)
+            
+            content = f"🔄 **Executing Step**: {node_desc}"
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=None,
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # 8. Handle errors
+        elif action.status == ActionStatus.FAILED:
+            # ErrorEvent should use todo_id if the error is related to a specific todo
+            error_plan_id = todo_id if todo_id else None
+            
+            error_msg = action.messages or "Unknown error"
+            
+            # Enrich error message with details if available
+            if action.output and isinstance(action.output, dict):
+                details = []
+                if action.output.get("error_code"):
+                    details.append(f"Code: {action.output.get('error_code')}")
+                
+                # Check for recovery suggestions
+                suggestions = action.output.get("recovery_suggestions")
+                if suggestions and isinstance(suggestions, list):
+                    suggestions_str = "\n".join([f"- {s}" for s in suggestions])
+                    details.append(f"Suggestions:\n{suggestions_str}")
+                
+                if details:
+                    error_msg += "\n\n" + "\n".join(details)
+
+            events.append(
+                ErrorEvent(
+                    id=event_id, planId=error_plan_id, timestamp=timestamp, error=error_msg
+                )
+            )
+
+        # 9. Handle report generation
         elif action.action_type == "output_generation" and action.output:
             if isinstance(action.output, dict):
                 report_url = action.output.get("report_url", "")

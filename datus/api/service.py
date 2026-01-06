@@ -723,9 +723,9 @@ class DatusAPIService:
         # 预定义场景模式配置
         predefined_configs = {
             "text2sql": {
-                "workflow": "chat_agentic_plan",  # ✅ 改为使用ChatAgenticNode支持预检工具
-                "plan_mode": True,   # ✅ 兼容请求参数，启用plan模式以支持预检工具编排器
-                "auto_execute_plan": True,  # ✅ 兼容请求参数，启用自动执行
+                "workflow": "text2sql",  # ✅ 使用专用Text2SQL工作流
+                "plan_mode": False,   # ✅ 禁用plan模式
+                "auto_execute_plan": False,  # ✅ 禁用自动执行
                 "system_prompt": "text2sql_system",
                 "output_format": "json",
                 "required_tool_sequence": [

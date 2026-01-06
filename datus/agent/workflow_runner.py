@@ -406,9 +406,6 @@ class WorkflowRunner:
 
             logger.info(f"Workflow execution completed in {execution_time:.2f}s: {nodes_executed} nodes completed, {nodes_failed} nodes failed")
 
-            # Yield the completion action so it can be converted to a CompleteEvent
-            yield completion_action
-
             self._update_action_status(
                 completion_action,
                 success=True,
@@ -422,6 +419,9 @@ class WorkflowRunner:
                     "final_result_available": bool(metadata.get("final_result")),
                 },
             )
+
+            # Yield the completion action so it can be converted to a CompleteEvent
+            yield completion_action
 
         except asyncio.CancelledError:
             logger.info("Workflow stream execution was cancelled")
