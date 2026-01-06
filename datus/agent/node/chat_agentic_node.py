@@ -1504,14 +1504,11 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Yields:
             ActionHistory: Progress updates during execution
         """
-        # Store action_history_manager for access in update_context
-        self.action_history_manager = action_history_manager
-
         if not action_history_manager:
             action_history_manager = ActionHistoryManager()
 
-        # Initialize unified execution event manager
-        self.execution_event_manager = ExecutionEventManager(action_history_manager)
+        # Store action_history_manager for access in update_context
+        self.action_history_manager = action_history_manager
 
         # Get input from self.input (set by setup_input or directly)
         if not self.input:
@@ -1519,191 +1516,184 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
         user_input = self.input
 
-        # Determine execution scenario
-        scenario = self._determine_execution_scenario(user_input)
-        logger.info(f"Detected execution scenario: {scenario}")
+        # Create initial action
+        action = ActionHistory.create_action(
+            role=ActionRole.USER,
+            action_type=self.get_node_name(),
+            messages=f"User: {user_input.user_message}",
+            input_data=user_input.model_dump(),
+            status=ActionStatus.PROCESSING,
+        )
+        action_history_manager.add_action(action)
+        yield action
 
-        # Validate scenario for preflight execution
-        if scenario not in ["sql_review", "text2sql"]:
-            logger.warning(f"Unexpected scenario '{scenario}' detected, preflight tools may not execute")
-        else:
-            logger.debug(f"Scenario '{scenario}' will trigger preflight tool execution")
+        # Track plan mode state for cleanup
+        is_plan_mode = False
 
-        is_plan_mode = getattr(user_input, "plan_mode", False)
-        # emit_queue used to stream ActionHistory produced by PlanModeHooks back to node stream
-        emit_queue: "asyncio.Queue[ActionHistory]" = asyncio.Queue()
+        try:
+            # Check for auto-compact before session creation to ensure fresh context
+            await self._auto_compact()
 
-        if is_plan_mode:
-            self.plan_mode_active = True
+            # Get or create session and any available summary
+            session, conversation_summary = self._get_or_create_session()
 
-            # Create plan mode hooks
-            from rich.console import Console
-
-            from datus.cli.plan_hooks import PlanModeHooks
-
-            console = Console()
-            session = self._get_or_create_session()[0]
-
-            # Workflow sets 'auto_execute_plan' in metadata, CLI REPL does not
-            auto_mode = getattr(user_input, "auto_execute_plan", False)
-            logger.info(f"Plan mode auto_mode: {auto_mode} (from input)")
-
-            # Check for auto-injected knowledge from workflow task
-            auto_injected_knowledge = (
-                getattr(self.workflow.task, "_auto_injected_knowledge", None) if self.workflow else None
-            )
-
-            self.plan_hooks = PlanModeHooks(
-                console=console,
-                session=session,
-                auto_mode=auto_mode,
-                action_history_manager=action_history_manager,
-                agent_config=self.agent_config,
-                emit_queue=emit_queue,
-                model=self.model,
-                auto_injected_knowledge=auto_injected_knowledge,
-            )
-            # Enable caching and batching for plan mode
-            self.plan_hooks.enable_query_caching = True
-            self.plan_hooks.enable_batch_processing = True
-            # Set execution event manager if available
-            if hasattr(self, "execution_event_manager") and self.execution_event_manager:
-                execution_id = f"plan_{int(time.time() * 1000)}"
-                self.plan_hooks.set_execution_event_manager(self.execution_event_manager, execution_id)
-
-        # Execute preflight tools if required (for sql_review and text2sql tasks)
-        if (scenario in ["sql_review", "text2sql"]) and hasattr(self, "workflow") and self.workflow:
-            # Ensure plan_hooks are available for caching and batching
-            if not hasattr(self, "plan_hooks") or not self.plan_hooks:
-                # Create temporary plan hooks for preflight caching support
+            # Check for plan mode activation
+            is_plan_mode = getattr(user_input, "plan_mode", False)
+            if is_plan_mode:
+                self.plan_mode_active = True
                 from rich.console import Console
 
                 from datus.cli.plan_hooks import PlanModeHooks
 
                 console = Console()
-                session = self._get_or_create_session()[0] if hasattr(self, "_get_or_create_session") else None
-                if session:
-                    self.plan_hooks = PlanModeHooks(
-                        console=console,
-                        session=session,
-                        auto_mode=False,
-                        action_history_manager=action_history_manager,
-                        agent_config=self.agent_config,
-                        emit_queue=asyncio.Queue(),
-                        model=None,  # No LLM needed for preflight
-                        auto_injected_knowledge=[],
-                    )
-                    # Enable caching and batching for preflight
-                    self.plan_hooks.enable_query_caching = True
-                    # Set execution event manager if available
-                    if hasattr(self, "execution_event_manager") and self.execution_event_manager:
-                        execution_id = f"preflight_{int(time.time() * 1000)}"
-                        self.plan_hooks.set_execution_event_manager(self.execution_event_manager, execution_id)
-                    self.plan_hooks.enable_batch_processing = True
+                auto_mode = getattr(user_input, "auto_execute_plan", False)
+                logger.info(f"Plan mode activated (auto_mode={auto_mode})")
 
-            try:
-                if scenario == "sql_review":
-                    # Use new SQL Review Preflight Orchestrator (v2.4)
-                    from datus.agent.node.sql_review_preflight_orchestrator import SQLReviewPreflightOrchestrator
+                # Check for auto-injected knowledge from workflow task
+                auto_injected_knowledge = (
+                    getattr(self.workflow.task, "_auto_injected_knowledge", None) if self.workflow else None
+                )
 
-                    sql_review_orchestrator = SQLReviewPreflightOrchestrator(
-                        agent_config=self.agent_config,
-                        plan_hooks=getattr(self, "plan_hooks", None),
-                        execution_event_manager=getattr(self, "execution_event_manager", None),
-                    )
+                self.plan_hooks = PlanModeHooks(
+                    console=console,
+                    session=session,
+                    auto_mode=auto_mode,
+                    action_history_manager=action_history_manager,
+                    agent_config=self.agent_config,
+                    emit_queue=None,  # Not needed for basic plan mode
+                    model=self.model,
+                    auto_injected_knowledge=auto_injected_knowledge,
+                )
+                logger.info(f"Plan mode activated (auto_mode={auto_mode})")
 
-                    # Execute all 7 preflight tools with enhanced orchestration
-                    async for preflight_action in sql_review_orchestrator.run_preflight_tools(
-                        workflow=self.workflow,
-                        action_history_manager=action_history_manager,
-                        execution_id=f"sql_review_{int(time.time() * 1000)}",
-                    ):
-                        yield preflight_action
+            system_instruction = self._get_system_prompt(conversation_summary, user_input.prompt_version)
 
-                        # Check if this is a critical failure that should terminate execution
-                        if (
-                            preflight_action.action_type == "preflight_read_query"
-                            and preflight_action.status == ActionStatus.FAILED
-                        ):
-                            # SQL syntax validation failed, terminate execution
-                            logger.info("SQL syntax validation failed during preflight, terminating execution")
-                            return
-                elif scenario == "text2sql":
-                    # Use PreflightOrchestrator for Text2SQL evidence gathering
-                    from datus.agent.node.preflight_orchestrator import PreflightOrchestrator
+            # Add context to user message if provided
+            enhanced_message = self._build_enhanced_message(user_input)
 
-                    preflight_orchestrator = PreflightOrchestrator(
-                        agent_config=self.agent_config,
-                        plan_hooks=getattr(self, "plan_hooks", None),
-                        execution_event_manager=getattr(self, "execution_event_manager", None),
-                    )
+            # Execute with streaming
+            response_content = ""
+            sql_content = None
+            tokens_used = 0
+            last_successful_output = None
 
-                    # Run preflight tools for Text2SQL
-                    async for preflight_action in preflight_orchestrator.run_preflight_tools(
-                        workflow=self.workflow,
-                        action_history_manager=action_history_manager,
-                        execution_id=f"text2sql_preflight_{int(time.time() * 1000)}",
-                        required_tools=[
-                            "search_table",
-                            "describe_table",
-                            "search_reference_sql",
-                            "parse_temporal_expressions",
-                        ],
-                    ):
-                        yield preflight_action
+            # Create assistant action for processing
+            assistant_action = ActionHistory.create_action(
+                role=ActionRole.ASSISTANT,
+                action_type="llm_generation",
+                messages="Generating response with tools...",
+                input_data={"prompt": enhanced_message, "system": system_instruction},
+                status=ActionStatus.PROCESSING,
+            )
+            action_history_manager.add_action(assistant_action)
+            yield assistant_action
 
-            except ValueError as e:
-                # Preflight validation failed, already yielded error actions
-                logger.info(f"Preflight terminated due to validation error: {e}")
-                return
-            except Exception as e:
-                logger.warning(f"Preflight execution error: {e}")
+            logger.debug(f"Tools available : {len(self.tools)} tools - {[tool.name for tool in self.tools]}")
+            logger.debug(f"MCP servers available : {len(self.mcp_servers)} servers - {list(self.mcp_servers.keys())}")
 
-        # Create execution context and mode
-        from datus.agent.node.execution_event_manager import ExecutionContext
+            # Choose execution mode based on plan_mode flag
+            execution_mode = "plan" if is_plan_mode else "normal"
 
-        execution_context = ExecutionContext(
-            scenario=scenario,
-            task_data={"task": user_input.user_message, "input": user_input},
-            agent_config=self.agent_config,
-            model=self.model,
-            workflow_metadata=getattr(self.workflow, "metadata", {}) if self.workflow else {},
-        )
+            # Stream response using unified execution (supports plan mode and normal mode)
+            async for stream_action in self._execute_with_recursive_replan(
+                prompt=enhanced_message,
+                execution_mode=execution_mode,
+                original_input=user_input,
+                action_history_manager=action_history_manager,
+                session=session,
+            ):
+                yield stream_action
 
-        execution_mode = create_execution_mode(scenario, self.execution_event_manager, execution_context, self)
+                # Collect response content from successful actions
+                if stream_action.status == ActionStatus.SUCCESS and stream_action.output:
+                    if isinstance(stream_action.output, dict):
+                        last_successful_output = stream_action.output
+                        # Look for content in various possible fields
+                        response_content = (
+                            stream_action.output.get("content", "")
+                            or stream_action.output.get("response", "")
+                            or stream_action.output.get("raw_output", "")
+                            or response_content
+                        )
 
-        # Register execution with event manager
-        if hasattr(execution_mode, "start") and callable(getattr(execution_mode, "start")):
-            await execution_mode.start()
+            # If we still don't have response_content, check the last successful output
+            if not response_content and last_successful_output:
+                logger.debug(f"Trying to extract response from last_successful_output: {last_successful_output}")
+                # Try different fields that might contain the response
+                response_content = (
+                    last_successful_output.get("content", "")
+                    or last_successful_output.get("text", "")
+                    or last_successful_output.get("response", "")
+                    or last_successful_output.get("raw_output", "")
+                    or str(last_successful_output)  # Fallback to string representation
+                )
 
-        # Execute using unified execution mode
-        execution_success = True
-        execution_error = None
-        try:
-            await execution_mode.execute()
-        except Exception as e:
-            logger.error(f"Execution mode failed: {e}")
-            execution_success = False
-            execution_error = str(e)
-            # Record the error in the event manager
-            execution_id = getattr(execution_mode, "execution_id", f"error_{int(time.time())}")
-            await self.execution_event_manager.complete_execution(execution_id, error=execution_error)
+            # Extract SQL directly from summary_report action if available
+            sql_content = None
+            for stream_action in reversed(action_history_manager.get_actions()):
+                if stream_action.action_type == "summary_report" and stream_action.output:
+                    if isinstance(stream_action.output, dict):
+                        sql_content = stream_action.output.get("sql")
+                        # Also get the markdown/content if response_content is still empty
+                        if not response_content:
+                            response_content = (
+                                stream_action.output.get("markdown", "")
+                                or stream_action.output.get("content", "")
+                                or stream_action.output.get("response", "")
+                            )
+                        if sql_content:  # Found SQL, stop searching
+                            logger.debug(f"Extracted SQL from summary_report action: {sql_content[:100]}...")
+                            break
 
-        # Create result object for update_context compatibility
-        if execution_success:
-            # Create a synthetic success result for update_context
+            # Extract SQL from response content if not found in actions
+            if not sql_content and response_content:
+                sql_content = self._extract_sql_from_response(response_content)
+
+            # Create result object for compatibility
             from datus.schemas.base import BaseResult
 
-            self.result = BaseResult(success=True, message="Execution completed successfully")
-        else:
-            # Create error result for self.result
+            self.result = BaseResult(
+                success=True,
+                message="Chat execution completed",
+                data={
+                    "response_content": response_content,
+                    "sql_content": sql_content,
+                    "tokens_used": tokens_used,
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Chat execution failed: {e}")
+
+            # Create error result
             from datus.agent.error_handling import NodeErrorResult
 
-            self.result = NodeErrorResult(success=False, error_message=execution_error, error_code="execution_error")
+            self.result = NodeErrorResult(
+                success=False,
+                error_message=str(e),
+                error_code="chat_execution_error"
+            )
 
-        # Yield any remaining events from the event manager
-        async for event in self.execution_event_manager.get_events_stream():
-            yield event
+            # Yield error action
+            error_action = ActionHistory.create_action(
+                role=ActionRole.SYSTEM,
+                action_type="execution_error",
+                messages=f"Chat execution failed: {str(e)}",
+                input_data={"error": str(e)},
+                status=ActionStatus.FAILED,
+            )
+            action_history_manager.add_action(error_action)
+            yield error_action
+
+        finally:
+            # Cleanup plan mode state
+            if is_plan_mode and hasattr(self, "plan_hooks") and self.plan_hooks:
+                try:
+                    await self.plan_hooks.cleanup()
+                except Exception as e:
+                    logger.warning(f"Plan mode cleanup failed: {e}")
+                self.plan_mode_active = False
+                self.plan_hooks = None
 
     def _determine_execution_scenario(self, user_input) -> str:
         """
@@ -1761,83 +1751,68 @@ class ChatAgenticNode(GenSQLAgenticNode):
             logger.warning(f"Error in scenario detection, defaulting to text2sql: {e}")
             return "text2sql"
 
+    def _build_enhanced_message(self, user_input) -> str:
+        """Build enhanced message with context for chat interactions."""
+        enhanced_message = user_input.user_message
+        enhanced_parts = []
 
-class ExecutionStatus:
-    """Execution status tracker for preflight and main execution (v2.4)."""
+        # Add database context if available
+        if hasattr(user_input, "db_type") and user_input.db_type:
+            context_parts = [f"**Dialect**: {user_input.db_type}"]
+            if hasattr(user_input, "catalog") and user_input.catalog:
+                context_parts.append(f"**Catalog**: {user_input.catalog}")
+            if hasattr(user_input, "database") and user_input.database:
+                context_parts.append(f"**Database**: {user_input.database}")
+            if hasattr(user_input, "db_schema") and user_input.db_schema:
+                context_parts.append(f"**Schema**: {user_input.db_schema}")
+            context_part_str = f'Context: \n{", ".join(context_parts)}'
+            enhanced_parts.append(context_part_str)
 
-    def __init__(self):
-        self.preflight_completed = False
-        self.syntax_validation_passed = False
-        self.tools_executed = []
-        self.errors_encountered = []
+        # Add external knowledge if provided
+        if hasattr(user_input, "external_knowledge") and user_input.external_knowledge:
+            enhanced_parts.append(f"MUST use these business logic:\n{user_input.external_knowledge}")
 
-    def mark_preflight_complete(self, success: bool):
-        """Mark preflight execution as completed."""
-        self.preflight_completed = True
-
-    def mark_syntax_validation(self, passed: bool):
-        """Mark syntax validation result."""
-        self.syntax_validation_passed = passed
-
-    def add_tool_execution(self, tool_name: str, success: bool, execution_time: float = None, error_type: str = None):
-        """Add tool execution record with enhanced metadata."""
-        record = {
-            "tool": tool_name,
-            "success": success,
-            "timestamp": time.time(),
-            "execution_time": execution_time,
-            "error_type": error_type,
-        }
-        self.tools_executed.append(record)
-
-    def add_error(self, error_type: str, error_msg: str):
-        """Add error record."""
-        self.errors_encountered.append({"type": error_type, "message": error_msg, "timestamp": time.time()})
-
-    async def _dispatch_error_event(
-        self, error_type: str, sql_query: str, error_desc: str, tool_name: str, table_names: list
-    ):
-        """根据错误类型分发相应的事件 (v2.4)"""
-        try:
-            if error_type == "permission_error":
-                await self._send_permission_error_event(sql_query, error_desc)
-            elif error_type == "timeout_error":
-                await self._send_timeout_error_event(sql_query, error_desc)
-            elif error_type == "table_not_found":
-                table_name = table_names[0] if table_names else "unknown_table"
-                await self._send_table_not_found_error_event(table_name, error_desc)
-            elif error_type == "connection_error":
-                await self._send_db_connection_error_event(sql_query, error_desc)
-            # 对于其他错误类型，可以添加默认处理或忽略
-
-        except Exception as e:
-            # 错误事件发送失败不应该影响主要流程
-            logger.warning(f"Failed to dispatch error event for {error_type}: {e}")
-
-    async def _send_permission_error_event(self, sql_query: str, error_desc: str):
-        """Send permission error event."""
-        if hasattr(self, "execution_event_manager") and self.execution_event_manager:
-            await self.execution_event_manager.send_error_event(
-                error_type="permission_error", error_message=error_desc, sql_query=sql_query, severity="high"
+        # Add schemas if available
+        if hasattr(user_input, "schemas") and user_input.schemas:
+            from datus.schemas.node_models import TableSchema
+            table_names_str = TableSchema.table_names_to_prompt(user_input.schemas)
+            enhanced_parts.append(
+                f"Available tables (MUST use these tables and ONLY use these table names in FROM/JOIN clauses):"
+                f" \n{table_names_str}"
             )
 
-    async def _send_timeout_error_event(self, sql_query: str, error_desc: str):
-        """Send timeout error event."""
-        if hasattr(self, "execution_event_manager") and self.execution_event_manager:
-            await self.execution_event_manager.send_error_event(
-                error_type="timeout_error", error_message=error_desc, sql_query=sql_query, severity="medium"
-            )
+        # Add metrics if available
+        if hasattr(user_input, "metrics") and user_input.metrics:
+            from datus.utils.json_utils import to_str
+            enhanced_parts.append(f"Metrics: \n{to_str([item.model_dump() for item in user_input.metrics])}")
 
-    async def _send_table_not_found_error_event(self, table_name: str, error_desc: str):
-        """Send table not found error event."""
-        if hasattr(self, "execution_event_manager") and self.execution_event_manager:
-            await self.execution_event_manager.send_error_event(
-                error_type="table_not_found", error_message=error_desc, table_name=table_name, severity="medium"
-            )
+        # Add reference SQL if available
+        if hasattr(user_input, "reference_sql") and user_input.reference_sql:
+            from datus.utils.json_utils import to_str
+            enhanced_parts.append(f"Reference SQL: \n{to_str([item.model_dump() for item in user_input.reference_sql])}")
 
-    async def _send_db_connection_error_event(self, sql_query: str, error_desc: str):
-        """Send database connection error event."""
-        if hasattr(self, "execution_event_manager") and self.execution_event_manager:
-            await self.execution_event_manager.send_error_event(
-                error_type="connection_error", error_message=error_desc, sql_query=sql_query, severity="high"
-            )
+        if enhanced_parts:
+            separator = "\n\n"
+            enhanced_message = f"{separator.join(enhanced_parts)}\n\nNow based on the rules above, answer the user question: {user_input.user_message}"
+
+        return enhanced_message
+
+    def _extract_sql_from_response(self, response_content: str) -> Optional[str]:
+        """Extract SQL from response content."""
+        if not response_content:
+            return None
+
+        import re
+
+        # Look for SQL code blocks first
+        sql_match = re.search(r"```(?:sql|SQL)?\s*(.*?)\s*```", response_content, re.DOTALL | re.IGNORECASE)
+        if sql_match:
+            return sql_match.group(1).strip()
+
+        # Look for SELECT statements as fallback
+        select_match = re.search(r"(SELECT\s+.*?)(?:\n\n|\n\s*\n|$;)", response_content, re.DOTALL | re.IGNORECASE)
+        if select_match:
+            return select_match.group(1).strip()
+
+        return None
+
