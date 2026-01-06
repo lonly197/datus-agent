@@ -1877,23 +1877,6 @@ class PlanModeHooks(AgentHooks):
         # Current execution ID for unified event manager
         self.current_execution_id = None
 
-    def set_execution_event_manager(self, event_manager, execution_id: str):
-        """Set the unified execution event manager."""
-        self.execution_event_manager = event_manager
-        self.current_execution_id = execution_id
-
-    async def _emit_action(self, action):
-        """Emit action using the appropriate method."""
-        if self.execution_event_manager and self.current_execution_id:
-            # Use unified execution event manager
-            if hasattr(self.execution_event_manager, "_event_queue"):
-                await self.execution_event_manager._event_queue.put(action)
-        elif self.emit_queue:
-            # Fallback to legacy emit_queue
-            await self._emit_action(action)
-        elif self.action_history_manager:
-            # Fallback to action history manager
-            self.action_history_manager.add_action(action)
         # Executor task handle
         self._executor_task = None
         # Completion signaling for coordination between server executor and main agent loop
@@ -1926,6 +1909,24 @@ class PlanModeHooks(AgentHooks):
                 self.enable_fallback = bool(agent_config.plan_executor_enable_fallback)
         except Exception:
             pass
+
+    def set_execution_event_manager(self, event_manager, execution_id: str):
+        """Set the unified execution event manager."""
+        self.execution_event_manager = event_manager
+        self.current_execution_id = execution_id
+
+    async def _emit_action(self, action):
+        """Emit action using the appropriate method."""
+        if self.execution_event_manager and self.current_execution_id:
+            # Use unified execution event manager
+            if hasattr(self.execution_event_manager, "_event_queue"):
+                await self.execution_event_manager._event_queue.put(action)
+        elif self.emit_queue:
+            # Fallback to legacy emit_queue
+            await self._emit_action(action)
+        elif self.action_history_manager:
+            # Fallback to action history manager
+            self.action_history_manager.add_action(action)
 
     def _load_keyword_map(self, agent_config) -> Dict[str, List[str]]:
         """
