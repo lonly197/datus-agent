@@ -213,3 +213,77 @@ class SchemaDiscoveryNode(Node):
             status=ActionStatus.FAILED,
             output={"error": error_message},
         )
+
+    def execute(self) -> BaseResult:
+        """
+        Execute schema discovery synchronously.
+
+        Returns:
+            BaseResult: The result of schema discovery execution
+        """
+        return _run_async_stream_to_result(self)
+
+    async def execute_stream(
+        self, action_history_manager: Optional[ActionHistoryManager] = None
+    ) -> AsyncGenerator[ActionHistory, None]:
+        """
+        Execute schema discovery with streaming support.
+
+        Args:
+            action_history_manager: Manager for tracking action history
+
+        Yields:
+            ActionHistory: Progress and result actions during execution
+        """
+        # Set the action_history_manager if provided
+        if action_history_manager:
+            self.action_history_manager = action_history_manager
+
+        # Delegate to the existing run method
+        async for action in self.run():
+            yield action
+
+    def update_context(self, workflow: "Workflow") -> Dict[str, Any]:
+        """
+        Update workflow context with schema discovery results.
+
+        Args:
+            workflow: The workflow instance to update
+
+        Returns:
+            Dict with success status and message
+        """
+        try:
+            if not self.result or not self.result.success:
+                return {
+                    "success": False,
+                    "message": "Schema discovery failed, cannot update context"
+                }
+
+            # If result has schema information, update workflow context
+            if hasattr(self.result, 'output') and self.result.output:
+                output = self.result.output
+
+                # Update candidate tables if available
+                if 'candidate_tables' in output:
+                    # Store discovered tables in workflow metadata for downstream nodes
+                    if not hasattr(workflow, 'metadata'):
+                        workflow.metadata = {}
+                    workflow.metadata['discovered_tables'] = output['candidate_tables']
+
+                # Update table schemas if they were loaded
+                if 'table_schemas' in output and workflow.context:
+                    workflow.context.table_schemas.update(output.get('table_schemas', {}))
+                    workflow.context.table_values.update(output.get('table_values', {}))
+
+            return {
+                "success": True,
+                "message": f"Schema discovery context updated with {len(self.result.output.get('candidate_tables', []))} tables"
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to update schema discovery context: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Schema discovery context update failed: {str(e)}"
+            }
