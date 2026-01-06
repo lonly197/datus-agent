@@ -14,6 +14,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseResult
 from datus.schemas.node_models import BaseInput
+from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -165,9 +166,11 @@ class IntentAnalysisNode(Node):
             # ✅ Set self.result for successful execution
             self.result = BaseResult(
                 success=True,
-                intent=intent_result.intent,
-                confidence=intent_result.confidence,
-                metadata=intent_result.metadata
+                data={
+                    "intent": intent_result.intent,
+                    "confidence": intent_result.confidence,
+                    "metadata": intent_result.metadata
+                }
             )
 
             # Emit success action with results
