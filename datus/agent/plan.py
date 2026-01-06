@@ -170,6 +170,14 @@ def _create_single_node(
         normalized_type = NodeType.TYPE_EXECUTE_SQL
     elif node_type == "chat":
         normalized_type = NodeType.TYPE_CHAT
+    elif node_type == "chat_agentic":
+        normalized_type = NodeType.TYPE_CHAT
+    elif node_type == "chatbot":
+        # Map chatbot to GenSQLAgenticNode for SQL generation workflows (deprecated, use sql_chatbot)
+        normalized_type = NodeType.TYPE_GENSQL
+    elif node_type == "sql_chatbot":
+        # Map sql_chatbot to GenSQLAgenticNode for specialized SQL generation
+        normalized_type = NodeType.TYPE_GENSQL
     elif node_type == "sql_generation":
         # Map sql_generation to GenSQLAgenticNode for the text2sql workflow
         normalized_type = NodeType.TYPE_GENSQL

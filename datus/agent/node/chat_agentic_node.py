@@ -508,6 +508,23 @@ class ChatAgenticNode(GenSQLAgenticNode):
     - Default filesystem MCP server
     - Streaming response generation
     - Session-based conversation management
+    - Multi-mode support: text2sql, data_analysis, sql_review, deep_analysis
+    """
+    """
+    Multi-purpose conversational AI node with comprehensive tool support.
+
+    This node provides flexible chat capabilities supporting multiple execution modes:
+    - text2sql: Natural language to SQL conversion
+    - data_analysis: General data analysis tasks
+    - sql_review: SQL quality assessment and optimization
+    - deep_analysis: Advanced analytical queries
+
+    Key features:
+    - Namespace-based database MCP server selection
+    - Default filesystem MCP server
+    - Streaming response generation
+    - Session-based conversation management
+    - Tool calling and execution orchestration
     """
 
     def __init__(
@@ -530,7 +547,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             agent_config: Agent configuration
             tools: List of tools (will be populated in setup_tools)
         """
-        # Call parent constructor with node_name="chat"
+        # Call parent constructor with node_name="chat_agentic"
         # This will initialize max_turns, tool attributes, plan mode attributes, and MCP servers
         super().__init__(
             node_id=node_id,

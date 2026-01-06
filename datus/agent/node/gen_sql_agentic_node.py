@@ -31,14 +31,15 @@ logger = get_logger(__name__)
 
 class GenSQLAgenticNode(AgenticNode):
     """
-    SQL generation agentic node with enhanced configuration and limited context support.
+    Specialized SQL generation conversational AI node.
 
-    This node provides specialized SQL generation capabilities with:
-    - Enhanced system prompt with template variables
-    - Limited context support (tables, metrics, reference_sql)
+    This node provides focused SQL generation capabilities with enhanced context support:
+    - Specialized system prompts optimized for SQL generation
+    - Enhanced context management (tables, metrics, reference SQL examples)
     - Tool detection and dynamic template preparation
     - Configurable tool sets and MCP server integration
     - Session-based conversation management
+    - Optimized for structured SQL generation workflows
     """
 
     def __init__(

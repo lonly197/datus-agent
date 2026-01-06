@@ -30,27 +30,30 @@ workflow:
     - execute_sql
     - output
 
-  # Agentic workflow using ChatAgenticNode
+  # Agentic workflow using ChatAgenticNode (multi-purpose conversational AI)
+  # Supports multiple modes: text2sql, data_analysis, sql_review, deep_analysis
   chat_agentic:
-    - chat
+    - chat_agentic  # Maps to ChatAgenticNode (TYPE_CHAT) for flexible chat interactions
     - execute_sql
     - output
 
   # Dedicated workflow for plan mode - chat node handles everything internally
   chat_agentic_plan:
-    - chat
+    - chat_agentic  # Maps to ChatAgenticNode (TYPE_CHAT) with plan mode support
     - output
 
+  # Specialized SQL generation workflow using GenSQLAgenticNode
+  # Focused on SQL generation with enhanced context and tool support
   gensql_agentic:
-    - chatbot
+    - sql_chatbot  # Maps to GenSQLAgenticNode (TYPE_GENSQL) for focused SQL generation
     - execute_sql
     - output
 
   # Text2SQL workflow with preflight evidence and structured generation
   # Legacy names: text2sql_standard, nl2sql (mapped at API level for backward compatibility)
   text2sql:
-    - intent_analysis      # Analyze query intent
-    - schema_discovery     # Discover relevant schema
-    - generate_sql         # Generate SQL with evidence
-    - execute_sql          # Execute SQL query
-    - output               # Return results
+    - intent_analysis      # Analyze query intent (IntentAnalysisNode)
+    - schema_discovery     # Discover relevant schema (SchemaDiscoveryNode)
+    - generate_sql         # Generate SQL with evidence (GenerateSQLNode)
+    - execute_sql          # Execute SQL query (ExecuteSQLNode)
+    - output               # Return results (OutputNode)
