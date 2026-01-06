@@ -921,6 +921,7 @@ class DatusAPIService:
                 ),
                 "output_format": task_config["output_format"],
                 "task_type": task_type,
+                "workflow": task_config["workflow"],
                 "prompt": request.prompt,
                 "prompt_mode": request.prompt_mode,
             }

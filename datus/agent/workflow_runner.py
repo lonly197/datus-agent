@@ -42,7 +42,11 @@ class WorkflowRunner:
 
     def initialize_workflow(self, sql_task: SqlTask):
         """Generate a new workflow plan."""
-        plan_type = getattr(self.args, "workflow", None) or self.global_config.workflow_plan
+        plan_type = (
+            self.initial_metadata.get("workflow") or  # 优先检查metadata中的workflow
+            getattr(self.args, "workflow", None) or
+            self.global_config.workflow_plan
+        )
 
         # Check if plan_mode is specified in initial metadata (API context)
         plan_mode = False
