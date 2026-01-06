@@ -581,7 +581,7 @@ class AgenticNode(Node):
         Yields:
             ActionHistory: Progress updates during execution
         """
-        yield  # type: ignore
+        raise NotImplementedError("execute_stream() must be implemented by subclasses")
 
     def clear_session(self) -> None:
         """Clear the current session and reset token count."""
