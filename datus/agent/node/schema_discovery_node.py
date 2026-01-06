@@ -8,10 +8,11 @@ SchemaDiscoveryNode implementation for discovering relevant schema and tables.
 
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from datus.agent.node.node import Node
+from datus.agent.node.node import Node, _run_async_stream_to_result
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.base import BaseResult
 from datus.schemas.node_models import BaseInput
 from datus.storage.schema_metadata import SchemaWithValueRAG
 from datus.utils.loggings import get_logger

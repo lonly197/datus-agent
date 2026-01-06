@@ -8,10 +8,11 @@ IntentAnalysisNode implementation for analyzing query intent.
 
 from typing import Any, AsyncGenerator, Dict, Optional
 
-from datus.agent.node.node import Node
+from datus.agent.node.node import Node, _run_async_stream_to_result
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.base import BaseResult
 from datus.schemas.node_models import BaseInput
 from datus.utils.loggings import get_logger
 
@@ -61,6 +62,49 @@ class IntentAnalysisNode(Node):
             self.input = BaseInput()
 
         return {"success": True, "message": "Intent analysis input setup complete"}
+
+    def update_context(self, workflow: Workflow) -> Dict[str, Any]:
+        """
+        Update workflow context with intent analysis results.
+
+        Args:
+            workflow: Workflow instance to update
+
+        Returns:
+            Dictionary with success status
+        """
+        # Intent analysis doesn't modify context directly
+        return {"success": True, "message": "Intent analysis context update complete"}
+
+    def execute(self) -> BaseResult:
+        """
+        Execute intent analysis synchronously.
+
+        Returns:
+            BaseResult: Execution result
+        """
+        # For synchronous execution, we use the async stream approach
+        result = _run_async_stream_to_result(self)
+        return result
+
+    async def execute_stream(
+        self, action_history_manager: Optional[ActionHistoryManager] = None
+    ) -> AsyncGenerator[ActionHistory, None]:
+        """
+        Execute intent analysis with streaming support.
+
+        Args:
+            action_history_manager: Optional action history manager
+
+        Yields:
+            ActionHistory: Progress updates during execution
+        """
+        # Store action history manager for use in run method
+        self.action_history_manager = action_history_manager
+
+        # Delegate to the existing run method
+        async for action in self.run():
+            yield action
 
     async def run(self) -> AsyncGenerator[ActionHistory, None]:
         """
