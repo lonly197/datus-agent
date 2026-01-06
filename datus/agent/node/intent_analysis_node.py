@@ -162,6 +162,14 @@ class IntentAnalysisNode(Node):
                     self.workflow.metadata["intent_confidence"] = 0.5
                     self.workflow.metadata["intent_metadata"] = {"fallback": True, "error": str(e)}
 
+            # ✅ Set self.result for successful execution
+            self.result = BaseResult(
+                success=True,
+                intent=intent_result.intent,
+                confidence=intent_result.confidence,
+                metadata=intent_result.metadata
+            )
+
             # Emit success action with results
             yield ActionHistory(
                 action_id=f"{self.id}_intent_analysis",
@@ -187,6 +195,10 @@ class IntentAnalysisNode(Node):
                 "intent_analysis",
                 {"task_id": getattr(self.workflow, 'id', 'unknown') if self.workflow else 'unknown'}
             )
+
+            # ✅ Set self.result for failed execution
+            self.result = error_result
+
             yield ActionHistory(
                 action_id=f"{self.id}_error",
                 role=ActionRole.TOOL,

@@ -67,9 +67,11 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
 
         async def _consume_stream():
             """Consume the async generator and collect ActionHistory events."""
+            last_action = None
             async for action in node.execute_stream(
                 node.action_history_manager if hasattr(node, "action_history_manager") else None
             ):
+                last_action = action  # Keep track of the last action
                 try:
                     # Forward ActionHistory to action_history_manager if available
                     if hasattr(node, "action_history_manager") and node.action_history_manager:
@@ -77,7 +79,7 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
                 except Exception as e:
                     logger.debug(f"Failed to record action in adaptor: {e}")
                     # Continue processing - don't fail the whole execution
-            return True
+            return last_action
 
         # Use asyncio.run for clean event loop management
         return asyncio.run(_consume_stream())
@@ -86,12 +88,25 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
         # Run async operation in a thread to avoid conflicts with pytest's event loop
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_run_async_in_thread)
-            success = future.result(timeout=60)  # 60 second timeout
+            last_action = future.result(timeout=60)  # 60 second timeout
 
-        # Return success result
+        # Infer result from the last ActionHistory and node state
         from datus.schemas.base import BaseResult
+        from datus.schemas.action_history import ActionStatus
 
-        return BaseResult(success=True)
+        # If node has already set self.result (like IntentAnalysisNode), use it
+        if hasattr(node, 'result') and node.result is not None:
+            return node.result
+
+        # Otherwise, infer from the last ActionHistory
+        if last_action and last_action.status == ActionStatus.SUCCESS:
+            return BaseResult(success=True)
+        elif last_action and last_action.status == ActionStatus.FAILED:
+            error_msg = last_action.output.get('error', 'Stream execution failed') if last_action.output else 'Stream execution failed'
+            return BaseResult(success=False, error=error_msg)
+        else:
+            # No action or unknown status, assume success for backward compatibility
+            return BaseResult(success=True)
 
     except Exception as e:
         # Convert async exceptions to error result for consistent error handling
