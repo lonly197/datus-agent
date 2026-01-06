@@ -15,9 +15,10 @@ answer format: {"classification": "DOC_SEARCH", "keywords": ["key1", "key2"], "e
     b. The SQL has minor, unambiguous syntax errors (e.g., missing comma, typo in a column name).
     c. The fix does NOT require documentation or external lookup.
 answer format: {"classification": "SIMPLE_REGENERATE", "sql": "sql", "explanation":"..."}
-4. SCHEMA_LINKING -The database schema analysis indicates mismatches with the current task. Clearly identify issues with table schema alignment. A new schema analysis will be executed to locate better schema candidates.
+4. SCHEMA_LINKING - The database schema analysis indicates mismatches with the current task (e.g. Table not found). Clearly identify issues with table schema alignment. A new schema analysis will be executed to locate better schema candidates.
 answer format: {"classification": "SCHEMA_LINKING", "explanation":"..."}
 5. REASONING - It is necessary to introduce more complex reasoning logic, including column exploration, data sampling, and validation of intermediate results. A series of simple queries need to be executed to supplement the context.
+   **Crucially, use this if you encounter 'Column not found' or 'Unknown column' errors**, as you need to inspect the actual table schema (`describe_table`) to find the correct column names.
 answer format: {"classification": "REASONING", "explanation":"..."}
 
 

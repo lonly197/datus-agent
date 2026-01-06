@@ -252,33 +252,34 @@ class SchemaDiscoveryNode(Node):
         try:
             if not self.agent_config:
                 return []
-
-            context_search = ContextSearchTools(self.agent_config)
-            if not context_search.has_metrics:  # Using metrics RAG which contains table info
-                return []
-
-            # Search for metrics/tables relevant to the query
-            # We use search_metrics as it searches the semantic layer which maps to tables
-            result = context_search.search_metrics(query_text=query, top_n=5)
-
+            
             tables = []
-            if result.success and result.result:
-                for item in result.result:
-                    # Extract table names from metric definitions or related SQL
-                    # This is a simplification - in a real implementation we'd search table metadata directly
-                    # For now, we assume the metric storage might contain table references
-                    if isinstance(item, dict):
-                        # Try to extract table name from sql_query or other fields if available
-                        # This depends on the specific structure of the metric result
-                        pass
             
-            # Since search_metrics might not return tables directly, let's try a different approach
-            # Use SchemaWithValueRAG directly for table search if available
+            # 1. Use SchemaWithValueRAG for direct table semantic search
             rag = SchemaWithValueRAG(agent_config=self.agent_config)
-            # Note: SchemaWithValueRAG currently only supports exact match lookup
-            # In a full implementation, we would add semantic search to SchemaWithValueRAG
+            # Use search_similar to find tables based on vector similarity of their definitions
+            schema_results, _ = rag.search_similar(
+                query_text=query,
+                top_n=5
+            )
             
-            return tables
+            if schema_results and len(schema_results) > 0:
+                # Extract table names from arrow table
+                found_tables = schema_results.column("table_name").to_pylist()
+                if found_tables:
+                    tables.extend(found_tables)
+                    logger.info(f"Semantic search found tables via metadata: {found_tables}")
+
+            # 2. Use ContextSearchTools for metrics/business logic search (complementary)
+            context_search = ContextSearchTools(self.agent_config)
+            if context_search.has_metrics:
+                result = context_search.search_metrics(query_text=query, top_n=5)
+                if result.success and result.result:
+                    # Logic to extract tables from metrics would go here
+                    # For now, we rely primarily on SchemaWithValueRAG
+                    pass
+            
+            return list(set(tables))
         except Exception as e:
             logger.warning(f"Semantic table discovery failed: {e}")
             return []
