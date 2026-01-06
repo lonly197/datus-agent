@@ -56,4 +56,5 @@ workflow:
     - schema_discovery     # Discover relevant schema (SchemaDiscoveryNode)
     - generate_sql         # Generate SQL with evidence (GenerateSQLNode)
     - execute_sql          # Execute SQL query (ExecuteSQLNode)
+    - reflect              # Reflect on execution results and self-correct (ReflectNode)
     - output               # Return results (OutputNode)

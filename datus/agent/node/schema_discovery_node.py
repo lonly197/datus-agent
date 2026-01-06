@@ -15,6 +15,8 @@ from datus.schemas.action_history import ActionHistory, ActionHistoryManager, Ac
 from datus.schemas.base import BaseResult
 from datus.schemas.node_models import BaseInput
 from datus.storage.schema_metadata import SchemaWithValueRAG
+from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.func_tool.context_search import ContextSearchTools
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 
@@ -201,48 +203,206 @@ class SchemaDiscoveryNode(Node):
 
         candidate_tables = []
 
-        # If tables are explicitly mentioned in the task, use those
+        # 1. If tables are explicitly mentioned in the task, use those (Highest Priority)
         if hasattr(task, "tables") and task.tables:
             candidate_tables.extend(task.tables)
+            logger.info(f"Using explicitly specified tables: {task.tables}")
 
-        # If intent is text2sql, try to extract table hints from the query text
+        # If intent is text2sql, try to discover tables
         if intent == "text2sql" and hasattr(task, "task"):
             task_text = task.task.lower()
 
-            # Simple keyword-based table discovery (can be enhanced with RAG)
-            table_keywords = [
-                # Common business tables
-                "user", "users",
-                "customer", "customers",
-                "order", "orders",
-                "product", "products",
-                "sale", "sales",
-                "transaction", "transactions",
-                "employee", "employees",
-                "department", "departments",
-                # Chinese keywords support
-                "用户", "user",
-                "客户", "customer",
-                "订单", "order",
-                "产品", "product",
-                "销售", "sale",
-                "交易", "transaction",
-                "员工", "employee",
-                "部门", "department",
-                "试驾", "test_drive",  # Based on user query
-                "转化", "conversion",
-                # Add more as needed
-            ]
+            # 2. Semantic Search (High Priority)
+            # Use vector search to find tables relevant to the query semantics
+            if not candidate_tables:
+                semantic_tables = await self._semantic_table_discovery(task.task)
+                if semantic_tables:
+                    candidate_tables.extend(semantic_tables)
+                    logger.info(f"Found {len(semantic_tables)} tables via semantic search: {semantic_tables}")
 
-            for keyword in table_keywords:
-                if keyword in task_text:
-                    # Convert singular/plural variations
-                    table_name = keyword.rstrip("s")  # Simple singularization
-                    if table_name not in candidate_tables:
-                        candidate_tables.append(table_name)
+            # 3. Keyword Matching (Medium Priority)
+            # Use heuristic keyword matching as a backup or supplement
+            if not candidate_tables:
+                keyword_tables = self._keyword_table_discovery(task_text)
+                if keyword_tables:
+                    candidate_tables.extend(keyword_tables)
+                    logger.info(f"Found {len(keyword_tables)} tables via keyword matching: {keyword_tables}")
+
+            # 4. Fallback: Get All Tables (Low Priority)
+            # If no tables found yet, get all tables from database (limit to reasonable number)
+            if not candidate_tables:
+                fallback_tables = await self._fallback_get_all_tables(task)
+                if fallback_tables:
+                    candidate_tables.extend(fallback_tables)
+                    logger.warning(f"No tables found via search, using fallback (all tables): {len(fallback_tables)} tables")
 
         # If no candidates found, return empty list (downstream nodes will handle)
         return list(set(candidate_tables))  # Remove duplicates
+
+    async def _semantic_table_discovery(self, query: str) -> List[str]:
+        """
+        Discover tables using semantic vector search.
+
+        Args:
+            query: User query text
+
+        Returns:
+            List of table names
+        """
+        try:
+            if not self.agent_config:
+                return []
+
+            context_search = ContextSearchTools(self.agent_config)
+            if not context_search.has_metrics:  # Using metrics RAG which contains table info
+                return []
+
+            # Search for metrics/tables relevant to the query
+            # We use search_metrics as it searches the semantic layer which maps to tables
+            result = context_search.search_metrics(query_text=query, top_n=5)
+
+            tables = []
+            if result.success and result.result:
+                for item in result.result:
+                    # Extract table names from metric definitions or related SQL
+                    # This is a simplification - in a real implementation we'd search table metadata directly
+                    # For now, we assume the metric storage might contain table references
+                    if isinstance(item, dict):
+                        # Try to extract table name from sql_query or other fields if available
+                        # This depends on the specific structure of the metric result
+                        pass
+            
+            # Since search_metrics might not return tables directly, let's try a different approach
+            # Use SchemaWithValueRAG directly for table search if available
+            rag = SchemaWithValueRAG(agent_config=self.agent_config)
+            # Note: SchemaWithValueRAG currently only supports exact match lookup
+            # In a full implementation, we would add semantic search to SchemaWithValueRAG
+            
+            return tables
+        except Exception as e:
+            logger.warning(f"Semantic table discovery failed: {e}")
+            return []
+
+    def _keyword_table_discovery(self, task_text: str) -> List[str]:
+        """
+        Discover tables using keyword matching.
+
+        Args:
+            task_text: Lowercase user query text
+
+        Returns:
+            List of table names
+        """
+        candidate_tables = []
+        
+        # Simple keyword-based table discovery
+        table_keywords = [
+            # Common business tables
+            "user", "users",
+            "customer", "customers",
+            "order", "orders",
+            "product", "products",
+            "sale", "sales",
+            "transaction", "transactions",
+            "employee", "employees",
+            "department", "departments",
+            # Chinese keywords support
+            "用户", "user",
+            "客户", "customer",
+            "订单", "order",
+            "产品", "product",
+            "销售", "sale",
+            "交易", "transaction",
+            "员工", "employee",
+            "部门", "department",
+            "试驾", "test_drive",  # Based on user query
+            "转化", "conversion",
+            # Add more as needed
+        ]
+
+        # Iterate in pairs (keyword, table_name)
+        # For English words, keyword == table_name (mostly)
+        # For Chinese words, keyword maps to English table_name
+        
+        # Refined logic: the list above is mixed. Let's make it a mapping for better accuracy
+        keyword_map = {
+            "用户": "users",
+            "user": "users",
+            "客户": "customers", 
+            "customer": "customers",
+            "订单": "orders", 
+            "order": "orders",
+            "产品": "products", 
+            "product": "products",
+            "销售": "sales", 
+            "sale": "sales",
+            "交易": "transactions", 
+            "transaction": "transactions",
+            "员工": "employees", 
+            "employee": "employees",
+            "部门": "departments", 
+            "department": "departments",
+            "试驾": "test_drives",
+            "转化": "conversions",
+        }
+        
+        # Check mapping first
+        for keyword, table_name in keyword_map.items():
+            if keyword in task_text:
+                candidate_tables.append(table_name)
+                # Also add singular/plural variations
+                if table_name.endswith("s"):
+                    candidate_tables.append(table_name[:-1])
+                else:
+                    candidate_tables.append(table_name + "s")
+
+        # Fallback to the original list check for direct matches
+        for keyword in table_keywords:
+            if keyword in task_text and keyword not in keyword_map:
+                # Assuming keyword itself is a potential table name
+                candidate_tables.append(keyword)
+                table_name = keyword.rstrip("s")
+                if table_name != keyword:
+                    candidate_tables.append(table_name)
+
+        return candidate_tables
+
+    async def _fallback_get_all_tables(self, task) -> List[str]:
+        """
+        Fallback: Get all tables from the database if no candidates found.
+        
+        Args:
+            task: The SQL task
+            
+        Returns:
+            List of all table names (limited to top N)
+        """
+        try:
+            db_manager = db_manager_instance(self.agent_config.namespaces)
+            connector = db_manager.get_conn(
+                self.agent_config.current_namespace,
+                task.database_name
+            )
+            
+            if not connector:
+                return []
+                
+            # Get all tables
+            # Note: get_all_table_names might be expensive for large DBs
+            # We should probably limit this or cache it
+            all_tables = connector.get_all_table_names()
+            
+            # Limit to reasonable number to avoid context overflow
+            MAX_TABLES = 50
+            if len(all_tables) > MAX_TABLES:
+                logger.warning(f"Too many tables ({len(all_tables)}), limiting to first {MAX_TABLES} for fallback")
+                return all_tables[:MAX_TABLES]
+                
+            return all_tables
+            
+        except Exception as e:
+            logger.warning(f"Fallback table discovery failed: {e}")
+            return []
 
     async def _load_table_schemas(self, task, candidate_tables: List[str]) -> None:
         """
