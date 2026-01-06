@@ -328,8 +328,8 @@ class SchemaDiscoveryNode(Node):
                 }
 
             # If result has schema information, update workflow context
-            if hasattr(self.result, 'output') and self.result.output:
-                output = self.result.output
+            if hasattr(self.result, 'data') and self.result.data:
+                output = self.result.data
 
                 # Update candidate tables if available
                 if 'candidate_tables' in output:
@@ -345,7 +345,7 @@ class SchemaDiscoveryNode(Node):
 
             return {
                 "success": True,
-                "message": f"Schema discovery context updated with {len(self.result.output.get('candidate_tables', []))} tables"
+                "message": f"Schema discovery context updated with {len(self.result.data.get('candidate_tables', []))} tables"
             }
 
         except Exception as e:
