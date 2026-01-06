@@ -153,6 +153,16 @@ class SchemaDiscoveryNode(Node):
                 },
             )
 
+            # ✅ Fix: Set self.result to ensure node success
+            self.result = BaseResult(
+                success=True,
+                data={
+                    "candidate_tables": candidate_tables,
+                    "table_count": len(candidate_tables),
+                    "intent": intent,
+                }
+            )
+
             logger.info(
                 f"Schema discovery completed: found {len(candidate_tables)} candidate tables for intent '{intent}'"
             )
@@ -202,22 +212,25 @@ class SchemaDiscoveryNode(Node):
             # Simple keyword-based table discovery (can be enhanced with RAG)
             table_keywords = [
                 # Common business tables
-                "user",
-                "users",
-                "customer",
-                "customers",
-                "order",
-                "orders",
-                "product",
-                "products",
-                "sale",
-                "sales",
-                "transaction",
-                "transactions",
-                "employee",
-                "employees",
-                "department",
-                "departments",
+                "user", "users",
+                "customer", "customers",
+                "order", "orders",
+                "product", "products",
+                "sale", "sales",
+                "transaction", "transactions",
+                "employee", "employees",
+                "department", "departments",
+                # Chinese keywords support
+                "用户", "user",
+                "客户", "customer",
+                "订单", "order",
+                "产品", "product",
+                "销售", "sale",
+                "交易", "transaction",
+                "员工", "employee",
+                "部门", "department",
+                "试驾", "test_drive",  # Based on user query
+                "转化", "conversion",
                 # Add more as needed
             ]
 
