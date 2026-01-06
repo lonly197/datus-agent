@@ -1915,6 +1915,19 @@ class PlanModeHooks(AgentHooks):
         self.execution_event_manager = event_manager
         self.current_execution_id = execution_id
 
+    async def cleanup(self):
+        """Clean up resources and cancel pending tasks."""
+        if self._executor_task and not self._executor_task.done():
+            self._executor_task.cancel()
+            try:
+                await self._executor_task
+            except asyncio.CancelledError:
+                pass
+            self._executor_task = None
+        
+        # Ensure completion event is set to unblock any waiters
+        self._execution_complete.set()
+
     async def _emit_action(self, action):
         """Emit action using the appropriate method."""
         if self.execution_event_manager and self.current_execution_id:
