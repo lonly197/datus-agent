@@ -1856,6 +1856,8 @@ class PlanModeHooks(AgentHooks):
         self.auto_mode = auto_mode
         # Optional model for LLM reasoning fallback
         self.model = model
+        # Optional auto-injected knowledge list
+        self.auto_injected_knowledge = auto_injected_knowledge or []
         from datus.tools.func_tool.plan_tools import SessionTodoStorage
 
         self.todo_storage = SessionTodoStorage(session)
@@ -2487,7 +2489,7 @@ Respond with only the tool name, nothing else."""
         await asyncio.sleep(0.3)
 
         # Surface auto-injected knowledge for user confirmation if not in auto mode
-        if self.auto_injected_knowledge and not self.auto_mode:
+        if hasattr(self, 'auto_injected_knowledge') and self.auto_injected_knowledge and not self.auto_mode:
             self.console.print("[bold yellow]Auto-detected Knowledge:[/]")
             self.console.print("[dim]The following knowledge was automatically detected and will be used:[/]")
             for i, knowledge in enumerate(self.auto_injected_knowledge, 1):
