@@ -32,9 +32,95 @@ def load_builtin_workflow_config() -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    logger.debug(f"Workflow configuration loaded: {config_path}")
+    # Validate workflow configuration
+    validation_errors = validate_workflow_config(config)
+    if validation_errors:
+        error_msg = "Workflow configuration validation failed:\n" + "\n".join(f"  - {error}" for error in validation_errors)
+        raise ValueError(error_msg)
+
+    logger.debug(f"Workflow configuration loaded and validated: {config_path}")
 
     return config
+
+
+def validate_workflow_config(workflow_config: dict) -> List[str]:
+    """
+    Validate workflow configuration for correctness.
+
+    Args:
+        workflow_config: Workflow configuration dictionary
+
+    Returns:
+        List of validation error messages
+    """
+    errors = []
+
+    if not isinstance(workflow_config, dict):
+        errors.append("Workflow config must be a dictionary")
+        return errors
+
+    if "workflow" not in workflow_config:
+        errors.append("Missing 'workflow' section in configuration")
+        return errors
+
+    workflows = workflow_config["workflow"]
+    if not isinstance(workflows, dict):
+        errors.append("'workflow' section must be a dictionary")
+        return errors
+
+    # Validate text2sql workflow specifically
+    if "text2sql" in workflows:
+        text2sql_errors = _validate_text2sql_workflow(workflows["text2sql"])
+        errors.extend(text2sql_errors)
+
+    # Validate other workflows
+    for workflow_name, workflow_nodes in workflows.items():
+        if workflow_name == "text2sql":
+            continue  # Already validated above
+
+        node_errors = _validate_workflow_nodes(workflow_name, workflow_nodes)
+        errors.extend(node_errors)
+
+    return errors
+
+
+def _validate_text2sql_workflow(workflow_nodes: List[str]) -> List[str]:
+    """Validate text2sql workflow configuration."""
+    errors = []
+
+    if not isinstance(workflow_nodes, list):
+        errors.append("text2sql workflow must be a list of node names")
+        return errors
+
+    required_nodes = ["intent_analysis", "schema_discovery", "generate_sql", "execute_sql", "output"]
+    for required_node in required_nodes:
+        if required_node not in workflow_nodes:
+            errors.append(f"text2sql workflow missing required node: {required_node}")
+
+    # Validate node order (intent_analysis and schema_discovery should come first)
+    if "intent_analysis" in workflow_nodes and "schema_discovery" in workflow_nodes:
+        intent_idx = workflow_nodes.index("intent_analysis")
+        schema_idx = workflow_nodes.index("schema_discovery")
+        if intent_idx > schema_idx:
+            errors.append("intent_analysis should come before schema_discovery in text2sql workflow")
+
+    return errors
+
+
+def _validate_workflow_nodes(workflow_name: str, workflow_nodes: List[str]) -> List[str]:
+    """Validate workflow node definitions."""
+    errors = []
+
+    if not isinstance(workflow_nodes, list):
+        errors.append(f"Workflow '{workflow_name}' must be a list of node names")
+        return errors
+
+    # Basic validation - ensure all nodes are strings
+    for node in workflow_nodes:
+        if not isinstance(node, str):
+            errors.append(f"Workflow '{workflow_name}': node '{node}' must be a string")
+
+    return errors
 
 
 def create_nodes_from_config(
@@ -200,35 +286,18 @@ def _create_single_node(
             matching_rate=agent_config.schema_linking_rate if agent_config else "fast",
         )
 
-    # Handle special node types that require specific classes
-    if normalized_type == NodeType.TYPE_INTENT_ANALYSIS:
-        node = IntentAnalysisNode(
-            node_id=node_id,
-            description=description,
-            node_type=normalized_type,
-            input_data=input_data,
-            agent_config=agent_config,
-        )
-    elif normalized_type == NodeType.TYPE_SCHEMA_DISCOVERY:
-        node = SchemaDiscoveryNode(
-            node_id=node_id,
-            description=description,
-            node_type=normalized_type,
-            input_data=input_data,
-            agent_config=agent_config,
-        )
-    else:
-        # Use generic Node.new_instance for other node types
-        node = Node.new_instance(
-            node_id=node_id,
-            description=description,
-            node_type=normalized_type,
-            input_data=input_data,
-            agent_config=agent_config,
-            node_name=(
-                node_type if normalized_type == NodeType.TYPE_GENSQL else None
-            ),  # Pass original name for gensql nodes
-        )
+    # Use standard Node.new_instance for all node types
+    node = Node.new_instance(
+        node_id=node_id,
+        description=description,
+        node_type=normalized_type,
+        input_data=input_data,
+        agent_config=agent_config,
+        tools=tools,
+        node_name=(
+            node_type if normalized_type == NodeType.TYPE_GENSQL else None
+        ),  # Pass original name for gensql nodes
+    )
 
     return node
 

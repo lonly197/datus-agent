@@ -48,6 +48,17 @@ Chat with your data, recall tables or metrics instantly, and run agentic actions
 Turn data domains into **domain-aware chatbots**.
 Each subagent encapsulates the right context, tools, and rules — making data access accurate, reusable, and safe.
 
+### 🔧 Recent Text2SQL Pipeline Hardening
+**Latest Update**: Complete system hardening for Text2SQL workflows with comprehensive fixes:
+
+- ✅ **Evidence-Driven Generation**: Preflight orchestration with 4 mandatory tools (search_table, describe_table, search_reference_sql, parse_temporal_expressions)
+- ✅ **Robust Error Handling**: Standardized error results with actionable user messages
+- ✅ **Intelligent Caching**: QueryCache integration with fallback for cache failures
+- ✅ **Configuration Validation**: Runtime validation of workflow and scenario configurations
+- ✅ **Enhanced Observability**: Structured logging and performance metrics throughout the pipeline
+
+See [Text2SQL Hardening Rollout](docs/workflow/text2sql_hardening_rollout.md) for implementation details.
+
 ### 🔁 Continuous Learning Loop
 Every query and feedback improves the model.
 Datus learns from success stories and user corrections to evolve reasoning accuracy over time.

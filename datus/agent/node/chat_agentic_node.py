@@ -1523,6 +1523,12 @@ class ChatAgenticNode(GenSQLAgenticNode):
         scenario = self._determine_execution_scenario(user_input)
         logger.info(f"Detected execution scenario: {scenario}")
 
+        # Validate scenario for preflight execution
+        if scenario not in ["sql_review", "text2sql"]:
+            logger.warning(f"Unexpected scenario '{scenario}' detected, preflight tools may not execute")
+        else:
+            logger.debug(f"Scenario '{scenario}' will trigger preflight tool execution")
+
         is_plan_mode = getattr(user_input, "plan_mode", False)
         # emit_queue used to stream ActionHistory produced by PlanModeHooks back to node stream
         emit_queue: "asyncio.Queue[ActionHistory]" = asyncio.Queue()
@@ -1703,28 +1709,57 @@ class ChatAgenticNode(GenSQLAgenticNode):
         """
         Determine the execution scenario based on input content.
 
+        Uses keyword-based detection with logging for transparency and debugging.
+        Always defaults to "text2sql" for unmatched inputs to ensure preflight execution.
+
         Args:
         user_input: User input data
 
         Returns:
         str: Execution scenario ("text2sql", "sql_review", "data_analysis", "smart_query", "deep_analysis")
         """
-        message = user_input.user_message.lower() if hasattr(user_input, "user_message") else str(user_input).lower()
+        try:
+            message = user_input.user_message.lower() if hasattr(user_input, "user_message") else str(user_input).lower()
+            logger.debug(f"Determining execution scenario for message: {message[:100]}...")
 
-        # Check for SQL review keywords
-        sql_review_keywords = ["审查", "review", "检查", "check", "评估", "evaluate", "质量", "quality"]
-        if any(keyword in message for keyword in sql_review_keywords):
-            # Check for SQL content
-            if "select" in message or "from" in message or "```sql" in message:
+            # Check for SQL review keywords with SQL content validation
+            sql_review_keywords = ["审查", "review", "检查", "check", "评估", "evaluate", "质量", "quality", "审核", "audit"]
+            sql_indicators = ["select", "from", "where", "join", "group by", "order by", "```sql", "```"]
+
+            has_sql_review_keywords = any(keyword in message for keyword in sql_review_keywords)
+            has_sql_content = any(indicator in message for indicator in sql_indicators)
+
+            if has_sql_review_keywords and has_sql_content:
+                logger.info("Detected scenario: sql_review (SQL review keywords + SQL content)")
                 return "sql_review"
+            elif has_sql_review_keywords:
+                logger.debug("Found SQL review keywords but no SQL content, continuing with detection")
 
-        # Check for data analysis keywords
-        analysis_keywords = ["分析", "analysis", "统计", "statistics", "趋势", "trend", "对比", "compare"]
-        if any(keyword in message for keyword in analysis_keywords):
-            return "data_analysis"
+            # Check for data analysis keywords
+            analysis_keywords = ["分析", "analysis", "统计", "statistics", "趋势", "trend", "对比", "compare", "汇总", "summary", "报告", "report"]
+            if any(keyword in message for keyword in analysis_keywords):
+                logger.info("Detected scenario: data_analysis (analysis keywords)")
+                return "data_analysis"
 
-        # Default scenario for unmatched inputs
-        return "text2sql"
+            # Check for deep analysis indicators
+            deep_analysis_keywords = ["深入", "deep", "详细", "detailed", "全面", "comprehensive", "优化", "optimize"]
+            if any(keyword in message for keyword in deep_analysis_keywords):
+                logger.info("Detected scenario: deep_analysis (deep analysis keywords)")
+                return "deep_analysis"
+
+            # Default to text2sql for any SQL-related content or unmatched inputs
+            sql_related_keywords = ["查询", "query", "转化", "下定", "统计", "平均", "总数", "count", "sum", "avg"]
+            if any(keyword in message for keyword in sql_related_keywords) or len(message.strip()) > 10:
+                logger.info("Detected scenario: text2sql (SQL-related keywords or substantial input)")
+                return "text2sql"
+
+            # Fallback for very short or unclear inputs
+            logger.info("Detected scenario: text2sql (default fallback)")
+            return "text2sql"
+
+        except Exception as e:
+            logger.warning(f"Error in scenario detection, defaulting to text2sql: {e}")
+            return "text2sql"
 
 
 class ExecutionStatus:

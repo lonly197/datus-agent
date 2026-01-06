@@ -8,7 +8,7 @@ SchemaDiscoveryNode implementation for discovering relevant schema and tables.
 
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from datus.agent.node.node import Node, _run_async_stream_to_result
+from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
@@ -70,11 +70,60 @@ class SchemaDiscoveryNode(Node):
         """
         try:
             if not self.workflow or not self.workflow.task:
-                yield self._create_error_action("No workflow or task available")
+                error_result = self.create_error_result(
+                    ErrorCode.NODE_EXECUTION_FAILED,
+                    "No workflow or task available for schema discovery",
+                    "schema_discovery",
+                    {"workflow_id": getattr(self.workflow, 'id', 'unknown') if self.workflow else 'unknown'}
+                )
+                yield ActionHistory(
+                    action_id=f"{self.id}_error",
+                    role=ActionRole.TOOL,
+                    messages=f"Schema discovery failed: {error_result.error_message}",
+                    action_type="schema_discovery",
+                    input={},
+                    status=ActionStatus.FAILED,
+                    output={"error": error_result.error_message, "error_code": error_result.error_code},
+                )
                 return
 
             task = self.workflow.task
-            intent = self.workflow.metadata.get("detected_intent", "text2sql")
+
+            # Safely access intent from workflow metadata with comprehensive validation
+            intent = "text2sql"  # Default fallback
+            intent_confidence = 0.0
+
+            if hasattr(self.workflow, 'metadata') and self.workflow.metadata:
+                detected_intent = self.workflow.metadata.get("detected_intent")
+                confidence = self.workflow.metadata.get("intent_confidence", 0.0)
+
+                if detected_intent and isinstance(detected_intent, str) and confidence > 0.3:
+                    intent = detected_intent
+                    intent_confidence = confidence
+                    logger.debug(f"Using detected intent from workflow metadata: {intent} (confidence: {confidence})")
+                else:
+                    logger.warning(f"Intent detection unreliable (intent: {detected_intent}, confidence: {confidence}), using default 'text2sql'")
+            else:
+                logger.warning("Workflow metadata not available, using default intent 'text2sql'")
+
+            # Validate task has required attributes
+            if not hasattr(task, 'task') or not task.task:
+                error_result = self.create_error_result(
+                    ErrorCode.NODE_EXECUTION_FAILED,
+                    "Task has no content to analyze for schema discovery",
+                    "schema_discovery",
+                    {"task_id": getattr(task, 'id', 'unknown')}
+                )
+                yield ActionHistory(
+                    action_id=f"{self.id}_error",
+                    role=ActionRole.TOOL,
+                    messages=f"Schema discovery failed: {error_result.error_message}",
+                    action_type="schema_discovery",
+                    input={"task_content": getattr(task, 'task', '')},
+                    status=ActionStatus.FAILED,
+                    output={"error": error_result.error_message, "error_code": error_result.error_code},
+                )
+                return
 
             # Get candidate tables based on intent and task
             candidate_tables = await self._discover_candidate_tables(task, intent)
@@ -109,7 +158,21 @@ class SchemaDiscoveryNode(Node):
 
         except Exception as e:
             logger.error(f"Schema discovery failed: {e}")
-            yield self._create_error_action(str(e))
+            error_result = self.create_error_result(
+                ErrorCode.NODE_EXECUTION_FAILED,
+                f"Schema discovery execution failed: {str(e)}",
+                "schema_discovery",
+                {"task_id": getattr(self.workflow.task, 'id', 'unknown') if self.workflow and self.workflow.task else 'unknown'}
+            )
+            yield ActionHistory(
+                action_id=f"{self.id}_error",
+                role=ActionRole.TOOL,
+                messages=f"Schema discovery failed: {error_result.error_message}",
+                action_type="schema_discovery",
+                input={"intent": intent},
+                status=ActionStatus.FAILED,
+                output={"error": error_result.error_message, "error_code": error_result.error_code},
+            )
 
     async def _discover_candidate_tables(self, task, intent: str) -> List[str]:
         """
@@ -202,17 +265,6 @@ class SchemaDiscoveryNode(Node):
             logger.warning(f"Failed to load table schemas: {e}")
             # Don't fail the entire node for schema loading issues
 
-    def _create_error_action(self, error_message: str) -> ActionHistory:
-        """Create an error action for schema discovery failures."""
-        return ActionHistory(
-            action_id=f"{self.id}_error",
-            role=ActionRole.TOOL,
-            messages=f"Schema discovery failed: {error_message}",
-            action_type="schema_discovery",
-            input={},
-            status=ActionStatus.FAILED,
-            output={"error": error_message},
-        )
 
     def execute(self) -> BaseResult:
         """
@@ -221,7 +273,8 @@ class SchemaDiscoveryNode(Node):
         Returns:
             BaseResult: The result of schema discovery execution
         """
-        return _run_async_stream_to_result(self)
+        # execute_with_async_stream ensures self.result is properly set
+        return execute_with_async_stream(self)
 
     async def execute_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None

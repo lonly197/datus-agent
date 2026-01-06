@@ -100,6 +100,24 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
         return BaseResult(success=False, error=str(e))
 
 
+def execute_with_async_stream(node: "Node") -> BaseResult:
+    """
+    Helper method for nodes that need to execute via async stream.
+
+    This ensures self.result is properly set, which is required for Node.run()
+    success checking. Use this instead of directly calling _run_async_stream_to_result()
+    in execute() methods.
+
+    Args:
+        node: The node instance to execute
+
+    Returns:
+        BaseResult: Execution result with self.result properly set on the node
+    """
+    node.result = _run_async_stream_to_result(node)
+    return node.result
+
+
 class Node(ErrorHandlerMixin, ABC):
     """
     Represents a single node in a workflow.
@@ -127,10 +145,12 @@ class Node(ErrorHandlerMixin, ABC):
             GenerateSQLNode,
             GenSQLAgenticNode,
             HitlNode,
+            IntentAnalysisNode,
             OutputNode,
             ParallelNode,
             ReasonSQLNode,
             ReflectNode,
+            SchemaDiscoveryNode,
             SchemaLinkingNode,
             SearchMetricsNode,
             SelectionNode,
@@ -159,6 +179,10 @@ class Node(ErrorHandlerMixin, ABC):
             return BeginNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_SEARCH_METRICS:
             return SearchMetricsNode(node_id, description, node_type, input_data, agent_config)
+        elif node_type == NodeType.TYPE_INTENT_ANALYSIS:
+            return IntentAnalysisNode(node_id, description, node_type, input_data, agent_config)
+        elif node_type == NodeType.TYPE_SCHEMA_DISCOVERY:
+            return SchemaDiscoveryNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_PARALLEL:
             return ParallelNode(node_id, description, node_type, input_data, agent_config, tools)
         elif node_type == NodeType.TYPE_SELECTION:

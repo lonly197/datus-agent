@@ -266,6 +266,19 @@ class WorkflowRunner:
         """Stream workflow execution progress."""
         logger.info("Starting agent execution with streaming")
         max_steps = getattr(self.args, "max_steps", 100)
+
+        # Log workflow details for observability
+        if self.workflow:
+            workflow_name = getattr(self.workflow, 'name', 'unknown')
+            node_count = len(self.workflow.nodes) if self.workflow.nodes else 0
+            logger.info(f"Workflow '{workflow_name}' initialized with {node_count} nodes, max_steps={max_steps}")
+
+            if sql_task:
+                logger.info(f"SQL task: {sql_task.task[:100]}... (id: {sql_task.id})")
+
+        # Performance tracking
+        import time
+        start_time = time.time()
         init_action = self._create_action_history(
             action_id="workflow_initialization",
             messages="Initializing workflow and checking prerequisites",
@@ -386,6 +399,13 @@ class WorkflowRunner:
                 },
             )
 
+            # Calculate and log performance metrics
+            execution_time = time.time() - start_time
+            nodes_executed = len([n for n in self.workflow.nodes.values() if n.status == "completed"]) if self.workflow else 0
+            nodes_failed = len([n for n in self.workflow.nodes.values() if n.status == "failed"]) if self.workflow else 0
+
+            logger.info(f"Workflow execution completed in {execution_time:.2f}s: {nodes_executed} nodes completed, {nodes_failed} nodes failed")
+
             # Yield the completion action so it can be converted to a CompleteEvent
             yield completion_action
 
@@ -394,6 +414,9 @@ class WorkflowRunner:
                 success=True,
                 output_data={
                     "workflow_saved": True,
+                    "execution_time_seconds": execution_time,
+                    "nodes_completed": nodes_executed,
+                    "nodes_failed": nodes_failed,
                     "save_path": metadata.get("save_path"),
                     "steps_completed": step_count,
                     "final_result_available": bool(metadata.get("final_result")),

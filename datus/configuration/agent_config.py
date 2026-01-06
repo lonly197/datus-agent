@@ -723,6 +723,79 @@ class AgentConfig:
                 code=ErrorCode.COMMON_UNSUPPORTED,
                 message_args={"field_name": "benchmark", "your_value": benchmark_platform},
             )
+
+    def validate_configuration(self) -> List[str]:
+        """
+        Validate the complete agent configuration for consistency and correctness.
+
+        Returns:
+            List of validation error messages. Empty list means configuration is valid.
+        """
+        errors = []
+
+        # Validate scenarios configuration
+        if hasattr(self, 'scenarios') and self.scenarios:
+            errors.extend(self._validate_scenarios_config())
+
+        # Validate node configurations
+        errors.extend(self._validate_node_configs())
+
+        # Validate workflow configurations
+        errors.extend(self._validate_workflow_configs())
+
+        return errors
+
+    def _validate_scenarios_config(self) -> List[str]:
+        """Validate scenarios configuration."""
+        errors = []
+
+        for scenario_name, scenario_config in self.scenarios.items():
+            if not isinstance(scenario_config, ScenarioConfig):
+                errors.append(f"Scenario '{scenario_name}': invalid configuration type")
+                continue
+
+            # Validate text2sql scenario specifically
+            if scenario_name == "text2sql":
+                if not scenario_config.preflight_tools:
+                    errors.append("text2sql scenario: preflight_tools cannot be empty")
+
+                required_tools = ["search_table", "describe_table", "search_reference_sql", "parse_temporal_expressions"]
+                for tool in required_tools:
+                    if tool not in scenario_config.preflight_tools:
+                        errors.append(f"text2sql scenario: missing required preflight tool '{tool}'")
+
+                if scenario_config.tool_timeout_seconds <= 0:
+                    errors.append("text2sql scenario: tool_timeout_seconds must be positive")
+
+                if scenario_config.cache_ttl_seconds <= 0:
+                    errors.append("text2sql scenario: cache_ttl_seconds must be positive")
+
+        return errors
+
+    def _validate_node_configs(self) -> List[str]:
+        """Validate node configurations."""
+        errors = []
+
+        for node_name, node_config in self.nodes.items():
+            if not hasattr(node_config, 'type'):
+                errors.append(f"Node '{node_name}': missing type field")
+                continue
+
+            # Validate node type exists
+            if node_config.type not in NodeType.ALL_TYPES:
+                errors.append(f"Node '{node_name}': invalid type '{node_config.type}'")
+
+        return errors
+
+    def _validate_workflow_configs(self) -> List[str]:
+        """Validate workflow configurations."""
+        errors = []
+
+        # This would require access to workflow.yml, which is loaded separately
+        # For now, we skip this validation as it's done in plan.py
+        # In a full implementation, this would validate workflow node references
+
+        return errors
         benchmark_config = self.benchmark_configs[benchmark_platform]
         benchmark_config.validate()
 

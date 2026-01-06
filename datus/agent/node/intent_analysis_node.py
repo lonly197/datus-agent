@@ -8,7 +8,7 @@ IntentAnalysisNode implementation for analyzing query intent.
 
 from typing import Any, AsyncGenerator, Dict, Optional
 
-from datus.agent.node.node import Node, _run_async_stream_to_result
+from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
@@ -84,8 +84,8 @@ class IntentAnalysisNode(Node):
             BaseResult: Execution result
         """
         # For synchronous execution, we use the async stream approach
-        result = _run_async_stream_to_result(self)
-        return result
+        # execute_with_async_stream ensures self.result is properly set
+        return execute_with_async_stream(self)
 
     async def execute_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None
@@ -121,17 +121,46 @@ class IntentAnalysisNode(Node):
 
             if not task_text.strip():
                 logger.warning("No task text provided for intent analysis")
-                yield self._create_error_action("No task text provided for analysis")
+                error_result = self.create_error_result(
+                    ErrorCode.NODE_EXECUTION_FAILED,
+                    "No task text provided for intent analysis",
+                    "intent_analysis",
+                    {"task_id": getattr(self.workflow, 'id', 'unknown') if self.workflow else 'unknown'}
+                )
+                yield ActionHistory(
+                    action_id=f"{self.id}_error",
+                    role=ActionRole.TOOL,
+                    messages=f"Intent analysis failed: {error_result.error_message}",
+                    action_type="intent_analysis",
+                    input={"task_text": ""},
+                    status=ActionStatus.FAILED,
+                    output={"error": error_result.error_message, "error_code": error_result.error_code},
+                )
                 return
 
             # Perform intent detection
             intent_result = await self._detect_intent(task_text)
 
-            # Populate workflow metadata
+            # Populate workflow metadata with validation
             if self.workflow:
-                self.workflow.metadata["detected_intent"] = intent_result.intent
-                self.workflow.metadata["intent_confidence"] = intent_result.confidence
-                self.workflow.metadata["intent_metadata"] = intent_result.metadata
+                try:
+                    # Ensure metadata dict exists
+                    if not hasattr(self.workflow, 'metadata') or self.workflow.metadata is None:
+                        self.workflow.metadata = {}
+
+                    # Set intent analysis results
+                    self.workflow.metadata["detected_intent"] = intent_result.intent
+                    self.workflow.metadata["intent_confidence"] = intent_result.confidence
+                    self.workflow.metadata["intent_metadata"] = intent_result.metadata
+
+                    logger.debug(f"Workflow metadata updated: intent={intent_result.intent}, confidence={intent_result.confidence}")
+
+                except Exception as e:
+                    logger.warning(f"Failed to update workflow metadata: {e}")
+                    # Set fallback values to ensure downstream nodes don't fail
+                    self.workflow.metadata["detected_intent"] = "text2sql"
+                    self.workflow.metadata["intent_confidence"] = 0.5
+                    self.workflow.metadata["intent_metadata"] = {"fallback": True, "error": str(e)}
 
             # Emit success action with results
             yield ActionHistory(
@@ -152,7 +181,21 @@ class IntentAnalysisNode(Node):
 
         except Exception as e:
             logger.error(f"Intent analysis failed: {e}")
-            yield self._create_error_action(str(e))
+            error_result = self.create_error_result(
+                ErrorCode.NODE_EXECUTION_FAILED,
+                f"Intent analysis execution failed: {str(e)}",
+                "intent_analysis",
+                {"task_id": getattr(self.workflow, 'id', 'unknown') if self.workflow else 'unknown'}
+            )
+            yield ActionHistory(
+                action_id=f"{self.id}_error",
+                role=ActionRole.TOOL,
+                messages=f"Intent analysis failed: {error_result.error_message}",
+                action_type="intent_analysis",
+                input={"task_text": ""},
+                status=ActionStatus.FAILED,
+                output={"error": error_result.error_message, "error_code": error_result.error_code},
+            )
 
     async def _detect_intent(self, task_text: str) -> "IntentResult":
         """
@@ -222,14 +265,3 @@ class IntentAnalysisNode(Node):
 
         return intent_result
 
-    def _create_error_action(self, error_message: str) -> ActionHistory:
-        """Create an error action for intent analysis failures."""
-        return ActionHistory(
-            action_id=f"{self.id}_error",
-            role=ActionRole.TOOL,
-            messages=f"Intent analysis failed: {error_message}",
-            action_type="intent_analysis",
-            input={},
-            status=ActionStatus.FAILED,
-            output={"error": error_message},
-        )

@@ -457,11 +457,18 @@ class AgenticNode(Node):
         """
         Synchronous execution wrapper for agentic nodes.
 
-        Agentic nodes are async by nature, so this wraps the async method
-        to provide synchronous execution interface required by Node base class.
+        Agentic nodes are async by nature and primarily implement execute_stream().
+        This method wraps the async streaming execution to provide the synchronous
+        execute() interface required by the Node base class.
+
+        The method:
+        1. Runs execute_stream() in an async context
+        2. Extracts the final successful action's output
+        3. Validates and constructs appropriate result objects
+        4. Always sets self.result for Node.run() success checking
 
         Returns:
-            BaseResult object with execution results
+            BaseResult object with execution results, always sets self.result
         """
         action_history_manager = ActionHistoryManager()
 
