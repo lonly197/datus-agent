@@ -166,7 +166,7 @@ def _process_workflow_config(
         if isinstance(item, str):
             # Simple node type
             node_id = f"{node_id_prefix}_{current_index}"
-            node = _create_single_node(item, node_id, sql_task, agent_config)
+            node = _create_single_node(item, node_id, sql_task, agent_config, tools)
             nodes.append(node)
             current_index += 1
 
@@ -244,7 +244,7 @@ def _process_workflow_config(
 
 
 def _create_single_node(
-    node_type: str, node_id: str, sql_task: SqlTask, agent_config: Optional[AgentConfig] = None
+    node_type: str, node_id: str, sql_task: SqlTask, agent_config: Optional[AgentConfig] = None, tools: Optional[List[Tool]] = None
 ) -> Node:
     # normalize aliases from config
     normalized_type = node_type
