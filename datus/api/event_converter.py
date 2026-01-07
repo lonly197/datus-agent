@@ -33,12 +33,70 @@ from .models import (
 class DeepResearchEventConverter:
     """Converts ActionHistory events to DeepResearchEvent format."""
 
+    # Define virtual steps for non-agentic workflows (Text2SQL)
+    VIRTUAL_STEPS = [
+        {"id": "step_intent", "content": "Analyze Query Intent", "node_types": ["intent_analysis"]},
+        {"id": "step_schema", "content": "Discover Database Schema", "node_types": ["schema_discovery", "schema_linking"]},
+        {"id": "step_sql", "content": "Generate SQL Query", "node_types": ["generate_sql"]},
+        {"id": "step_exec", "content": "Execute SQL & Verify", "node_types": ["execute_sql"]},
+        {"id": "step_reflect", "content": "Self-Correction & Optimization", "node_types": ["reflect"]},
+        {"id": "step_reason", "content": "Deep Reasoning Analysis", "node_types": ["reasoning"]},
+    ]
+
     def __init__(self):
         self.plan_id = str(uuid.uuid4())
         self.tool_call_map: Dict[str, str] = {}  # action_id -> tool_call_id
         self.logger = get_logger(__name__)
         # small rolling cache to deduplicate near-identical assistant messages
         self._recent_assistant_hashes: "deque[str]" = deque(maxlen=50)
+        
+        # State for virtual plan management
+        self.virtual_plan_emitted = False
+        self.active_virtual_step_id = None
+        self.completed_virtual_steps = set()
+
+    def _get_virtual_step_id(self, node_type: str) -> Optional[str]:
+        """Map node type to virtual step ID."""
+        for step in self.VIRTUAL_STEPS:
+            if node_type in step["node_types"]:
+                return step["id"]
+        return None
+
+    def _generate_virtual_plan_update(self, current_node_type: Optional[str] = None) -> Optional[PlanUpdateEvent]:
+        """Generate PlanUpdateEvent based on current progress."""
+        todos = []
+        current_step_id = self._get_virtual_step_id(current_node_type) if current_node_type else None
+        
+        # If we found a new active step, update our state
+        if current_step_id:
+            self.active_virtual_step_id = current_step_id
+        
+        for step in self.VIRTUAL_STEPS:
+            status = TodoStatus.Pending
+            
+            if step["id"] in self.completed_virtual_steps:
+                status = TodoStatus.Completed
+            elif step["id"] == self.active_virtual_step_id:
+                status = TodoStatus.InProgress
+            
+            # If we are moving to a new step, mark previous incomplete steps as completed (heuristically)
+            # This is simple logic; in a real graph we might need more complex tracking
+            if current_step_id and step["id"] != current_step_id and status == TodoStatus.InProgress:
+                 self.completed_virtual_steps.add(step["id"])
+                 status = TodoStatus.Completed
+
+            todos.append(TodoItem(
+                id=step["id"],
+                content=step["content"],
+                status=status
+            ))
+            
+        return PlanUpdateEvent(
+            id=str(uuid.uuid4()),
+            planId=None,
+            timestamp=int(asyncio.get_event_loop().time() * 1000) if asyncio.get_event_loop().is_running() else 0,
+            todos=todos
+        )
 
     def _hash_text(self, s: str) -> str:
         try:
@@ -294,7 +352,6 @@ class DeepResearchEventConverter:
 
     def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
         """Convert ActionHistory to DeepResearchEvent list."""
-        """Convert ActionHistory to DeepResearchEvent list."""
 
         timestamp = int(action.start_time.timestamp() * 1000)
         event_id = f"{action.action_id}_{seq_num}"
@@ -302,6 +359,10 @@ class DeepResearchEventConverter:
 
         # Extract todo_id if present (for plan-related events)
         todo_id = self._extract_todo_id_from_action(action)
+        
+        # Fallback to virtual plan ID if no explicit todo_id (for Text2SQL workflow)
+        if not todo_id and self.active_virtual_step_id:
+             todo_id = self.active_virtual_step_id
 
         # 1. Handle chat/assistant messages
         if action.role == ActionRole.ASSISTANT:
@@ -681,9 +742,29 @@ class DeepResearchEventConverter:
                     content=content,
                 )
             )
+            
+            # Emit initial virtual plan for Text2SQL workflow
+            # We assume if it's workflow_init, we can initialize the virtual plan
+            if not self.virtual_plan_emitted:
+                plan_update = self._generate_virtual_plan_update()
+                if plan_update:
+                    events.append(plan_update)
+                    self.virtual_plan_emitted = True
 
         # 7. Handle node execution
         elif action.action_type == "node_execution":
+            # Update virtual plan if applicable
+            node_type = None
+            if action.input and isinstance(action.input, dict):
+                node_type = action.input.get("node_type")
+            
+            if node_type:
+                plan_update = self._generate_virtual_plan_update(node_type)
+                if plan_update and plan_update.todos:
+                    # Check if status actually changed to avoid spamming events
+                    # (Simplified: always emit for now as _generate logic handles state)
+                    events.append(plan_update)
+
             # Convert node execution to a status update (ChatEvent with specific formatting or just text)
             # We can use it to show what the agent is doing
             node_desc = "Unknown Node"
@@ -694,7 +775,7 @@ class DeepResearchEventConverter:
             events.append(
                 ChatEvent(
                     id=event_id,
-                    planId=None,
+                    planId=self.active_virtual_step_id, # Use active step ID
                     timestamp=timestamp,
                     content=content,
                 )

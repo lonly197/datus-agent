@@ -181,7 +181,17 @@ class ReasonSQLNode(Node):
 
         except Exception as e:
             logger.error(f"SQL reasoning streaming error: {str(e)}")
-            raise
+            # Emit graceful error action so the workflow doesn't crash completely
+            yield ActionHistory(
+                action_id=f"reasoning_error",
+                role=ActionRole.SYSTEM,
+                action_type="error",
+                messages=f"Reasoning process encountered an error: {str(e)}",
+                status=ActionStatus.FAILED,
+                output={"error": str(e), "recovery_suggestions": ["Check database connection", "Verify table permissions"]}
+            )
+            # Do not re-raise to allow workflow to handle failure gracefully
+            # raise
 
     def _reason_sql(self) -> ReasoningResult:
         """Reasoning and Exploring the database to refine SQL query.

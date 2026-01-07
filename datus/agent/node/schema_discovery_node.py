@@ -214,19 +214,21 @@ class SchemaDiscoveryNode(Node):
 
             # 2. Semantic Search (High Priority)
             # Use vector search to find tables relevant to the query semantics
-            if not candidate_tables:
-                semantic_tables = await self._semantic_table_discovery(task.task)
-                if semantic_tables:
-                    candidate_tables.extend(semantic_tables)
-                    logger.info(f"Found {len(semantic_tables)} tables via semantic search: {semantic_tables}")
+            semantic_tables = await self._semantic_table_discovery(task.task)
+            if semantic_tables:
+                candidate_tables.extend(semantic_tables)
+                logger.info(f"Found {len(semantic_tables)} tables via semantic search: {semantic_tables}")
 
             # 3. Keyword Matching (Medium Priority)
             # Use heuristic keyword matching as a backup or supplement
-            if not candidate_tables:
-                keyword_tables = self._keyword_table_discovery(task_text)
-                if keyword_tables:
-                    candidate_tables.extend(keyword_tables)
-                    logger.info(f"Found {len(keyword_tables)} tables via keyword matching: {keyword_tables}")
+            # Optimization: Always run keyword search to improve recall (Hybrid Search)
+            keyword_tables = self._keyword_table_discovery(task_text)
+            if keyword_tables:
+                candidate_tables.extend(keyword_tables)
+                logger.info(f"Found {len(keyword_tables)} tables via keyword matching: {keyword_tables}")
+
+            # Deduplicate before fallback check
+            candidate_tables = list(set(candidate_tables))
 
             # 4. Fallback: Get All Tables (Low Priority)
             # If no tables found yet, get all tables from database (limit to reasonable number)
