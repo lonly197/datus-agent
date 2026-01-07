@@ -72,18 +72,18 @@ class DeepResearchEventConverter:
             self.active_virtual_step_id = current_step_id
         
         for step in self.VIRTUAL_STEPS:
-            status = TodoStatus.Pending
+            status = TodoStatus.PENDING
             
             if step["id"] in self.completed_virtual_steps:
-                status = TodoStatus.Completed
+                status = TodoStatus.COMPLETED
             elif step["id"] == self.active_virtual_step_id:
-                status = TodoStatus.InProgress
+                status = TodoStatus.IN_PROGRESS
             
             # If we are moving to a new step, mark previous incomplete steps as completed (heuristically)
             # This is simple logic; in a real graph we might need more complex tracking
-            if current_step_id and step["id"] != current_step_id and status == TodoStatus.InProgress:
+            if current_step_id and step["id"] != current_step_id and status == TodoStatus.IN_PROGRESS:
                  self.completed_virtual_steps.add(step["id"])
-                 status = TodoStatus.Completed
+                 status = TodoStatus.COMPLETED
 
             todos.append(TodoItem(
                 id=step["id"],
