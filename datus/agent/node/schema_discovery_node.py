@@ -235,38 +235,86 @@ class SchemaDiscoveryNode(Node):
             candidate_tables.extend(task.tables)
             logger.info(f"Using explicitly specified tables: {task.tables}")
 
-        # If intent is text2sql, try to discover tables
-        if intent == "text2sql" and hasattr(task, "task"):
+        # If intent is text2sql or sql (from intent analysis), try to discover tables
+        if intent in ["text2sql", "sql"] and hasattr(task, "task"):
             task_text = task.task.lower()
-
-            # 2. Semantic Search (High Priority)
-            # Use vector search to find tables relevant to the query semantics
+            
+            # --- Stage 1: Fast Cache/Keyword & Semantic (Hybrid Search) ---
+            # 1. Semantic Search (High Priority)
             semantic_tables = await self._semantic_table_discovery(task.task)
             if semantic_tables:
                 candidate_tables.extend(semantic_tables)
-                logger.info(f"Found {len(semantic_tables)} tables via semantic search: {semantic_tables}")
+                logger.info(f"[Stage 1] Found {len(semantic_tables)} tables via semantic search")
 
-            # 3. Keyword Matching (Medium Priority)
-            # Use heuristic keyword matching as a backup or supplement
+            # 2. Keyword Matching (Medium Priority)
             # Optimization: Always run keyword search to improve recall (Hybrid Search)
             keyword_tables = self._keyword_table_discovery(task_text)
             if keyword_tables:
                 candidate_tables.extend(keyword_tables)
-                logger.info(f"Found {len(keyword_tables)} tables via keyword matching: {keyword_tables}")
-
-            # Deduplicate before fallback check
+                logger.info(f"[Stage 1] Found {len(keyword_tables)} tables via keyword matching")
+            
+            # Deduplicate
+            candidate_tables = list(set(candidate_tables))
+            
+            # --- Stage 2: Deep Metadata Scan (Context Search) ---
+            # If recall is low (e.g., 0 tables), try context search (Metrics, Reference SQL)
+            if not candidate_tables:
+                logger.info("[Stage 2] Stage 1 yielded 0 tables, initiating Context Search...")
+                context_tables = await self._context_based_discovery(task.task)
+                if context_tables:
+                    candidate_tables.extend(context_tables)
+                    logger.info(f"[Stage 2] Found {len(context_tables)} tables via context search")
+            
+            # Deduplicate
             candidate_tables = list(set(candidate_tables))
 
+            # --- Stage 3: Full Structure Analysis (LLM Match - Placeholder/Future) ---
+            # If still no tables, we could use LLM-based MatchSchemaTool here.
+            # For now, we proceed to Fallback if still empty.
+
             # 4. Fallback: Get All Tables (Low Priority)
-            # If no tables found yet, get all tables from database (limit to reasonable number)
+            # Only if absolutely no tables found from previous stages
             if not candidate_tables:
+                logger.info("[Stage 3] No tables found, attempting Fallback (Get All Tables)...")
                 fallback_tables = await self._fallback_get_all_tables(task)
                 if fallback_tables:
                     candidate_tables.extend(fallback_tables)
-                    logger.warning(f"No tables found via search, using fallback (all tables): {len(fallback_tables)} tables")
+                    logger.warning(f"[Stage 3] Used fallback: {len(fallback_tables)} tables")
 
         # If no candidates found, return empty list (downstream nodes will handle)
         return list(set(candidate_tables))  # Remove duplicates
+
+    async def _context_based_discovery(self, query: str) -> List[str]:
+        """
+        Stage 2: Discover tables via Metrics and Reference SQL.
+        """
+        found_tables = []
+        try:
+            if not self.agent_config:
+                return []
+            
+            context_search = ContextSearchTools(self.agent_config)
+            
+            # 1. Search Metrics
+            if context_search.has_metrics:
+                metric_result = context_search.search_metrics(query_text=query, top_n=3)
+                if metric_result.success and metric_result.result:
+                    # In a real impl, we would extract table names from metric definitions
+                    # For now, we assume metric definitions might contain table references or hints
+                    # This is a placeholder for extraction logic
+                    pass
+            
+            # 2. Search Reference SQL
+            # Reference SQL often contains valid table names
+            ref_sql_result = context_search.search_reference_sql(query_text=query, top_n=3)
+            if ref_sql_result.success and ref_sql_result.result:
+                # Placeholder: Extract tables from SQL (would need sqlglot here)
+                pass
+                
+        except Exception as e:
+            logger.warning(f"Context-based discovery failed: {e}")
+        
+        return found_tables
 
     async def _semantic_table_discovery(self, query: str) -> List[str]:
         """
