@@ -297,11 +297,8 @@ class ContextSearchTools:
                 query_text=query_text, subject_path=subject_path, top_n=top_n
             )
 
-            # Convert pyarrow table to list of dicts
-            results = []
-            if len(search_results) > 0:
-                # Use to_pylist() to properly convert pyarrow table to list of dicts
-                results = search_results.to_pylist()
+            # search_results is already a List[Dict[str, Any]] from ExtKnowledgeStore
+            results = search_results if search_results else []
 
             logger.debug(f"Found {len(results)} external knowledge entries for query: {query_text}")
             return FuncToolResult(success=1, error=None, result=results)
