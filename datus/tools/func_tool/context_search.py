@@ -282,8 +282,19 @@ class ContextSearchTools:
             FuncToolResult with list of matching knowledge entries containing terminology, explanation, domain, layer1, layer2.
         """
         try:
+            # Convert domain/layer1/layer2 to subject_path format for ExtKnowledgeStore
+            subject_path = None
+            if domain or layer1 or layer2:
+                subject_path = []
+                if domain:
+                    subject_path.append(domain)
+                if layer1:
+                    subject_path.append(layer1)
+                if layer2:
+                    subject_path.append(layer2)
+
             search_results = self.ext_knowledge_store.search_knowledge(
-                query_text=query_text, domain=domain, layer1=layer1, layer2=layer2, top_n=top_n
+                query_text=query_text, subject_path=subject_path, top_n=top_n
             )
 
             # Convert pyarrow table to list of dicts

@@ -450,9 +450,7 @@ class DatusAPIService:
                         if ext_knowledge_store.table_size() > 0:
                             search_results = ext_knowledge_store.search_knowledge(
                                 query_text=request.task,
-                                domain=domain or "",
-                                layer1=layer1 or "",
-                                layer2=layer2 or "",
+                                subject_path=subject_path,
                                 top_n=5,
                             )
 
