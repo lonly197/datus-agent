@@ -303,3 +303,39 @@ def _run_in_thread(coro: Coroutine[Any, Any, T], timeout: Optional[float] = None
         raise result_container["exception"]
 
     return result_container["result"]
+
+
+async def await_cancellable(coro: Coroutine[Any, Any, T], timeout: Optional[float] = None) -> T:
+    """
+    Execute a coroutine with proper cancellation support.
+
+    Unlike asyncio.wait_for with shield, this function allows CancelledError
+    to propagate immediately, ensuring responsive task cancellation.
+
+    Args:
+        coro: The coroutine to execute
+        timeout: Optional timeout in seconds
+
+    Returns:
+        The result of the coroutine
+
+    Raises:
+        asyncio.CancelledError: If the current task is cancelled
+        asyncio.TimeoutError: If timeout is exceeded
+        Exception: Any exception raised by the coroutine
+    """
+    if timeout is not None and timeout > 0:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    else:
+        return await coro
+
+
+def ensure_not_cancelled():
+    """
+    Check if the current task has been cancelled and raise CancelledError if so.
+
+    This is a convenience function for adding cancellation checkpoints in long-running operations.
+    """
+    current_task = asyncio.current_task()
+    if current_task and current_task.cancelled():
+        raise asyncio.CancelledError()
