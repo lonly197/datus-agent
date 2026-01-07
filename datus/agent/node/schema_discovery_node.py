@@ -134,6 +134,33 @@ class SchemaDiscoveryNode(Node):
             # If we have candidate tables, load their schemas
             if candidate_tables:
                 await self._load_table_schemas(task, candidate_tables)
+            else:
+                # Fail-Fast: If no tables found after all attempts, do not proceed
+                error_msg = f"No candidate tables found for task '{task.task[:50]}...'. Cannot generate SQL without schema context."
+                logger.error(error_msg)
+                
+                error_result = self.create_error_result(
+                    ErrorCode.NODE_EXECUTION_FAILED,
+                    error_msg,
+                    "schema_discovery",
+                    {"task_id": getattr(task, 'id', 'unknown')}
+                )
+                yield ActionHistory(
+                    action_id=f"{self.id}_error_nofound",
+                    role=ActionRole.TOOL,
+                    messages=f"Schema discovery failed: {error_msg}\nTry explicitly mentioning table names or checking database connection.",
+                    action_type="schema_discovery",
+                    input={"intent": intent},
+                    status=ActionStatus.FAILED,
+                    output={"error": error_msg, "error_code": ErrorCode.NODE_EXECUTION_FAILED},
+                )
+                
+                # Mark node as failed
+                self.result = BaseResult(
+                    success=False,
+                    error=error_msg
+                )
+                return
 
             # Emit success action with results
             yield ActionHistory(
@@ -345,7 +372,8 @@ class SchemaDiscoveryNode(Node):
             "employee": "employees",
             "部门": "departments", 
             "department": "departments",
-            "试驾": "test_drives",
+            "试驾": "dwd_assign_dlr_clue_fact_di", # Updated mapping based on log analysis
+            "线索": "dwd_assign_dlr_clue_fact_di",
             "转化": "conversions",
         }
         

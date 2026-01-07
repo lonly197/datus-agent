@@ -183,12 +183,19 @@ class ReasonSQLNode(Node):
             logger.error(f"SQL reasoning streaming error: {str(e)}")
             # Emit graceful error action so the workflow doesn't crash completely
             yield ActionHistory(
-                action_id=f"reasoning_error",
+                action_id=f"reasoning_error_{int(datetime.now().timestamp())}",
                 role=ActionRole.SYSTEM,
                 action_type="error",
-                messages=f"Reasoning process encountered an error: {str(e)}",
+                messages=f"Reasoning process encountered an error: {str(e)}\nPlease check if MCP servers are correctly configured and connected.",
                 status=ActionStatus.FAILED,
-                output={"error": str(e), "recovery_suggestions": ["Check database connection", "Verify table permissions"]}
+                output={
+                    "error": str(e),
+                    "recovery_suggestions": [
+                        "Check database connection",
+                        "Verify table permissions",
+                        "Check MCP server status and configuration"
+                    ]
+                }
             )
             # Do not re-raise to allow workflow to handle failure gracefully
             # raise
