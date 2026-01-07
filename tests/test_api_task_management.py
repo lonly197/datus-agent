@@ -97,6 +97,91 @@ class TestTaskManagement:
         running_task_final = await service.get_running_task("cancel_test")
         assert running_task_final is None
 
+    @pytest.mark.asyncio
+    async def test_cancel_all_running_tasks(self, service):
+        """Test cancel_all_running_tasks functionality with timeout."""
+
+        # Create multiple long-running tasks
+        async def long_task(task_id: str, duration: float):
+            try:
+                await asyncio.sleep(duration)
+                return f"task_{task_id}_completed"
+            except asyncio.CancelledError:
+                return f"task_{task_id}_cancelled"
+
+        tasks = []
+        task_ids = []
+
+        # Create 3 tasks with different durations
+        for i in range(3):
+            task_id = f"cancel_all_test_{i}"
+            task = asyncio.create_task(long_task(task_id, 10.0))  # Long duration
+            tasks.append(task)
+            task_ids.append(task_id)
+
+            # Register each task
+            await service.register_running_task(task_id, task, {"client": "test_client"})
+
+        # Verify all tasks are running
+        all_running = await service.get_all_running_tasks()
+        assert len(all_running) == 3
+        for task_id in task_ids:
+            assert task_id in all_running
+            assert all_running[task_id].status == "running"
+
+        # Cancel all running tasks with a short timeout
+        await service.cancel_all_running_tasks(per_task_timeout=0.1)
+
+        # Verify all tasks are cancelled
+        for task in tasks:
+            assert task.cancelled() or task.done()
+
+        # Verify registry is cleaned up for completed tasks
+        all_running_after = await service.get_all_running_tasks()
+        # Some tasks might still be in the registry if they didn't complete within timeout
+        # but they should all be cancelled
+        for task_id in task_ids:
+            if task_id in all_running_after:
+                running_task = all_running_after[task_id]
+                assert running_task.task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_cancel_all_running_tasks_empty_registry(self, service):
+        """Test cancel_all_running_tasks with empty registry."""
+        # Should not raise any exceptions
+        await service.cancel_all_running_tasks()
+        all_running = await service.get_all_running_tasks()
+        assert len(all_running) == 0
+
+    @pytest.mark.asyncio
+    async def test_cancel_all_running_tasks_already_completed(self, service):
+        """Test cancel_all_running_tasks when tasks are already completed."""
+
+        # Create tasks that complete immediately
+        async def quick_task(task_id: str):
+            return f"task_{task_id}_done"
+
+        tasks = []
+        task_ids = []
+
+        # Create and complete tasks
+        for i in range(2):
+            task_id = f"completed_test_{i}"
+            task = asyncio.create_task(quick_task(task_id))
+            await task  # Wait for completion
+            tasks.append(task)
+            task_ids.append(task_id)
+
+            # Register completed task
+            await service.register_running_task(task_id, task, {"client": "test_client"})
+
+        # Cancel all running tasks - should handle completed tasks gracefully
+        await service.cancel_all_running_tasks(per_task_timeout=0.1)
+
+        # Verify registry is cleaned up
+        all_running_after = await service.get_all_running_tasks()
+        assert len(all_running_after) == 0
+
     def test_running_task_dataclass(self):
         """Test RunningTask dataclass."""
         from datetime import datetime

@@ -161,6 +161,7 @@ def _build_agent_args(args: argparse.Namespace) -> argparse.Namespace:
         workflow=args.workflow,
         load_cp=args.load_cp,
         debug=args.debug,
+        shutdown_timeout_seconds=args.shutdown_timeout,
     )
 
 
@@ -231,6 +232,12 @@ def main():
         type=str,
         default="",
         help="Root path for the API (e.g., '/sql-api' for proxy setups)",
+    )
+    parser.add_argument(
+        "--shutdown-timeout",
+        type=float,
+        default=5.0,
+        help="Maximum time in seconds to wait for running tasks to cancel during shutdown (default: 5.0)",
     )
 
     args = parser.parse_args()

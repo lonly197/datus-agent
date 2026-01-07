@@ -437,12 +437,58 @@ python -m datus.api.server \
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--host` | Server host address | `127.0.0.1` |
+| `--host` | Server host address | `127.0.0.0` |
 | `--port` | Server port | `8000` |
 | `--workers` | Number of worker processes | `1` |
 | `--reload` | Auto-reload on code changes | `False` |
 | `--debug` | Enable debug mode | `False` |
 | `--daemon` | Run in background | `False` |
+| `--shutdown-timeout` | Maximum time to wait for running tasks to cancel during shutdown (seconds) | `5.0` |
+
+### Server Management
+
+#### Graceful Shutdown
+
+The API service supports graceful shutdown with configurable timeout for running task cancellation:
+
+```bash
+# Start with custom shutdown timeout
+python -m datus.api.server --shutdown-timeout 10
+
+# Start in daemon mode with custom timeout
+python -m datus.api.server --daemon --shutdown-timeout 3
+```
+
+**Shutdown Behavior:**
+- When SIGINT (Ctrl+C) is received, the server waits up to `--shutdown-timeout` seconds for running workflow tasks to cancel
+- Running tasks receive `asyncio.CancelledError` and should terminate promptly
+- If tasks don't complete within the timeout, shutdown continues with background cancellation
+- The server process exits cleanly, allowing proper cleanup of resources
+
+**Task Cancellation:**
+- API tasks can be cancelled via `DELETE /workflows/tasks/{task_id}` endpoint
+- Cancelled tasks are marked as such in the task store and removed from the running registry
+- Long-running operations (LLM calls, database queries) include cancellation checkpoints for responsive termination
+
+#### Daemon Management
+
+```bash
+# Start daemon
+python -m datus.api.server --daemon --port 8000
+
+# Check status
+python -m datus.api.server --action status
+
+# Stop daemon
+python -m datus.api.server --action stop
+
+# Restart daemon
+python -m datus.api.server --action restart
+```
+
+**Daemon Files:**
+- PID file: `~/.datus/run/datus-agent-api.pid`
+- Log file: `logs/datus-agent-api.log`
 
 ## Best Practices
 

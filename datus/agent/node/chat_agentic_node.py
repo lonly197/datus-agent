@@ -547,7 +547,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             agent_config: Agent configuration
             tools: List of tools (will be populated in setup_tools)
         """
-        # Call parent constructor with node_name="chat_agentic"
+        # Call parent constructor with node_name="chat"
         # This will initialize max_turns, tool attributes, plan mode attributes, and MCP servers
         super().__init__(
             node_id=node_id,

@@ -337,8 +337,18 @@ class WorkflowRunner:
                 try:
                     logger.info(f"Executing task: {current_node.description}")
 
+                    # Check for cancellation before node execution
+                    current_task = asyncio.current_task()
+                    if current_task and current_task.cancelled():
+                        raise asyncio.CancelledError()
+
                     async for node_action in current_node.run_stream(action_history_manager):
                         yield node_action
+
+                        # Check for cancellation during node execution
+                        current_task = asyncio.current_task()
+                        if current_task and current_task.cancelled():
+                            raise asyncio.CancelledError()
 
                     if current_node.status == "failed":
                         self._update_action_status(

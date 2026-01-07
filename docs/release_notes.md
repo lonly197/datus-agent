@@ -1,5 +1,13 @@
 # Release notes
 
+## Unreleased
+
+### API Service Improvements
+- **Graceful Shutdown**: Enhanced server shutdown behavior with configurable timeout for task cancellation. When receiving SIGINT (Ctrl+C), the server now waits for running workflow tasks to cancel gracefully before exiting. #shutdown-improvements
+- **Task Cancellation**: Improved responsiveness of task cancellation via API endpoints. Running tasks can now be cancelled immediately through the `DELETE /workflows/tasks/{task_id}` endpoint with bounded wait times.
+- **Shutdown Configuration**: Added `--shutdown-timeout` CLI parameter (default: 5.0 seconds) to configure maximum wait time for task cancellation during shutdown.
+- **Cancellation Checkpoints**: Added cancellation checkpoints around long-running operations (LLM calls, database queries) to ensure responsive task termination.
+
 ## 0.2.0 
 ### Enhanced Chat Functionality
 - Advanced multi-turn conversations for seamless interactions. #91

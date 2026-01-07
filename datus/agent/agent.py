@@ -163,6 +163,11 @@ class Agent:
             # Create workflow runner with metadata
             runner = self.create_workflow_runner(metadata=metadata)
 
+            # Check for cancellation before starting workflow execution
+            current_task = asyncio.current_task()
+            if current_task and current_task.cancelled():
+                raise asyncio.CancelledError()
+
             # Execute with streaming
             async for action in runner.run_stream(sql_task=sql_task):
                 yield action
