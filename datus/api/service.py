@@ -1676,11 +1676,6 @@ def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:
             if service.task_store:
                 task_data = service.task_store.get_task(task_id)
                 if task_data:
-                    # Check if task belongs to current client
-                    task_client = task_data.get("client")
-                    if task_client != current_client:
-                        raise HTTPException(status_code=403, detail=f"Task {task_id} belongs to different client")
-
                     # Only allow cancellation of running tasks
                     if task_data.get("status") == "running":
                         service.task_store.update_task(task_id, status="cancelled")
