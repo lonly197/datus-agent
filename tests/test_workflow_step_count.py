@@ -4,6 +4,8 @@
 
 import unittest
 from unittest.mock import MagicMock, patch
+import tempfile
+import os
 
 from datus.agent.workflow_runner import WorkflowRunner
 from datus.schemas.node_models import SqlTask
@@ -22,7 +24,7 @@ class TestWorkflowStepCount(unittest.TestCase):
 
         # Create mock agent config
         self.agent_config = MagicMock()
-        self.agent_config.get_trajectory_run_dir.return_value = "/tmp/test_trajectory"
+        self.agent_config.get_trajectory_run_dir.return_value = os.path.join(tempfile.gettempdir(), "test_trajectory")
 
         # Create workflow runner
         self.runner = WorkflowRunner(

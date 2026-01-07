@@ -215,10 +215,10 @@ class TestNode:
             assert result.success
             assert result.schema_count > 0
 
-    def test_schema_linking_fallback(self, agent_config: AgentConfig):
+    def test_schema_linking_fallback(self, agent_config: AgentConfig, tmp_path):
         """Test schema linking node with fallback"""
         agent_config.current_namespace = "bird_sqlite"
-        agent_config.rag_base_path = "/tmp/test_data"
+        agent_config.rag_base_path = str(tmp_path / "test_data")
         node = Node.new_instance(
             node_id="schema_link",
             description="Schema Linking",

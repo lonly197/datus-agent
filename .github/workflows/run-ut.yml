@@ -58,4 +58,4 @@ jobs:
 
       - name: run pytest
         run: |
-          python -m pytest -m acceptance  tests/
+          python -m pytest tests/

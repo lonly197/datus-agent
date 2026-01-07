@@ -14,13 +14,13 @@ from datus.api.service import create_app
 
 class TestChatResearchSSE:
     @pytest.fixture
-    def test_client(self):
+    def test_client(self, tmp_path):
         """Create a test client for the FastAPI app."""
         # Mock the agent configuration loading
         with patch("datus.api.service.load_agent_config") as mock_config:
             mock_config.return_value = MagicMock()
             mock_config.return_value.current_namespace = "test"
-            mock_config.return_value.rag_base_path = "/tmp/test"
+            mock_config.return_value.rag_base_path = str(tmp_path / "test")
 
             app = create_app(MagicMock())
             client = TestClient(app)
