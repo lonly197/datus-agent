@@ -24,6 +24,7 @@ from datus.models.base import LLMBaseModel
 from datus.models.mcp_result_extractors import extract_sql_contexts
 from datus.models.mcp_utils import multiple_mcp_servers
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
+from datus.utils.async_utils import await_cancellable
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
@@ -507,7 +508,13 @@ class OpenAICompatibleModel(LLMBaseModel):
 
                 agent = Agent(**agent_kwargs)
                 try:
-                    result = await Runner.run(agent, input=prompt, max_turns=max_turns, session=session)
+                    # Wrap execution with await_cancellable to ensure it respects cancellation
+                    # Use timeout from kwargs or default to client timeout (300s)
+                    run_timeout = kwargs.get("timeout", 300.0)
+                    result = await await_cancellable(
+                        Runner.run(agent, input=prompt, max_turns=max_turns, session=session),
+                        timeout=run_timeout
+                    )
                 except MaxTurnsExceeded as e:
                     logger.error(f"Max turns exceeded: {str(e)}")
                     raise DatusException(ErrorCode.MODEL_MAX_TURNS_EXCEEDED, message_args={"max_turns": max_turns})

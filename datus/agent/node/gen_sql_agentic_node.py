@@ -22,6 +22,7 @@ from datus.schemas.node_models import Metric, ReferenceSql, TableSchema
 from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool import ContextSearchTools, DBFuncTool, FilesystemFuncTool
 from datus.tools.func_tool.date_parsing_tools import DateParsingTools
+from datus.utils.async_utils import ensure_not_cancelled
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
@@ -806,6 +807,7 @@ class GenSQLAgenticNode(AgenticNode):
                 action_history_manager=action_history_manager,
                 hooks=config.get("hooks"),
             ):
+                ensure_not_cancelled()
                 yield stream_action
 
         except Exception as e:
@@ -820,6 +822,7 @@ class GenSQLAgenticNode(AgenticNode):
                     action_history_manager=action_history_manager,
                     session=session,
                 ):
+                    ensure_not_cancelled()
                     yield action
             else:
                 raise

@@ -35,6 +35,7 @@ from datus.schemas.chat_agentic_node_models import ChatNodeInput
 from datus.schemas.node_models import SQLContext
 from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool import ContextSearchTools, DBFuncTool
+from datus.utils.async_utils import ensure_not_cancelled
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -170,6 +171,9 @@ class PreflightOrchestrator:
             )
             action_history_manager.add_action(tool_action)
             yield tool_action
+
+            # Check for cancellation before executing tool
+            ensure_not_cancelled()
 
             # Check enhanced cache first
             cache_hit = False
@@ -1602,6 +1606,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 action_history_manager=action_history_manager,
                 session=session,
             ):
+                ensure_not_cancelled()
                 yield stream_action
 
                 # Collect response content from successful actions

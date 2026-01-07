@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from datus.agent.workflow_runner import WorkflowRunner
 from datus.configuration.agent_config import AgentConfig, BenchmarkConfig
 from datus.models.base import LLMBaseModel
+from datus.utils.async_utils import ensure_not_cancelled
 
 # Import model implementations
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
@@ -164,18 +165,14 @@ class Agent:
             runner = self.create_workflow_runner(metadata=metadata)
 
             # Check for cancellation before starting workflow execution
-            current_task = asyncio.current_task()
-            if current_task and current_task.cancelled():
-                raise asyncio.CancelledError()
+            ensure_not_cancelled()
 
             # Execute with streaming
             async for action in runner.run_stream(sql_task=sql_task):
                 yield action
 
-                # 检查是否被取消
-                current_task = asyncio.current_task()
-                if current_task and current_task.cancelled():
-                    break
+                # Check for cancellation
+                ensure_not_cancelled()
         except asyncio.CancelledError:
             logger.info("Agent stream execution was cancelled")
             raise

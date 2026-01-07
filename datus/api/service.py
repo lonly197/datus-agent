@@ -1047,7 +1047,7 @@ class DatusAPIService:
 
         return enhanced_msg, suggestions
 
-    async def cancel_all_running_tasks(self, per_task_timeout: float = 2.0):
+    async def cancel_all_running_tasks(self, wait_timeout: float = 2.0):
         """Cancel all currently running tasks and await their completion with timeout."""
         if not hasattr(self, "running_tasks_lock") or not hasattr(self, "running_tasks"):
             return
@@ -1058,7 +1058,7 @@ class DatusAPIService:
         if not tasks_to_cancel:
             return
 
-        logger.info(f"Cancelling {len(tasks_to_cancel)} running tasks during shutdown")
+        logger.info(f"Cancelling {len(tasks_to_cancel)} running tasks during shutdown (timeout={wait_timeout}s)")
 
         # Cancel all tasks first
         for running_task in tasks_to_cancel:
@@ -1074,11 +1074,11 @@ class DatusAPIService:
         try:
             await asyncio.wait_for(
                 asyncio.gather(*(rt.task for rt in tasks_to_cancel), return_exceptions=True),
-                timeout=per_task_timeout
+                timeout=wait_timeout
             )
-            logger.info(f"All {len(tasks_to_cancel)} tasks completed within {per_task_timeout}s")
+            logger.info(f"All {len(tasks_to_cancel)} tasks completed within {wait_timeout}s")
         except asyncio.TimeoutError:
-            logger.warning(f"Some tasks did not finish within {per_task_timeout}s timeout during shutdown")
+            logger.warning(f"Some tasks did not finish within {wait_timeout}s timeout during shutdown")
 
         # Clean up registry entries for tasks that are done or cancelled
         async with self.running_tasks_lock:
@@ -1369,17 +1369,11 @@ async def lifespan(app: FastAPI):
     if service:
         shutdown_timeout = getattr(args, 'shutdown_timeout_seconds', 5.0)
         try:
-            await asyncio.wait_for(service.cancel_all_running_tasks(), timeout=shutdown_timeout)
-            logger.info("All running tasks cancelled before shutdown")
-        except asyncio.TimeoutError:
-            logger.warning(f"Timed out waiting {shutdown_timeout}s for task cancellation; scheduling background cancellation")
-            # Fallback to background cancellation to avoid blocking shutdown
-            try:
-                asyncio.create_task(service.cancel_all_running_tasks())
-            except Exception as e:
-                logger.warning(f"Failed to schedule background task cancellation: {e}")
+            # Pass shutdown_timeout to allow full wait duration
+            await service.cancel_all_running_tasks(wait_timeout=shutdown_timeout)
+            logger.info("Shutdown cancellation sequence completed")
         except Exception as e:
-            logger.warning(f"Failed to cancel running tasks during shutdown: {e}")
+            logger.warning(f"Error during shutdown task cancellation: {e}")
 
 
 def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:

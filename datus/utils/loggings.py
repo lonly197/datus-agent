@@ -319,7 +319,7 @@ if not structlog.is_configured():
     )
 
 
-def _get_current_log_file() -> Path | None:
+def _get_current_log_file() -> Optional[Path]:
     """Try to locate the current agent log file.
 
     Checks the active log manager first and falls back to the latest

@@ -13,6 +13,7 @@ from datus.configuration.node_type import NodeType
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseResult
 from datus.schemas.node_models import SqlTask
+from datus.utils.async_utils import ensure_not_cancelled
 from datus.utils.loggings import get_logger
 from datus.utils.traceable_utils import optional_traceable
 
@@ -310,9 +311,10 @@ class WorkflowRunner:
             self._prepare_first_node()
 
             while self.workflow and not self.workflow.is_complete() and step_count < max_steps:
-                # 检查是否被取消
-                current_task = asyncio.current_task()
-                if current_task and current_task.cancelled():
+                # Check for cancellation at loop start
+                try:
+                    ensure_not_cancelled()
+                except asyncio.CancelledError:
                     logger.info("Workflow execution was cancelled")
                     break
 
@@ -338,17 +340,13 @@ class WorkflowRunner:
                     logger.info(f"Executing task: {current_node.description}")
 
                     # Check for cancellation before node execution
-                    current_task = asyncio.current_task()
-                    if current_task and current_task.cancelled():
-                        raise asyncio.CancelledError()
+                    ensure_not_cancelled()
 
                     async for node_action in current_node.run_stream(action_history_manager):
                         yield node_action
 
                         # Check for cancellation during node execution
-                        current_task = asyncio.current_task()
-                        if current_task and current_task.cancelled():
-                            raise asyncio.CancelledError()
+                        ensure_not_cancelled()
 
                     if current_node.status == "failed":
                         self._update_action_status(
