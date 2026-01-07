@@ -9,6 +9,7 @@ Event converter for mapping ActionHistory to DeepResearchEvent format.
 import asyncio
 import hashlib
 import json
+import time
 import uuid
 from collections import deque
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -71,19 +72,29 @@ class DeepResearchEventConverter:
         if current_step_id:
             self.active_virtual_step_id = current_step_id
         
-        for step in self.VIRTUAL_STEPS:
+        # Determine the index of the current active step
+        active_index = -1
+        if self.active_virtual_step_id:
+            for i, step in enumerate(self.VIRTUAL_STEPS):
+                if step["id"] == self.active_virtual_step_id:
+                    active_index = i
+                    break
+        
+        for i, step in enumerate(self.VIRTUAL_STEPS):
             status = TodoStatus.PENDING
             
-            if step["id"] in self.completed_virtual_steps:
-                status = TodoStatus.COMPLETED
-            elif step["id"] == self.active_virtual_step_id:
-                status = TodoStatus.IN_PROGRESS
-            
-            # If we are moving to a new step, mark previous incomplete steps as completed (heuristically)
-            # This is simple logic; in a real graph we might need more complex tracking
-            if current_step_id and step["id"] != current_step_id and status == TodoStatus.IN_PROGRESS:
-                 self.completed_virtual_steps.add(step["id"])
-                 status = TodoStatus.COMPLETED
+            # Robust state machine logic based on linear order
+            if active_index != -1:
+                if i < active_index:
+                    status = TodoStatus.COMPLETED
+                elif i == active_index:
+                    status = TodoStatus.IN_PROGRESS
+                else:
+                    status = TodoStatus.PENDING
+            else:
+                # If no active step yet (initialization), check completed set or default to pending
+                if step["id"] in self.completed_virtual_steps:
+                    status = TodoStatus.COMPLETED
 
             todos.append(TodoItem(
                 id=step["id"],
@@ -94,7 +105,7 @@ class DeepResearchEventConverter:
         return PlanUpdateEvent(
             id=str(uuid.uuid4()),
             planId=None,
-            timestamp=int(asyncio.get_event_loop().time() * 1000) if asyncio.get_event_loop().is_running() else 0,
+            timestamp=int(time.time() * 1000),
             todos=todos
         )
 
@@ -353,7 +364,7 @@ class DeepResearchEventConverter:
     def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
         """Convert ActionHistory to DeepResearchEvent list."""
 
-        timestamp = int(action.start_time.timestamp() * 1000)
+        timestamp = int(time.time() * 1000)
         event_id = f"{action.action_id}_{seq_num}"
         events: List[DeepResearchEvent] = []
 
