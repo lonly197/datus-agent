@@ -23,3 +23,31 @@ def clean_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
 
     return text.strip()
+
+
+def strip_markdown_code_block(text: str) -> str:
+    """
+    Strip markdown code block markers from text if present at start/end.
+    
+    Args:
+        text: Input text containing code block with markdown markers
+        
+    Returns:
+        Text with markdown markers removed
+    """
+    if not isinstance(text, str):
+        return text
+        
+    lines = text.strip().split("\n")
+    if not lines:
+        return text
+
+    # Remove ```<lang> at start if present
+    if lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    
+    # Remove ``` at end if present
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+
+    return "\n".join(lines)

@@ -120,33 +120,53 @@ class SchemaLinkingNode(Node):
                 schema_count=0 if not self._table_schemas else len(self._table_schemas),
                 value_count=0 if not self._table_values else len(self._table_values),
             )
-        import os
 
-        path = self.agent_config.rag_storage_path()
-        logger.debug(f"Checking if rag storage path exists: {path}")
-        if not os.path.exists(path):
-            logger.info(f"RAG storage path `{path}` does not exist.")
-            return self._execute_schema_linking_fallback(SchemaLineageTool(self.agent_config))
-        else:
+        tool = None
+        try:
             tool = SchemaLineageTool(agent_config=self.agent_config)
-            try:
-                # Import SchemaLineageTool only when needed
-                if tool:
-                    result = tool.execute(self.input, self.model)
-                    if not result.success:
-                        logger.warning(f"Schema linking failed: {result.error}")
-                        return self._execute_schema_linking_fallback(tool)
-                    logger.info(f"Schema linking result: found {len(result.table_schemas)} tables")
-                    if len(result.table_schemas) > 0:
-                        return result
-                    logger.info("No tables found, using fallback method")
-                    return self._execute_schema_linking_fallback(tool)
-                else:
-                    logger.warning("Schema linking tool not found")
-                    return self._execute_schema_linking_fallback(tool)
-            except Exception as e:
-                logger.warning(f"Schema linking tool initialization failed: {e}")
+            
+            # Execute with RAG tool
+            result = tool.execute(self.input, self.model)
+            if not result.success:
+                logger.warning(f"Schema linking failed: {result.error}")
                 return self._execute_schema_linking_fallback(tool)
+                
+            logger.info(f"Schema linking result: found {len(result.table_schemas)} tables")
+            if len(result.table_schemas) > 0:
+                return result
+                
+            logger.info("No tables found, using fallback method")
+            return self._execute_schema_linking_fallback(tool)
+            
+        except Exception as e:
+            logger.warning(f"Schema linking tool initialization/execution failed: {e}")
+            if tool:
+                return self._execute_schema_linking_fallback(tool)
+                
+            # If tool failed to initialize, try to initialize it with minimal dependencies for fallback
+            # Note: This assumes SchemaLineageTool might fail due to storage issues but we still want fallback
+            try:
+                # Attempt to create tool bypassing storage init if possible, or just fail
+                # Since we can't easily bypass __init__, we return failure if we can't create tool
+                # But we can try to use the fallback logic directly if we could refactor.
+                # For now, return error.
+                return SchemaLinkingResult(
+                    success=False,
+                    error=f"Schema linking failed: {e}",
+                    schema_count=0,
+                    value_count=0,
+                    table_schemas=[],
+                    table_values=[],
+                )
+            except Exception:
+                return SchemaLinkingResult(
+                    success=False,
+                    error=f"Schema linking failed: {e}",
+                    schema_count=0,
+                    value_count=0,
+                    table_schemas=[],
+                    table_values=[],
+                )
 
     def _execute_schema_linking_fallback(self, tool: SchemaLineageTool) -> SchemaLinkingResult:
         # Fallback: directly get tables from current database

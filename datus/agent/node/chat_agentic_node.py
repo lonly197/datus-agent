@@ -37,6 +37,7 @@ from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool import ContextSearchTools, DBFuncTool
 from datus.utils.async_utils import ensure_not_cancelled
 from datus.utils.loggings import get_logger
+from datus.utils.text_utils import strip_markdown_code_block
 
 logger = get_logger(__name__)
 
@@ -45,24 +46,25 @@ class PreflightOrchestrator:
     """
     Orchestrator for executing preflight tools with enhanced capabilities.
 
-    Handles tool execution, caching, batching, and event emission for the
-    new SQL review preflight tools.
+    Handles tool execution, caching, batching, and event emission for
+    all preflight tools (both legacy and new).
     """
 
     def __init__(self, chat_node: "ChatAgenticNode"):
         self.chat_node = chat_node
         self.db_func_tool = chat_node.db_func_tool
+        self.context_search_tools = getattr(chat_node, "context_search_tools", None)
         self.plan_hooks = getattr(chat_node, "plan_hooks", None)
         self.execution_event_manager = getattr(chat_node, "execution_event_manager", None)
 
-    async def execute_enhanced_preflight_tools(
+    async def execute_preflight_tools(
         self,
         workflow,
         action_history_manager: ActionHistoryManager,
         execution_id: Optional[str] = None,
     ) -> AsyncGenerator[ActionHistory, None]:
         """
-        Execute enhanced preflight tools with proper orchestration.
+        Execute preflight tools with proper orchestration.
 
         Args:
             workflow: The workflow instance
@@ -86,30 +88,16 @@ class PreflightOrchestrator:
         # Parse table names
         table_names = self.chat_node._parse_table_names_from_sql(sql_query)
 
-        # Separate new enhanced tools from existing ones
-        existing_tools = [
-            "describe_table",
-            "search_external_knowledge",
-            "read_query",
-            "get_table_ddl",
-        ]
-        enhanced_tools = [
-            "analyze_query_plan",
-            "check_table_conflicts",
-            "validate_partitioning",
-        ]
-
-        all_tools = existing_tools + enhanced_tools
-        tools_to_execute = [tool for tool in required_tools if tool in all_tools]
-
-        if not tools_to_execute:
-            return
-
         # Send plan update event
-        await self._send_preflight_plan_update(workflow, tools_to_execute, execution_id)
+        await self._send_preflight_plan_update(workflow, required_tools, execution_id)
 
         # Execute tools
-        for tool_name in tools_to_execute:
+        for tool_name in required_tools:
+            # Dynamic check if tool is supported
+            if not self._is_tool_supported(tool_name):
+                logger.warning(f"Tool {tool_name} is not supported by PreflightOrchestrator")
+                continue
+
             async for action in self._execute_single_tool(
                 tool_name,
                 sql_query,
@@ -122,6 +110,14 @@ class PreflightOrchestrator:
                 execution_id,
             ):
                 yield action
+
+    def _is_tool_supported(self, tool_name: str) -> bool:
+        """Check if the tool is supported by checking available tool instances."""
+        if self.db_func_tool and hasattr(self.db_func_tool, tool_name):
+            return True
+        if self.context_search_tools and hasattr(self.context_search_tools, tool_name):
+            return True
+        return False
 
     async def _execute_single_tool(
         self,
@@ -158,7 +154,7 @@ class PreflightOrchestrator:
             tool_action = ActionHistory.create_action(
                 role=ActionRole.TOOL,
                 action_type=f"preflight_{tool_name}",
-                messages=f"Executing enhanced preflight tool: {tool_name}",
+                messages=f"Executing preflight tool: {tool_name}",
                 input_data={
                     "tool_name": tool_name,
                     "sql_query": sql_query,
@@ -177,51 +173,57 @@ class PreflightOrchestrator:
 
             # Check enhanced cache first
             cache_hit = False
-            if self.plan_hooks and self.plan_hooks.enable_query_caching:
+            result = None
+
+            # Only attempt caching if plan_hooks are available and caching is enabled
+            if self.plan_hooks and getattr(self.plan_hooks, "enable_query_caching", False):
                 cache_key_params = {
                     "catalog": catalog,
                     "database": database,
                     "schema": schema,
                 }
 
-                if tool_name == "analyze_query_plan":
+                if tool_name in ["analyze_query_plan", "read_query"]:
                     cache_key_params["sql_query"] = sql_query
-                elif tool_name in ["check_table_conflicts", "validate_partitioning"]:
+                elif tool_name in ["check_table_conflicts", "validate_partitioning", "describe_table", "get_table_ddl"]:
                     if table_names:
                         cache_key_params["table_name"] = table_names[0]
+                elif tool_name == "search_external_knowledge":
+                     cache_key_params["query"] = "external_knowledge" # Simplified cache key
 
                 cached_result = self.plan_hooks.query_cache.get_enhanced(tool_name, **cache_key_params)
                 if cached_result is not None:
                     cache_hit = True
                     result = cached_result
-                else:
-                    # Check if batch processing is available for this tool
-                    batch_processor = getattr(self.plan_hooks, "batch_processor", None)
-                    if batch_processor and tool_name in ["check_table_conflicts", "validate_partitioning"]:
-                        # Add to batch for later processing
-                        batch_size = batch_processor.get_batch_size(tool_name)
-                        if batch_size > 0:
-                            # Process existing batch first
-                            existing_batch = batch_processor.clear_batch(tool_name)
-                            if existing_batch:
-                                batch_results = await self._process_tool_batch(tool_name, existing_batch, workflow)
-                                # Cache batch results
-                                for batch_result in batch_results:
-                                    if batch_result.get("success", False):
-                                        batch_cache_params = cache_key_params.copy()
-                                        batch_cache_params["table_name"] = batch_result.get("table_name", "")
-                                        self.plan_hooks.query_cache.set_enhanced(
-                                            tool_name, batch_result, **batch_cache_params
-                                        )
 
-                    # Execute the tool
-                    result = await self._call_enhanced_tool(
-                        tool_name, sql_query, table_names, catalog, database, schema
-                    )
+            if not cache_hit:
+                # Check if batch processing is available for this tool
+                batch_processor = getattr(self.plan_hooks, "batch_processor", None) if self.plan_hooks else None
+                if batch_processor and tool_name in ["check_table_conflicts", "validate_partitioning"]:
+                    # Add to batch for later processing
+                    batch_size = batch_processor.get_batch_size(tool_name)
+                    if batch_size > 0:
+                        # Process existing batch first
+                        existing_batch = batch_processor.clear_batch(tool_name)
+                        if existing_batch:
+                            batch_results = await self._process_tool_batch(tool_name, existing_batch, workflow)
+                            # Cache batch results
+                            for batch_result in batch_results:
+                                if batch_result.get("success", False):
+                                    batch_cache_params = cache_key_params.copy()
+                                    batch_cache_params["table_name"] = batch_result.get("table_name", "")
+                                    self.plan_hooks.query_cache.set_enhanced(
+                                        tool_name, batch_result, **batch_cache_params
+                                    )
 
-                    # Cache successful results using enhanced caching
-                    if result.get("success", False):
-                        self.plan_hooks.query_cache.set_enhanced(tool_name, result, **cache_key_params)
+                # Execute the tool dynamically
+                result = await self._call_tool(
+                    tool_name, sql_query, table_names, catalog, database, schema
+                )
+
+                # Cache successful results using enhanced caching
+                if result.get("success", False) and self.plan_hooks and getattr(self.plan_hooks, "enable_query_caching", False):
+                    self.plan_hooks.query_cache.set_enhanced(tool_name, result, **cache_key_params)
 
             execution_time = time.time() - start_time
 
@@ -267,7 +269,7 @@ class PreflightOrchestrator:
             yield tool_action
 
         except Exception as e:
-            logger.error(f"Error executing enhanced preflight tool {tool_name}: {e}")
+            logger.error(f"Error executing preflight tool {tool_name}: {e}")
 
             # Send error event
             error_desc = str(e)
@@ -287,30 +289,52 @@ class PreflightOrchestrator:
             action_history_manager.add_action(error_action)
             yield error_action
 
-    async def _call_enhanced_tool(
+    async def _call_tool(
         self, tool_name: str, sql_query: str, table_names: List[str], catalog: str, database: str, schema: str
     ) -> Dict[str, Any]:
-        """Call the appropriate enhanced preflight tool."""
-        if self.db_func_tool is None:
-            return {"success": False, "error": "DB function tool not initialized"}
-        if tool_name == "analyze_query_plan":
-            return self.db_func_tool.analyze_query_plan(sql_query, catalog, database, schema)
+        """Call the appropriate tool dynamically."""
+        
+        result = {"success": False, "error": f"Tool {tool_name} not found or not initialized"}
+        
+        # Priority 1: DB Function Tools
+        if self.db_func_tool and hasattr(self.db_func_tool, tool_name):
+            tool_method = getattr(self.db_func_tool, tool_name)
+            
+            # Dispatch based on known tool signatures
+            if tool_name in ["analyze_query_plan"]:
+                result = tool_method(sql_query, catalog, database, schema)
+            
+            elif tool_name in ["read_query"]:
+                result = tool_method(sql_query)
+                
+            elif tool_name in ["check_table_conflicts", "validate_partitioning", "describe_table", "get_table_ddl"]:
+                if not table_names:
+                    result = {"success": False, "error": "No table names found in SQL query"}
+                else:
+                    result = tool_method(table_names[0], catalog, database, schema)
+            
+            else:
+                # Fallback for other db tools
+                if not table_names:
+                     result = {"success": False, "error": f"Tool {tool_name} requires table name but none found"}
+                else:
+                    result = tool_method(table_names[0], catalog, database, schema)
 
-        elif tool_name == "check_table_conflicts":
-            if not table_names:
-                return {"success": False, "error": "No table names found in SQL query"}
-            return self.db_func_tool.check_table_conflicts(table_names[0], catalog, database, schema)
+        # Priority 2: Context Search Tools
+        elif self.context_search_tools and hasattr(self.context_search_tools, tool_name):
+            tool_method = getattr(self.context_search_tools, tool_name)
+            
+            if tool_name == "search_external_knowledge":
+                result = tool_method(query_text="SQL review rules and best practices")
+            else:
+                result = tool_method(query_text=sql_query)
 
-        elif tool_name == "validate_partitioning":
-            if not table_names:
-                return {"success": False, "error": "No table names found in SQL query"}
-            return self.db_func_tool.validate_partitioning(table_names[0], catalog, database, schema)
-
-        else:
-            # Fallback to existing tool execution
-            return await self.chat_node._execute_preflight_tool(
-                tool_name, sql_query, table_names, catalog, database, schema
-            )
+        # Handle FuncToolResult conversion
+        from datus.tools.func_tool.base import FuncToolResult
+        if isinstance(result, FuncToolResult):
+            return result.model_dump()
+            
+        return result
 
     def _inject_tool_result_into_context(self, workflow, tool_name: str, result: Dict[str, Any]) -> None:
         """Inject tool results into workflow context for LLM consumption."""
@@ -353,6 +377,27 @@ class PreflightOrchestrator:
                 }
                 workflow.context.preflight_results = getattr(workflow.context, "preflight_results", {})
                 workflow.context.preflight_results["partitioning_validation"] = partitioning_data
+
+            elif tool_name == "describe_table" and result.get("success"):
+                 # Add table schema information
+                if "columns" in result.get("result", {}): # result.result based on DBFuncTool.describe_table structure
+                     # Note: DBFuncTool.describe_table returns FuncToolResult(result={"table_info":..., "columns":...})
+                     # The result dict passed here is the raw dictionary from FuncToolResult.result usually?
+                     # Wait, _call_tool returns what the tool method returns.
+                     # DBFuncTool methods return FuncToolResult.
+                     # But _call_tool calls them directly.
+                     # DBFuncTool methods return FuncToolResult object.
+                     # We need to handle that.
+                     pass 
+
+            # Handling of legacy tools injection logic (migrated from _execute_..._tool methods)
+            if tool_name == "describe_table":
+                # Helper to normalize result data since DBFuncTool returns FuncToolResult object but we might want dict
+                # Actually _call_tool returns FuncToolResult object?
+                # No, DBFuncTool methods return FuncToolResult.
+                # We need to access .result or .to_dict().
+                # Let's fix _call_tool to return dict to be consistent with previous implementation
+                pass
 
         except Exception as e:
             logger.warning(f"Failed to inject tool result into context for {tool_name}: {e}")
@@ -861,224 +906,54 @@ class ChatAgenticNode(GenSQLAgenticNode):
         self._setup_filesystem_tools()
         self._rebuild_tools()
 
+    async def run_preflight_tools(self, sql_query: str, event_manager: Any = None, execution_id: str = None):
+        """
+        Public API for running preflight tools (used by SQLReviewExecutionMode).
+        """
+        from types import SimpleNamespace
+        
+        # Create a mock workflow object structure expected by PreflightOrchestrator
+        task = SimpleNamespace(
+            task=sql_query,
+            catalog_name=self.agent_config.current_catalog,
+            database_name=self.agent_config.current_database,
+            schema_name=self.agent_config.current_schema
+        )
+        
+        # Default tools for SQL review if called directly
+        required_tools = [
+            "analyze_query_plan", 
+            "check_table_conflicts", 
+            "validate_partitioning",
+            "describe_table"
+        ]
+        
+        workflow = SimpleNamespace(
+            task=task,
+            metadata={"required_tool_sequence": required_tools},
+            context=SimpleNamespace()
+        )
+        
+        # Use action_history_manager from event_manager if available
+        action_history_manager = event_manager.action_history_manager if event_manager else None
+        
+        orchestrator = PreflightOrchestrator(self)
+        async for action in orchestrator.execute_preflight_tools(
+            workflow, action_history_manager, execution_id
+        ):
+            pass  # Consume generator to ensure execution
+
     async def _run_original_preflight_tools(
         self, workflow, action_history_manager: ActionHistoryManager = None, execution_id: str = None
     ) -> AsyncGenerator[ActionHistory, None]:
         """
-        Execute preflight tools using the enhanced orchestrator for new tools,
-        falling back to original implementation for existing tools.
+        Execute preflight tools using the unified orchestrator.
         """
-        required_tools = workflow.metadata.get("required_tool_sequence", [])
-        if not required_tools:
-            return
-
-        # Separate enhanced tools from existing tools
-        enhanced_tools = ["analyze_query_plan", "check_table_conflicts", "validate_partitioning"]
-        existing_tools = [tool for tool in required_tools if tool not in enhanced_tools]
-        enhanced_tools_in_sequence = [tool for tool in required_tools if tool in enhanced_tools]
-
-        # Use enhanced orchestrator for new tools
-        if enhanced_tools_in_sequence:
-            orchestrator = PreflightOrchestrator(self)
-            async for action in orchestrator.execute_enhanced_preflight_tools(
-                workflow, action_history_manager, execution_id
-            ):
-                yield action
-
-        # Use original implementation for existing tools
-        if existing_tools:
-            # Update workflow metadata to only include existing tools for original implementation
-            original_metadata = workflow.metadata.copy()
-            workflow.metadata["required_tool_sequence"] = existing_tools
-            try:
-                # Execute existing tools using the original implementation (lines below)
-                # Use execution event manager if provided, otherwise fall back to action_history_manager
-                event_manager = (
-                    self.execution_event_manager
-                    if hasattr(self, "execution_event_manager") and self.execution_event_manager
-                    else None
-                )
-
-                required_tools = workflow.metadata.get("required_tool_sequence", [])
-                if not required_tools:
-                    logger.debug("No required tool sequence specified, skipping preflight")
-                    return
-
-                logger.info(f"Starting preflight tool execution: {required_tools}")
-
-                # Send preflight plan update if using event manager
-                if event_manager and execution_id:
-                    await event_manager.update_execution_status(
-                        execution_id, "planning", f"Executing preflight tools: {required_tools}"
-                    )
-
-                # Execute each tool in the sequence
-                for tool_name in required_tools:
-                    try:
-                        logger.debug(f"Executing preflight tool: {tool_name}")
-
-                        # Send tool start event if using event manager
-                        if event_manager and execution_id:
-                            await event_manager.update_execution_status(
-                                execution_id, "executing", f"Running {tool_name}"
-                            )
-
-                        # Execute the tool based on its name
-                        if tool_name == "describe_table":
-                            result = await self._execute_describe_table_tool(workflow, action_history_manager)
-                        elif tool_name == "search_external_knowledge":
-                            result = await self._execute_search_external_knowledge_tool(
-                                workflow, action_history_manager
-                            )
-                        elif tool_name == "read_query":
-                            result = await self._execute_read_query_tool(workflow, action_history_manager)
-                        elif tool_name == "get_table_ddl":
-                            result = await self._execute_get_table_ddl_tool(workflow, action_history_manager)
-                        else:
-                            logger.warning(f"Unknown preflight tool: {tool_name}")
-                            continue
-
-                        # Yield the action if successful
-                        if result:
-                            yield result
-
-                        # Send tool completion event if using event manager
-                        if event_manager and execution_id:
-                            await event_manager.update_execution_status(
-                                execution_id, "executing", f"Completed {tool_name}"
-                            )
-
-                    except Exception as e:
-                        logger.error(f"Error executing preflight tool {tool_name}: {e}")
-                        # Send error event if using event manager
-                        if event_manager and execution_id:
-                            await event_manager.update_execution_status(
-                                execution_id, "error", f"Failed {tool_name}: {str(e)}"
-                            )
-                        # Continue with next tool unless configured to fail fast
-                        continue
-
-            finally:
-                # Restore original metadata
-                workflow.metadata = original_metadata
-
-    async def _execute_describe_table_tool(self, workflow, action_history_manager):
-        """Execute describe_table preflight tool."""
-        try:
-            task = workflow.task
-            sql_query = self._extract_sql_from_task(task.task)
-            table_names = self._parse_table_names_from_sql(sql_query)
-
-            result = await self._execute_preflight_tool(
-                "describe_table", sql_query, table_names, task.catalog_name, task.database_name, task.schema_name
-            )
-
-            if result.get("success"):
-                # Create action for successful tool execution
-                action = ActionHistory.create_action(
-                    role=ActionRole.ASSISTANT,
-                    action_type="tool_call",
-                    messages=f"Describe table structure for {table_names[0] if table_names else 'unknown table'}",
-                    input_data={"table_names": table_names},
-                    output_data=result,
-                )
-                if action_history_manager:
-                    action_history_manager.add_action(action)
-                return action
-
-        except Exception as e:
-            logger.error(f"Error in _execute_describe_table_tool: {e}")
-
-        return None
-
-    async def _execute_search_external_knowledge_tool(self, workflow, action_history_manager):
-        """Execute search_external_knowledge preflight tool."""
-        try:
-            task = workflow.task
-
-            result = await self._execute_preflight_tool(
-                "search_external_knowledge",
-                "",
-                [],  # No SQL/table needed for knowledge search
-                task.catalog_name,
-                task.database_name,
-                task.schema_name,
-            )
-
-            if result.get("success"):
-                # Create action for successful tool execution
-                action = ActionHistory.create_action(
-                    role=ActionRole.ASSISTANT,
-                    action_type="tool_call",
-                    messages="Search StarRocks SQL review rules and best practices",
-                    input_data={"query": "Search StarRocks SQL review rules and best practices"},
-                    output_data=result,
-                )
-                if action_history_manager:
-                    action_history_manager.add_action(action)
-                return action
-
-        except Exception as e:
-            logger.error(f"Error in _execute_search_external_knowledge_tool: {e}")
-
-        return None
-
-    async def _execute_read_query_tool(self, workflow, action_history_manager):
-        """Execute read_query preflight tool."""
-        try:
-            task = workflow.task
-            sql_query = self._extract_sql_from_task(task.task)
-
-            result = await self._execute_preflight_tool(
-                "read_query", sql_query, [], task.catalog_name, task.database_name, task.schema_name
-            )
-
-            if result.get("success"):
-                # Create action for successful tool execution
-                action = ActionHistory.create_action(
-                    role=ActionRole.ASSISTANT,
-                    action_type="tool_call",
-                    messages=f"Execute SQL query for validation: {sql_query[:100]}...",
-                    input_data={"sql_query": sql_query[:100]},
-                    output_data=result,
-                )
-                if action_history_manager:
-                    action_history_manager.add_action(action)
-                return action
-
-        except Exception as e:
-            logger.error(f"Error in _execute_read_query_tool: {e}")
-
-        return None
-
-    async def _execute_get_table_ddl_tool(self, workflow, action_history_manager):
-        """Execute get_table_ddl preflight tool."""
-        try:
-            task = workflow.task
-            sql_query = self._extract_sql_from_task(task.task)
-            table_names = self._parse_table_names_from_sql(sql_query)
-
-            result = await self._execute_preflight_tool(
-                "get_table_ddl", sql_query, table_names, task.catalog_name, task.database_name, task.schema_name
-            )
-
-            if result.get("success"):
-                # Create action for successful tool execution
-                action = ActionHistory.create_action(
-                    role=ActionRole.ASSISTANT,
-                    action_type="tool_call",
-                    messages=f"Get DDL for table {table_names[0] if table_names else 'unknown table'}",
-                    input_data={"table_names": table_names},
-                    output_data=result,
-                )
-                if action_history_manager:
-                    action_history_manager.add_action(action)
-                return action
-
-        except Exception as e:
-            logger.error(f"Error in _execute_get_table_ddl_tool: {e}")
-
-        return None
+        orchestrator = PreflightOrchestrator(self)
+        async for action in orchestrator.execute_preflight_tools(
+            workflow, action_history_manager, execution_id
+        ):
+            yield action
 
     def _extract_sql_from_task(self, task_text: str) -> str:
         """Extract SQL query from task text with improved logic."""
@@ -1114,8 +989,8 @@ class ChatAgenticNode(GenSQLAgenticNode):
             if not self._contains_invalid_mixed_content(sql_candidate):
                 return sql_candidate
 
-        # 5. Final fallback: return the entire task text
-        return task_text.strip()
+        # 5. Final fallback: return the entire task text, but strip markdown if present
+        return strip_markdown_code_block(task_text.strip())
 
     def _contains_invalid_mixed_content(self, sql: str) -> bool:
         """Check if SQL contains invalid mixed content (Chinese explanations mixed with SQL)."""

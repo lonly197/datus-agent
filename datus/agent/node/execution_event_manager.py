@@ -570,18 +570,8 @@ Generate the SQL query:"""
             generated_sql = sql_result.strip()
 
             # Clean up the SQL (remove markdown code blocks if present)
-            if generated_sql.startswith("```"):
-                # Extract SQL from markdown code block
-                lines = generated_sql.split("\n")
-                sql_lines = []
-                in_code_block = False
-                for line in lines:
-                    if line.startswith("```"):
-                        in_code_block = not in_code_block
-                        continue
-                    if in_code_block:
-                        sql_lines.append(line)
-                generated_sql = "\n".join(sql_lines).strip()
+            from datus.utils.text_utils import strip_markdown_code_block
+            generated_sql = strip_markdown_code_block(generated_sql)
 
             logger.info(f"Generated SQL: {generated_sql}")
             return generated_sql

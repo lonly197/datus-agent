@@ -29,8 +29,10 @@ class ExecuteSQLNode(Node):
             yield action
 
     def setup_input(self, workflow: Workflow) -> Dict:
+        from datus.utils.text_utils import strip_markdown_code_block
+
         next_input = ExecuteSQLInput(
-            sql_query=self._strip_sql_markdown(workflow.get_last_sqlcontext().sql_query),
+            sql_query=strip_markdown_code_block(workflow.get_last_sqlcontext().sql_query),
             database_name=workflow.task.database_name,
         )
         self.input = next_input
@@ -52,36 +54,6 @@ class ExecuteSQLNode(Node):
         except Exception as e:
             logger.error(f"Failed to update SQL execution context: {str(e)}")
             return {"success": False, "message": f"SQL execution context update failed: {str(e)}"}
-
-    def _strip_sql_markdown(self, text: str) -> str:
-        """Strip markdown SQL code block markers from text.
-
-        Args:
-            text (str): Input text containing SQL code block with markdown markers
-
-        Returns:
-            str: SQL code with markdown markers removed
-
-        Example:
-            >>> text = '''```sql
-            ... SELECT * FROM table;
-            ... ```'''
-            >>> print(strip_sql_markdown(text))
-            SELECT * FROM table;
-        """
-        if not isinstance(text, str):
-            logger.warning(f"The input of sql to stripe is not a string: {text}")
-            return text
-        lines = text.split("\n")
-
-        # Remove ```sql at start and ``` at end if present
-        if lines and lines[0].strip() == "```sql":
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-
-        # Join lines back together
-        return "\n".join(lines)
 
     def _execute_sql(self) -> ExecuteSQLResult:
         """Execute SQL query action to run the generated query."""
