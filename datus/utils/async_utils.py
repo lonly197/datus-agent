@@ -37,3 +37,32 @@ async def await_cancellable(coro: Awaitable[T], timeout: Optional[float] = None)
         return await asyncio.wait_for(coro, timeout=timeout)
     else:
         return await coro
+
+def run_async(coro: Awaitable[T]) -> T:
+    """
+    Run an async coroutine synchronously.
+    
+    This is useful for calling async functions from sync contexts (e.g., CLI commands,
+    sync tools). It handles event loop management automatically.
+    
+    Args:
+        coro: The coroutine to execute.
+        
+    Returns:
+        The result of the coroutine.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # If we are already in an event loop, we cannot block it.
+        # We run the coroutine in a separate thread with its own event loop.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        # No running loop, just run it
+        return asyncio.run(coro)
