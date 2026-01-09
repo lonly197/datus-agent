@@ -220,18 +220,17 @@ class WorkflowRunner:
             logger.info(f"Executing task: {current_node.description}")
             current_node.run()
 
+            is_soft_failure = False
             if current_node.status == "failed":
-                # Check if this is a soft failure that allows reflection
-                allow_reflection = False
-                if current_node.result and hasattr(current_node.result, "data") and current_node.result.data:
-                    allow_reflection = current_node.result.data.get("allow_reflection", False)
-
                 # Check if workflow has a reflect node for recovery
                 has_reflect = any(n.type == NodeType.TYPE_REFLECT for n in self.workflow.nodes.values())
 
-                if allow_reflection and has_reflect:
+                if has_reflect:
                     # Soft failure - continue to reflection for recovery
-                    logger.info(f"Node failed but allows reflection: {current_node.description}")
+                    logger.info(
+                        f"Node failed but workflow has reflection. Continuing as Soft Failure: {current_node.description}"
+                    )
+                    is_soft_failure = True
                 elif current_node.type == NodeType.TYPE_PARALLEL:
                     try:
                         has_any_success = False
@@ -257,9 +256,14 @@ class WorkflowRunner:
             evaluation = evaluate_result(current_node, self.workflow)
             logger.debug(f"Evaluation result for {current_node.type}: {evaluation}")
             if not evaluation["success"]:
-                logger.error(f"Setting {current_node.type} status to failed due to evaluation failure")
-                current_node.status = "failed"
-                break
+                if is_soft_failure:
+                    logger.warning(
+                        f"Evaluation failed for {current_node.type}, but continuing due to Soft Failure mode."
+                    )
+                else:
+                    logger.error(f"Setting {current_node.type} status to failed due to evaluation failure")
+                    current_node.status = "failed"
+                    break
 
             self.workflow.advance_to_next_node()
             step_count += 1
@@ -361,18 +365,17 @@ class WorkflowRunner:
                         # Check for cancellation during node execution
                         ensure_not_cancelled()
 
+                    is_soft_failure = False
                     if current_node.status == "failed":
-                        # Check if this is a soft failure that allows reflection
-                        allow_reflection = False
-                        if current_node.result and hasattr(current_node.result, "data") and current_node.result.data:
-                            allow_reflection = current_node.result.data.get("allow_reflection", False)
-
                         # Check if workflow has a reflect node for recovery
                         has_reflect = any(n.type == NodeType.TYPE_REFLECT for n in self.workflow.nodes.values())
 
-                        if allow_reflection and has_reflect:
+                        if has_reflect:
                             # Soft failure - continue to reflection for recovery
-                            logger.info(f"Node failed but allows reflection: {current_node.description}")
+                            logger.info(
+                                f"Node failed but workflow has reflection. Continuing as Soft Failure: {current_node.description}"
+                            )
+                            is_soft_failure = True
                         else:
                             # Hard failure - terminate workflow
                             self._update_action_status(
@@ -407,6 +410,11 @@ class WorkflowRunner:
                     logger.debug(f"Evaluation result: {evaluation}")
 
                     if evaluation.get("success"):
+                        self.workflow.advance_to_next_node()
+                    elif is_soft_failure:
+                        logger.warning(
+                            f"Node evaluation failed but continuing due to Soft Failure mode: {evaluation}"
+                        )
                         self.workflow.advance_to_next_node()
                     else:
                         logger.warning(f"Node evaluation failed: {evaluation}")

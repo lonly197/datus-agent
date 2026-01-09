@@ -257,10 +257,20 @@ class SchemaValidationNode(Node):
             return []
 
         prompt = f"""
-Extract key business terms from the following user query for database schema matching.
-Focus on potential table names, column names, and business concepts.
-Ignore common stop words and grammatical particles.
-Return a JSON object with a single key "terms" containing a list of strings.
+Analyze the user query and extract key database search terms for schema matching.
+
+Rules:
+1. Extract potential table names, column names, and business concepts.
+2. Break down compound business terms into atomic concepts (e.g., "首次试驾" -> "首次", "试驾").
+3. Ignore common stop words and grammatical particles.
+4. Return a JSON object with a single key "terms" containing a list of strings.
+
+Examples:
+Input: "统计每个月首次试驾的平均转化周期"
+Output: {{"terms": ["统计", "每个月", "首次", "试驾", "平均", "转化", "周期"]}}
+
+Input: "查询最近一周的下定订单数"
+Output: {{"terms": ["查询", "最近", "一周", "下定", "订单", "数"]}}
 
 Query: {query}
 """

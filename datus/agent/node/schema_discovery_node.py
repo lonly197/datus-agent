@@ -256,13 +256,20 @@ class SchemaDiscoveryNode(Node):
                 candidate_tables.extend(keyword_tables)
                 logger.info(f"[Stage 1] Found {len(keyword_tables)} tables via keyword matching")
 
+            # 3. LLM Inference (Stage 1.5) - Enhance recall for Chinese/Ambiguous queries
+            llm_tables = await self._llm_based_table_discovery(task.task)
+            if llm_tables:
+                candidate_tables.extend(llm_tables)
+                logger.info(f"[Stage 1.5] Found {len(llm_tables)} tables via LLM inference")
+
             # Deduplicate
             candidate_tables = list(set(candidate_tables))
 
             # --- Stage 2: Deep Metadata Scan (Context Search) ---
-            # If recall is low (e.g., 0 tables), try context search (Metrics, Reference SQL)
-            if not candidate_tables:
-                logger.info("[Stage 2] Stage 1 yielded 0 tables, initiating Context Search...")
+            # Relax condition: If recall is low (e.g. < 3 tables) or empty, try context search
+            # This ensures we don't miss tables just because Stage 1 found one irrelevant match
+            if len(candidate_tables) < 3:
+                logger.info(f"[Stage 2] Few tables found ({len(candidate_tables)}), initiating Context Search...")
                 context_tables = await self._context_based_discovery(task.task)
                 if context_tables:
                     candidate_tables.extend(context_tables)
@@ -270,10 +277,6 @@ class SchemaDiscoveryNode(Node):
 
             # Deduplicate
             candidate_tables = list(set(candidate_tables))
-
-            # --- Stage 3: Full Structure Analysis (LLM Match - Placeholder/Future) ---
-            # If still no tables, we could use LLM-based MatchSchemaTool here.
-            # For now, we proceed to Fallback if still empty.
 
             # 4. Fallback: Get All Tables (Low Priority)
             # Only if absolutely no tables found from previous stages
@@ -463,6 +466,31 @@ class SchemaDiscoveryNode(Node):
                     candidate_tables.append(table_name)
 
         return candidate_tables
+
+    async def _llm_based_table_discovery(self, query: str) -> List[str]:
+        """
+        Stage 1.5: Use LLM to infer potential English table names from Chinese query.
+        """
+        if not query:
+            return []
+
+        prompt = f"""
+Analyze the user query and list potential database table names or business entities.
+The query might be in Chinese, but the database schema uses English table names.
+Translate business concepts into English database terms (e.g., "试驾" -> "test_drive", "lead", "clue").
+Return a JSON object with a single key "tables" containing a list of strings (potential English table names).
+
+Query: {query}
+"""
+        try:
+            response = self.model.generate_with_json_output(prompt)
+            tables = response.get("tables", [])
+            cleaned_tables = list(set([str(t) for t in tables if isinstance(t, (str, int, float))]))
+            logger.info(f"LLM inferred potential tables: {cleaned_tables}")
+            return cleaned_tables
+        except Exception as e:
+            logger.warning(f"LLM table discovery failed: {e}")
+            return []
 
     async def _fallback_get_all_tables(self, task) -> List[str]:
         """
