@@ -91,18 +91,22 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
             last_action = future.result(timeout=60)  # 60 second timeout
 
         # Infer result from the last ActionHistory and node state
-        from datus.schemas.base import BaseResult
         from datus.schemas.action_history import ActionStatus
+        from datus.schemas.base import BaseResult
 
         # If node has already set self.result (like IntentAnalysisNode), use it
-        if hasattr(node, 'result') and node.result is not None:
+        if hasattr(node, "result") and node.result is not None:
             return node.result
 
         # Otherwise, infer from the last ActionHistory
         if last_action and last_action.status == ActionStatus.SUCCESS:
             return BaseResult(success=True)
         elif last_action and last_action.status == ActionStatus.FAILED:
-            error_msg = last_action.output.get('error', 'Stream execution failed') if last_action.output else 'Stream execution failed'
+            error_msg = (
+                last_action.output.get("error", "Stream execution failed")
+                if last_action.output
+                else "Stream execution failed"
+            )
             return BaseResult(success=False, error=error_msg)
         else:
             # No action or unknown status, assume success for backward compatibility
@@ -165,8 +169,10 @@ class Node(ErrorHandlerMixin, ABC):
             ParallelNode,
             ReasonSQLNode,
             ReflectNode,
+            ResultValidationNode,
             SchemaDiscoveryNode,
             SchemaLinkingNode,
+            SchemaValidationNode,
             SearchMetricsNode,
             SelectionNode,
             SubworkflowNode,
@@ -198,6 +204,10 @@ class Node(ErrorHandlerMixin, ABC):
             return IntentAnalysisNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_SCHEMA_DISCOVERY:
             return SchemaDiscoveryNode(node_id, description, node_type, input_data, agent_config)
+        elif node_type == NodeType.TYPE_SCHEMA_VALIDATION:
+            return SchemaValidationNode(node_id, description, node_type, input_data, agent_config)
+        elif node_type == NodeType.TYPE_RESULT_VALIDATION:
+            return ResultValidationNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_PARALLEL:
             return ParallelNode(node_id, description, node_type, input_data, agent_config, tools)
         elif node_type == NodeType.TYPE_SELECTION:

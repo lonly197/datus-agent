@@ -512,8 +512,7 @@ class OpenAICompatibleModel(LLMBaseModel):
                     # Use timeout from kwargs or default to client timeout (300s)
                     run_timeout = kwargs.get("timeout", 300.0)
                     result = await await_cancellable(
-                        Runner.run(agent, input=prompt, max_turns=max_turns, session=session),
-                        timeout=run_timeout
+                        Runner.run(agent, input=prompt, max_turns=max_turns, session=session), timeout=run_timeout
                     )
                 except MaxTurnsExceeded as e:
                     logger.error(f"Max turns exceeded: {str(e)}")

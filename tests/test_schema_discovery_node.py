@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from datus.agent.node.schema_discovery_node import SchemaDiscoveryNode
 from datus.schemas.base import BaseResult

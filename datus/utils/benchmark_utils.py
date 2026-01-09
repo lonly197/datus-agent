@@ -167,7 +167,8 @@ class SqlData:
 
 
 class SqlProvider(Protocol):
-    def fetch(self, task_id: str) -> SqlData: ...
+    def fetch(self, task_id: str) -> SqlData:
+        ...
 
 
 @dataclass
@@ -549,7 +550,8 @@ class EvaluationReport:
 
 
 class ResultProvider(Protocol):
-    def fetch(self, task_id: str) -> ResultData: ...
+    def fetch(self, task_id: str) -> ResultData:
+        ...
 
 
 class CsvPerTaskResultProvider(ResultProvider):

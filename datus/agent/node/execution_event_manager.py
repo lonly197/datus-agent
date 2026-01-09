@@ -571,6 +571,7 @@ Generate the SQL query:"""
 
             # Clean up the SQL (remove markdown code blocks if present)
             from datus.utils.text_utils import strip_markdown_code_block
+
             generated_sql = strip_markdown_code_block(generated_sql)
 
             logger.info(f"Generated SQL: {generated_sql}")

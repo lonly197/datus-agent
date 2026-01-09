@@ -25,9 +25,7 @@ from typing import Any, Dict, List
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datus.api.event_converter import DeepResearchEventConverter
-from datus.api.models import (
-    DeepResearchEventType,
-)
+from datus.api.models import DeepResearchEventType
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
 

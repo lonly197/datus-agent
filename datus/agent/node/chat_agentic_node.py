@@ -18,19 +18,11 @@ try:
 except ImportError:
     from typing_extensions import override
 
-from datus.agent.node.execution_event_manager import (
-    ExecutionEventManager,
-    create_execution_mode,
-)
+from datus.agent.node.execution_event_manager import ExecutionEventManager, create_execution_mode
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import (
-    ActionHistory,
-    ActionHistoryManager,
-    ActionRole,
-    ActionStatus,
-)
+from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.chat_agentic_node_models import ChatNodeInput
 from datus.schemas.node_models import SQLContext
 from datus.tools.db_tools.db_manager import db_manager_instance
@@ -189,7 +181,7 @@ class PreflightOrchestrator:
                     if table_names:
                         cache_key_params["table_name"] = table_names[0]
                 elif tool_name == "search_external_knowledge":
-                     cache_key_params["query"] = "external_knowledge" # Simplified cache key
+                    cache_key_params["query"] = "external_knowledge"  # Simplified cache key
 
                 cached_result = self.plan_hooks.query_cache.get_enhanced(tool_name, **cache_key_params)
                 if cached_result is not None:
@@ -217,12 +209,14 @@ class PreflightOrchestrator:
                                     )
 
                 # Execute the tool dynamically
-                result = await self._call_tool(
-                    tool_name, sql_query, table_names, catalog, database, schema
-                )
+                result = await self._call_tool(tool_name, sql_query, table_names, catalog, database, schema)
 
                 # Cache successful results using enhanced caching
-                if result.get("success", False) and self.plan_hooks and getattr(self.plan_hooks, "enable_query_caching", False):
+                if (
+                    result.get("success", False)
+                    and self.plan_hooks
+                    and getattr(self.plan_hooks, "enable_query_caching", False)
+                ):
                     self.plan_hooks.query_cache.set_enhanced(tool_name, result, **cache_key_params)
 
             execution_time = time.time() - start_time
@@ -293,37 +287,37 @@ class PreflightOrchestrator:
         self, tool_name: str, sql_query: str, table_names: List[str], catalog: str, database: str, schema: str
     ) -> Dict[str, Any]:
         """Call the appropriate tool dynamically."""
-        
+
         result = {"success": False, "error": f"Tool {tool_name} not found or not initialized"}
-        
+
         # Priority 1: DB Function Tools
         if self.db_func_tool and hasattr(self.db_func_tool, tool_name):
             tool_method = getattr(self.db_func_tool, tool_name)
-            
+
             # Dispatch based on known tool signatures
             if tool_name in ["analyze_query_plan"]:
                 result = tool_method(sql_query, catalog, database, schema)
-            
+
             elif tool_name in ["read_query"]:
                 result = tool_method(sql_query)
-                
+
             elif tool_name in ["check_table_conflicts", "validate_partitioning", "describe_table", "get_table_ddl"]:
                 if not table_names:
                     result = {"success": False, "error": "No table names found in SQL query"}
                 else:
                     result = tool_method(table_names[0], catalog, database, schema)
-            
+
             else:
                 # Fallback for other db tools
                 if not table_names:
-                     result = {"success": False, "error": f"Tool {tool_name} requires table name but none found"}
+                    result = {"success": False, "error": f"Tool {tool_name} requires table name but none found"}
                 else:
                     result = tool_method(table_names[0], catalog, database, schema)
 
         # Priority 2: Context Search Tools
         elif self.context_search_tools and hasattr(self.context_search_tools, tool_name):
             tool_method = getattr(self.context_search_tools, tool_name)
-            
+
             if tool_name == "search_external_knowledge":
                 result = tool_method(query_text="SQL review rules and best practices")
             else:
@@ -331,9 +325,10 @@ class PreflightOrchestrator:
 
         # Handle FuncToolResult conversion
         from datus.tools.func_tool.base import FuncToolResult
+
         if isinstance(result, FuncToolResult):
             return result.model_dump()
-            
+
         return result
 
     def _inject_tool_result_into_context(self, workflow, tool_name: str, result: Dict[str, Any]) -> None:
@@ -379,16 +374,16 @@ class PreflightOrchestrator:
                 workflow.context.preflight_results["partitioning_validation"] = partitioning_data
 
             elif tool_name == "describe_table" and result.get("success"):
-                 # Add table schema information
-                if "columns" in result.get("result", {}): # result.result based on DBFuncTool.describe_table structure
-                     # Note: DBFuncTool.describe_table returns FuncToolResult(result={"table_info":..., "columns":...})
-                     # The result dict passed here is the raw dictionary from FuncToolResult.result usually?
-                     # Wait, _call_tool returns what the tool method returns.
-                     # DBFuncTool methods return FuncToolResult.
-                     # But _call_tool calls them directly.
-                     # DBFuncTool methods return FuncToolResult object.
-                     # We need to handle that.
-                     pass 
+                # Add table schema information
+                if "columns" in result.get("result", {}):  # result.result based on DBFuncTool.describe_table structure
+                    # Note: DBFuncTool.describe_table returns FuncToolResult(result={"table_info":..., "columns":...})
+                    # The result dict passed here is the raw dictionary from FuncToolResult.result usually?
+                    # Wait, _call_tool returns what the tool method returns.
+                    # DBFuncTool methods return FuncToolResult.
+                    # But _call_tool calls them directly.
+                    # DBFuncTool methods return FuncToolResult object.
+                    # We need to handle that.
+                    pass
 
             # Handling of legacy tools injection logic (migrated from _execute_..._tool methods)
             if tool_name == "describe_table":
@@ -559,6 +554,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
     - Session-based conversation management
     - Multi-mode support: text2sql, data_analysis, sql_review, deep_analysis
     """
+
     """
     Multi-purpose conversational AI node with comprehensive tool support.
 
@@ -911,36 +907,27 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Public API for running preflight tools (used by SQLReviewExecutionMode).
         """
         from types import SimpleNamespace
-        
+
         # Create a mock workflow object structure expected by PreflightOrchestrator
         task = SimpleNamespace(
             task=sql_query,
             catalog_name=self.agent_config.current_catalog,
             database_name=self.agent_config.current_database,
-            schema_name=self.agent_config.current_schema
+            schema_name=self.agent_config.current_schema,
         )
-        
+
         # Default tools for SQL review if called directly
-        required_tools = [
-            "analyze_query_plan", 
-            "check_table_conflicts", 
-            "validate_partitioning",
-            "describe_table"
-        ]
-        
+        required_tools = ["analyze_query_plan", "check_table_conflicts", "validate_partitioning", "describe_table"]
+
         workflow = SimpleNamespace(
-            task=task,
-            metadata={"required_tool_sequence": required_tools},
-            context=SimpleNamespace()
+            task=task, metadata={"required_tool_sequence": required_tools}, context=SimpleNamespace()
         )
-        
+
         # Use action_history_manager from event_manager if available
         action_history_manager = event_manager.action_history_manager if event_manager else None
-        
+
         orchestrator = PreflightOrchestrator(self)
-        async for action in orchestrator.execute_preflight_tools(
-            workflow, action_history_manager, execution_id
-        ):
+        async for action in orchestrator.execute_preflight_tools(workflow, action_history_manager, execution_id):
             pass  # Consume generator to ensure execution
 
     async def _run_original_preflight_tools(
@@ -950,9 +937,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Execute preflight tools using the unified orchestrator.
         """
         orchestrator = PreflightOrchestrator(self)
-        async for action in orchestrator.execute_preflight_tools(
-            workflow, action_history_manager, execution_id
-        ):
+        async for action in orchestrator.execute_preflight_tools(workflow, action_history_manager, execution_id):
             yield action
 
     def _extract_sql_from_task(self, task_text: str) -> str:
@@ -1539,7 +1524,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     "response_content": response_content,
                     "sql_content": sql_content,
                     "tokens_used": tokens_used,
-                }
+                },
             )
 
         except Exception as e:
@@ -1548,11 +1533,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             # Create error result
             from datus.agent.error_handling import NodeErrorResult
 
-            self.result = NodeErrorResult(
-                success=False,
-                error_message=str(e),
-                error_code="chat_execution_error"
-            )
+            self.result = NodeErrorResult(success=False, error_message=str(e), error_code="chat_execution_error")
 
             # Yield error action
             error_action = ActionHistory.create_action(
@@ -1589,7 +1570,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
         str: Execution scenario ("text2sql", "sql_review", "data_analysis", "smart_query", "deep_analysis")
         """
         try:
-            message = user_input.user_message.lower() if hasattr(user_input, "user_message") else str(user_input).lower()
+            message = (
+                user_input.user_message.lower() if hasattr(user_input, "user_message") else str(user_input).lower()
+            )
             logger.debug(f"Determining execution scenario for message: {message[:100]}...")
 
             # Check for SQL review keywords with SQL content validation
@@ -1606,7 +1589,20 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 logger.debug("Found SQL review keywords but no SQL content, continuing with detection")
 
             # Check for data analysis keywords
-            analysis_keywords = ["分析", "analysis", "统计", "statistics", "趋势", "trend", "对比", "compare", "汇总", "summary", "报告", "report"]
+            analysis_keywords = [
+                "分析",
+                "analysis",
+                "统计",
+                "statistics",
+                "趋势",
+                "trend",
+                "对比",
+                "compare",
+                "汇总",
+                "summary",
+                "报告",
+                "report",
+            ]
             if any(keyword in message for keyword in analysis_keywords):
                 logger.info("Detected scenario: data_analysis (analysis keywords)")
                 return "data_analysis"
@@ -1655,6 +1651,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
         # Add schemas if available
         if hasattr(user_input, "schemas") and user_input.schemas:
             from datus.schemas.node_models import TableSchema
+
             table_names_str = TableSchema.table_names_to_prompt(user_input.schemas)
             enhanced_parts.append(
                 f"Available tables (MUST use these tables and ONLY use these table names in FROM/JOIN clauses):"
@@ -1664,12 +1661,16 @@ class ChatAgenticNode(GenSQLAgenticNode):
         # Add metrics if available
         if hasattr(user_input, "metrics") and user_input.metrics:
             from datus.utils.json_utils import to_str
+
             enhanced_parts.append(f"Metrics: \n{to_str([item.model_dump() for item in user_input.metrics])}")
 
         # Add reference SQL if available
         if hasattr(user_input, "reference_sql") and user_input.reference_sql:
             from datus.utils.json_utils import to_str
-            enhanced_parts.append(f"Reference SQL: \n{to_str([item.model_dump() for item in user_input.reference_sql])}")
+
+            enhanced_parts.append(
+                f"Reference SQL: \n{to_str([item.model_dump() for item in user_input.reference_sql])}"
+            )
 
         if enhanced_parts:
             separator = "\n\n"
@@ -1695,4 +1696,3 @@ class ChatAgenticNode(GenSQLAgenticNode):
             return select_match.group(1).strip()
 
         return None
-

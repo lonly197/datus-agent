@@ -73,25 +73,22 @@ class GenerateSQLNode(Node):
         return {"success": True, "message": "Schema appears valid", "suggestions": [next_input]}
 
     def update_context(self, workflow: Workflow) -> Dict:
-        """Update SQL generation results to workflow context."""
+        """Update SQL generation results to workflow context.
+
+        Note: Schemas should already be loaded by schema_discovery and validated
+        by schema_validation. This node only adds the generated SQL to the context.
+        """
         result = self.result
         try:
             # Create new SQL context record and add to context
             new_record = SQLContext(sql_query=result.sql_query, explanation=result.explanation or "")
             workflow.context.sql_contexts.append(new_record)
 
-            # Get and update schema information
-            table_schemas, table_values = self._get_schema_and_values(workflow.task, result.tables)
-            if len(table_schemas) == len(result.tables) and len(table_values) == len(result.tables):
-                workflow.context.table_schemas = table_schemas
-                workflow.context.table_values = table_values
-                return {"success": True, "message": "Updated SQL generation context"}
-            else:
-                error_msg = (
-                    f"Failed to get schemas and values for tables {result.tables} " f"{workflow.task.database_name}"
-                )
-                logger.warning(f"{error_msg}, table_schemas: {table_schemas}, table_values: {table_values}")
-                return {"success": True, "message": error_msg}
+            # Log table usage for debugging
+            if result.tables:
+                logger.debug(f"SQL generation used tables: {result.tables}")
+
+            return {"success": True, "message": "Updated SQL generation context"}
         except Exception as e:
             logger.error(f"Failed to update SQL generation context: {str(e)}")
             return {"success": False, "message": f"SQL generation context update failed: {str(e)}"}

@@ -953,7 +953,9 @@ class ClaudeModel(LLMBaseModel):
         messages = (
             f"Tool call: {function_name}('{args_display}...')"
             if function_name and args_display
-            else f"Tool call: {function_name}" if function_name else "Tool call"
+            else f"Tool call: {function_name}"
+            if function_name
+            else "Tool call"
         )
 
         action = ActionHistory(

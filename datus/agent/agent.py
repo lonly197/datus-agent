@@ -15,7 +15,6 @@ from pydantic import ValidationError
 from datus.agent.workflow_runner import WorkflowRunner
 from datus.configuration.agent_config import AgentConfig, BenchmarkConfig
 from datus.models.base import LLMBaseModel
-from datus.utils.async_utils import ensure_not_cancelled
 
 # Import model implementations
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
@@ -32,6 +31,7 @@ from datus.storage.schema_metadata.local_init import init_local_schema
 from datus.storage.sub_agent_kb_bootstrap import SUPPORTED_COMPONENTS as SUB_AGENT_COMPONENTS
 from datus.storage.sub_agent_kb_bootstrap import SubAgentBootstrapper
 from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
+from datus.utils.async_utils import ensure_not_cancelled
 from datus.utils.benchmark_utils import load_benchmark_tasks
 from datus.utils.constants import SYS_SUB_AGENTS
 from datus.utils.exceptions import DatusException, ErrorCode

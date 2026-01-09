@@ -1924,7 +1924,7 @@ class PlanModeHooks(AgentHooks):
             except asyncio.CancelledError:
                 pass
             self._executor_task = None
-        
+
         # Ensure completion event is set to unblock any waiters
         self._execution_complete.set()
 
@@ -2405,9 +2405,7 @@ Respond with only the tool name, nothing else."""
             return "parse_temporal_expressions"
 
         # File-related inference (more specific patterns)
-        if ("write" in t or "save" in t or "create" in t or "写入" in t or "保存" in t) and (
-            "file" in t or "文件" in t
-        ):
+        if ("write" in t or "save" in t or "create" in t or "写入" in t or "保存" in t) and ("file" in t or "文件" in t):
             return "write_file"
         elif ("read" in t or "load" in t or "读取" in t) and ("file" in t or "文件" in t):
             return "read_file"
@@ -2503,7 +2501,7 @@ Respond with only the tool name, nothing else."""
         await asyncio.sleep(0.3)
 
         # Surface auto-injected knowledge for user confirmation if not in auto mode
-        if hasattr(self, 'auto_injected_knowledge') and self.auto_injected_knowledge and not self.auto_mode:
+        if hasattr(self, "auto_injected_knowledge") and self.auto_injected_knowledge and not self.auto_mode:
             self.console.print("[bold yellow]Auto-detected Knowledge:[/]")
             self.console.print("[dim]The following knowledge was automatically detected and will be used:[/]")
             for i, knowledge in enumerate(self.auto_injected_knowledge, 1):
@@ -2997,10 +2995,7 @@ Respond with only the tool name, nothing else."""
                     logger.info(f"Auto-reduced top_n from {current_top_n} to {fixed_kwargs['top_n']}")
                     return fixed_kwargs
 
-            elif (
-                tool_name == "search_table"
-                and error_info.get("auto_fix_suggestion") == "简化搜索查询，使用基本关键词重试"
-            ):
+            elif tool_name == "search_table" and error_info.get("auto_fix_suggestion") == "简化搜索查询，使用基本关键词重试":
                 query_text = fixed_kwargs.get("query_text", "")
                 if len(query_text.split()) > 3:
                     # Simplify by taking first few words
@@ -3378,9 +3373,7 @@ Respond with only the tool name, nothing else."""
             self.monitor.start_execution(execution_id, plan_id="server_batch", metadata={"executor": "server"})
 
             # Send friendly status message about starting execution
-            await self._emit_status_message(
-                "🚀 **开始执行计划任务**\n\n正在分析待执行的任务并准备工具环境...", plan_id="server_batch"
-            )
+            await self._emit_status_message("🚀 **开始执行计划任务**\n\n正在分析待执行的任务并准备工具环境...", plan_id="server_batch")
 
             # Small delay to allow any in-flight LLM-driven tool calls to finish
             await asyncio.sleep(0.5)
@@ -3608,7 +3601,9 @@ Respond with only the tool name, nothing else."""
                                 result_payload = (
                                     res.model_dump()
                                     if hasattr(res, "model_dump")
-                                    else dict(res) if isinstance(res, dict) else {"result": res}
+                                    else dict(res)
+                                    if isinstance(res, dict)
+                                    else {"result": res}
                                 )
                                 status = ActionStatus.SUCCESS
                                 messages = f"Server executor: db.search_table for todo {item.id}"
@@ -3742,7 +3737,9 @@ Respond with only the tool name, nothing else."""
                                     result_payload = (
                                         res.model_dump()
                                         if hasattr(res, "model_dump")
-                                        else dict(res) if isinstance(res, dict) else {"result": res}
+                                        else dict(res)
+                                        if isinstance(res, dict)
+                                        else {"result": res}
                                     )
 
                                     # Send success status message for SQL execution
@@ -3810,9 +3807,7 @@ Respond with only the tool name, nothing else."""
                                     if error_type == ErrorType.SYNTAX_ERROR:
                                         friendly_msg = "❌ **SQL语法错误**\n\n查询语句存在语法问题，已自动尝试修复。如有疑问，请检查SQL语句结构。"
                                     elif error_type == ErrorType.TABLE_NOT_FOUND:
-                                        friendly_msg = (
-                                            "❌ **表不存在**\n\n查询的表在数据库中不存在。请检查表名是否正确。"
-                                        )
+                                        friendly_msg = "❌ **表不存在**\n\n查询的表在数据库中不存在。请检查表名是否正确。"
                                     elif error_type == ErrorType.PERMISSION_DENIED:
                                         friendly_msg = "❌ **权限不足**\n\n没有执行此查询的权限。请联系数据库管理员。"
                                     elif error_type == ErrorType.TIMEOUT:
@@ -3886,7 +3881,9 @@ Respond with only the tool name, nothing else."""
                             result_payload = (
                                 res.model_dump()
                                 if hasattr(res, "model_dump")
-                                else dict(res) if isinstance(res, dict) else {"result": res}
+                                else dict(res)
+                                if isinstance(res, dict)
+                                else {"result": res}
                             )
 
                             # Create tool call action for report generation
@@ -3950,7 +3947,9 @@ Respond with only the tool name, nothing else."""
                                     result_payload = (
                                         res.model_dump()
                                         if hasattr(res, "model_dump")
-                                        else dict(res) if isinstance(res, dict) else {"result": res}
+                                        else dict(res)
+                                        if isinstance(res, dict)
+                                        else {"result": res}
                                     )
                                     status = ActionStatus.SUCCESS
                                     messages = f"Server executor: db.describe_table for todo {item.id}"
@@ -4011,7 +4010,9 @@ Respond with only the tool name, nothing else."""
                                 result_payload = (
                                     res.model_dump()
                                     if hasattr(res, "model_dump")
-                                    else dict(res) if isinstance(res, dict) else {"result": res}
+                                    else dict(res)
+                                    if isinstance(res, dict)
+                                    else {"result": res}
                                 )
                                 complete_action_db = ActionHistory(
                                     action_id=f"{call_id}_search_fallback",
@@ -4065,7 +4066,9 @@ Respond with only the tool name, nothing else."""
                                 result_payload = (
                                     res.model_dump()
                                     if hasattr(res, "model_dump")
-                                    else dict(res) if isinstance(res, dict) else {"result": res}
+                                    else dict(res)
+                                    if isinstance(res, dict)
+                                    else {"result": res}
                                 )
                                 complete_action_db = ActionHistory(
                                     action_id=f"{call_id}_read",
@@ -4095,7 +4098,9 @@ Respond with only the tool name, nothing else."""
                             result_payload = (
                                 res.model_dump()
                                 if hasattr(res, "model_dump")
-                                else dict(res) if isinstance(res, dict) else {"result": res}
+                                else dict(res)
+                                if isinstance(res, dict)
+                                else {"result": res}
                             )
                             complete_action_db = ActionHistory(
                                 action_id=f"{call_id}_metrics",
@@ -4125,7 +4130,9 @@ Respond with only the tool name, nothing else."""
                             result_payload = (
                                 res.model_dump()
                                 if hasattr(res, "model_dump")
-                                else dict(res) if isinstance(res, dict) else {"result": res}
+                                else dict(res)
+                                if isinstance(res, dict)
+                                else {"result": res}
                             )
                             complete_action_db = ActionHistory(
                                 action_id=f"{call_id}_refsql",
@@ -4299,7 +4306,9 @@ Respond with only the tool name, nothing else."""
                             result_payload = (
                                 res.model_dump()
                                 if hasattr(res, "model_dump")
-                                else dict(res) if isinstance(res, dict) else {"result": res}
+                                else dict(res)
+                                if isinstance(res, dict)
+                                else {"result": res}
                             )
                             complete_action_fs = ActionHistory(
                                 action_id=f"{call_id}_write",
@@ -4616,7 +4625,9 @@ Respond with only the tool name, nothing else."""
                                 result_payload = (
                                     res.model_dump()
                                     if hasattr(res, "model_dump")
-                                    else dict(res) if isinstance(res, dict) else {"result": res}
+                                    else dict(res)
+                                    if isinstance(res, dict)
+                                    else {"result": res}
                                 )
                                 fallback_action = ActionHistory(
                                     action_id=f"{call_id}_fallback_{tool_name}",
@@ -4650,7 +4661,9 @@ Respond with only the tool name, nothing else."""
                                     result_payload = (
                                         res.model_dump()
                                         if hasattr(res, "model_dump")
-                                        else dict(res) if isinstance(res, dict) else {"result": res}
+                                        else dict(res)
+                                        if isinstance(res, dict)
+                                        else {"result": res}
                                     )
                                     fallback_action = ActionHistory(
                                         action_id=f"{call_id}_fallback_{tool_name}",
@@ -4676,7 +4689,9 @@ Respond with only the tool name, nothing else."""
                                     result_payload = (
                                         res.model_dump()
                                         if hasattr(res, "model_dump")
-                                        else dict(res) if isinstance(res, dict) else {"result": res}
+                                        else dict(res)
+                                        if isinstance(res, dict)
+                                        else {"result": res}
                                     )
                                     fallback_action = ActionHistory(
                                         action_id=f"{call_id}_fallback_search",

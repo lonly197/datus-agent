@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from datus.agent.node.intent_analysis_node import IntentAnalysisNode
 from datus.schemas.base import BaseResult

@@ -18,9 +18,7 @@ class TestIntentDetection:
         detector = IntentDetector()
 
         # Chinese SQL generation query
-        result = detector.detect_sql_intent_by_keyword(
-            "从 ODS 试驾表和线索表关联，统计每个月'首次试驾'到'下定'的平均转化周期"
-        )
+        result = detector.detect_sql_intent_by_keyword("从 ODS 试驾表和线索表关联，统计每个月'首次试驾'到'下定'的平均转化周期")
         assert result[0] is True  # Should detect SQL intent
         assert "试驾" in result[1]["keyword_matches"]
         assert "线索" in result[1]["keyword_matches"]

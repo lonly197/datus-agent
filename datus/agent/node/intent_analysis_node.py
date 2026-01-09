@@ -126,7 +126,7 @@ class IntentAnalysisNode(Node):
                     ErrorCode.NODE_EXECUTION_FAILED,
                     "No task text provided for intent analysis",
                     "intent_analysis",
-                    {"task_id": getattr(self.workflow, 'id', 'unknown') if self.workflow else 'unknown'}
+                    {"task_id": getattr(self.workflow, "id", "unknown") if self.workflow else "unknown"},
                 )
                 yield ActionHistory(
                     action_id=f"{self.id}_error",
@@ -146,7 +146,7 @@ class IntentAnalysisNode(Node):
             if self.workflow:
                 try:
                     # Ensure metadata dict exists
-                    if not hasattr(self.workflow, 'metadata') or self.workflow.metadata is None:
+                    if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
                         self.workflow.metadata = {}
 
                     # Set intent analysis results
@@ -154,7 +154,9 @@ class IntentAnalysisNode(Node):
                     self.workflow.metadata["intent_confidence"] = intent_result.confidence
                     self.workflow.metadata["intent_metadata"] = intent_result.metadata
 
-                    logger.debug(f"Workflow metadata updated: intent={intent_result.intent}, confidence={intent_result.confidence}")
+                    logger.debug(
+                        f"Workflow metadata updated: intent={intent_result.intent}, confidence={intent_result.confidence}"
+                    )
 
                 except Exception as e:
                     logger.warning(f"Failed to update workflow metadata: {e}")
@@ -169,8 +171,8 @@ class IntentAnalysisNode(Node):
                 data={
                     "intent": intent_result.intent,
                     "confidence": intent_result.confidence,
-                    "metadata": intent_result.metadata
-                }
+                    "metadata": intent_result.metadata,
+                },
             )
 
             # Emit success action with results
@@ -196,7 +198,7 @@ class IntentAnalysisNode(Node):
                 ErrorCode.NODE_EXECUTION_FAILED,
                 f"Intent analysis execution failed: {str(e)}",
                 "intent_analysis",
-                {"task_id": getattr(self.workflow, 'id', 'unknown') if self.workflow else 'unknown'}
+                {"task_id": getattr(self.workflow, "id", "unknown") if self.workflow else "unknown"},
             )
 
             # ✅ Set self.result for failed execution
@@ -279,4 +281,3 @@ class IntentAnalysisNode(Node):
                 logger.warning(f"LLM fallback for intent detection failed: {e}")
 
         return intent_result
-

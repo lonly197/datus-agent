@@ -6,25 +6,21 @@ including error scenarios and recovery mechanisms.
 """
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from datus.agent.workflow import Workflow
-from datus.schemas.base import SqlTask
 from datus.agent.workflow_runner import WorkflowRunner
 from datus.configuration.agent_config import AgentConfig
+from datus.schemas.base import SqlTask
 
 
 @pytest.fixture
 def mock_agent_config():
     """Create mock agent config with text2sql settings."""
     config = MagicMock(spec=AgentConfig)
-    config.scenarios = {
-        'text2sql': {
-            'continue_on_failure': True,
-            'tool_timeout_seconds': 30.0
-        }
-    }
+    config.scenarios = {"text2sql": {"continue_on_failure": True, "tool_timeout_seconds": 30.0}}
     config.db_type = "starrocks"
     return config
 
@@ -39,7 +35,7 @@ def sample_sql_task():
         catalog_name="default_catalog",
         database_name="test_db",
         schema_name="",
-        external_knowledge="使用StarRocks 3.3 SQL审查规则"
+        external_knowledge="使用StarRocks 3.3 SQL审查规则",
     )
 
 
@@ -63,7 +59,7 @@ class TestText2SQLWorkflowIntegration:
         # the entire workflow execution chain
 
         # Mock the workflow execution
-        with patch('datus.agent.workflow_runner.WorkflowRunner') as mock_runner_class:
+        with patch("datus.agent.workflow_runner.WorkflowRunner") as mock_runner_class:
             mock_runner = MagicMock()
             mock_runner_class.return_value = mock_runner
 
@@ -72,6 +68,7 @@ class TestText2SQLWorkflowIntegration:
 
             # Create agent and execute
             from datus.agent.agent import Agent
+
             agent = Agent(global_config=mock_agent_config)
 
             # Execute workflow
@@ -86,9 +83,9 @@ class TestText2SQLWorkflowIntegration:
     @pytest.mark.asyncio
     async def test_text2sql_workflow_with_preflight_tools(self, mock_agent_config, sample_sql_task):
         """Test text2sql workflow with preflight tool execution."""
-        with patch('datus.agent.workflow_runner.WorkflowRunner') as mock_runner_class, \
-             patch('datus.agent.node.preflight_orchestrator.PreflightOrchestrator') as mock_preflight_class:
-
+        with patch("datus.agent.workflow_runner.WorkflowRunner") as mock_runner_class, patch(
+            "datus.agent.node.preflight_orchestrator.PreflightOrchestrator"
+        ) as mock_preflight_class:
             # Mock preflight orchestrator
             mock_preflight = MagicMock()
             mock_preflight_class.return_value = mock_preflight
@@ -100,6 +97,7 @@ class TestText2SQLWorkflowIntegration:
             mock_runner.run_stream.return_value = self._mock_successful_workflow_stream()
 
             from datus.agent.agent import Agent
+
             agent = Agent(global_config=mock_agent_config)
 
             events = []
@@ -115,7 +113,7 @@ class TestText2SQLWorkflowIntegration:
     @pytest.mark.asyncio
     async def test_text2sql_workflow_error_recovery(self, mock_agent_config, sample_sql_task):
         """Test error recovery in text2sql workflow."""
-        with patch('datus.agent.workflow_runner.WorkflowRunner') as mock_runner_class:
+        with patch("datus.agent.workflow_runner.WorkflowRunner") as mock_runner_class:
             mock_runner = MagicMock()
             mock_runner_class.return_value = mock_runner
 
@@ -123,6 +121,7 @@ class TestText2SQLWorkflowIntegration:
             mock_runner.run_stream.return_value = self._mock_workflow_with_errors()
 
             from datus.agent.agent import Agent
+
             agent = Agent(global_config=mock_agent_config)
 
             events = []
@@ -130,8 +129,8 @@ class TestText2SQLWorkflowIntegration:
                 events.append(event)
 
             # Verify error handling occurred
-            error_events = [e for e in events if hasattr(e, 'status') and e.status == "failed"]
-            success_events = [e for e in events if hasattr(e, 'status') and e.status == "completed"]
+            error_events = [e for e in events if hasattr(e, "status") and e.status == "failed"]
+            success_events = [e for e in events if hasattr(e, "status") and e.status == "completed"]
 
             # Should have both errors and eventual success
             assert len(error_events) > 0
@@ -140,7 +139,7 @@ class TestText2SQLWorkflowIntegration:
     @pytest.mark.asyncio
     async def test_text2sql_workflow_node_dependencies(self, mock_agent_config, sample_sql_task):
         """Test that nodes properly depend on each other."""
-        with patch('datus.agent.workflow_runner.WorkflowRunner') as mock_runner_class:
+        with patch("datus.agent.workflow_runner.WorkflowRunner") as mock_runner_class:
             mock_runner = MagicMock()
             mock_runner_class.return_value = mock_runner
 
@@ -148,6 +147,7 @@ class TestText2SQLWorkflowIntegration:
             mock_runner.run_stream.return_value = self._mock_workflow_with_dependencies()
 
             from datus.agent.agent import Agent
+
             agent = Agent(global_config=mock_agent_config)
 
             events = []
@@ -166,15 +166,7 @@ class TestText2SQLWorkflowIntegration:
         from datus.agent.plan import create_workflow_plan
 
         # Test valid text2sql workflow configuration
-        workflow_config = {
-            "text2sql": [
-                "intent_analysis",
-                "schema_discovery",
-                "generate_sql",
-                "execute_sql",
-                "output"
-            ]
-        }
+        workflow_config = {"text2sql": ["intent_analysis", "schema_discovery", "generate_sql", "execute_sql", "output"]}
 
         # Should not raise exception
         try:
@@ -189,13 +181,7 @@ class TestText2SQLWorkflowIntegration:
         from datus.agent.plan import create_workflow_plan
 
         # Test invalid node type
-        workflow_config = {
-            "text2sql": [
-                "intent_analysis",
-                "invalid_node_type",
-                "generate_sql"
-            ]
-        }
+        workflow_config = {"text2sql": ["intent_analysis", "invalid_node_type", "generate_sql"]}
 
         # Should raise ValueError for invalid node type
         with pytest.raises(ValueError, match="Invalid node type"):
@@ -212,7 +198,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.SYSTEM,
                 messages="Workflow initialized",
                 action_type="workflow_init",
-                status=ActionStatus.SUCCESS
+                status=ActionStatus.SUCCESS,
             )
 
             # Intent analysis
@@ -221,7 +207,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.TOOL,
                 messages="Intent analysis completed: sql",
                 action_type="intent_analysis",
-                status=ActionStatus.SUCCESS
+                status=ActionStatus.SUCCESS,
             )
 
             # Schema discovery
@@ -230,7 +216,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.TOOL,
                 messages="Schema discovery completed",
                 action_type="schema_discovery",
-                status=ActionStatus.SUCCESS
+                status=ActionStatus.SUCCESS,
             )
 
             # SQL generation
@@ -239,7 +225,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.TOOL,
                 messages="SQL generation completed",
                 action_type="sql_generation",
-                status=ActionStatus.SUCCESS
+                status=ActionStatus.SUCCESS,
             )
 
             # SQL execution
@@ -248,7 +234,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.TOOL,
                 messages="SQL execution completed",
                 action_type="sql_execution",
-                status=ActionStatus.SUCCESS
+                status=ActionStatus.SUCCESS,
             )
 
             # Output
@@ -257,7 +243,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.TOOL,
                 messages="Results returned to user",
                 action_type="output",
-                status=ActionStatus.SUCCESS
+                status=ActionStatus.SUCCESS,
             )
 
         return mock_stream()
@@ -277,7 +263,7 @@ class TestText2SQLWorkflowIntegration:
                     role=ActionRole.TOOL,
                     messages=f"Executing preflight tool: {tool}",
                     action_type=f"preflight_{tool}",
-                    status=ActionStatus.PROCESSING
+                    status=ActionStatus.PROCESSING,
                 )
 
                 # Tool completion
@@ -286,7 +272,7 @@ class TestText2SQLWorkflowIntegration:
                     role=ActionRole.TOOL,
                     messages=f"Preflight tool {tool} completed",
                     action_type=f"preflight_{tool}_result",
-                    status=ActionStatus.SUCCESS
+                    status=ActionStatus.SUCCESS,
                 )
 
         return mock_stream()
@@ -302,7 +288,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.TOOL,
                 messages="Intent analysis failed: temporary error",
                 action_type="intent_analysis",
-                status=ActionStatus.FAILED
+                status=ActionStatus.FAILED,
             )
 
             # Recovery and successful completion
@@ -311,7 +297,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.TOOL,
                 messages="Intent analysis completed: sql (retry)",
                 action_type="intent_analysis",
-                status=ActionStatus.SUCCESS
+                status=ActionStatus.SUCCESS,
             )
 
             # Rest of workflow completes successfully
@@ -320,7 +306,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.TOOL,
                 messages="Schema discovery completed",
                 action_type="schema_discovery",
-                status=ActionStatus.SUCCESS
+                status=ActionStatus.SUCCESS,
             )
 
             yield ActionHistory(
@@ -328,7 +314,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.SYSTEM,
                 messages="Workflow completed despite initial errors",
                 action_type="workflow_complete",
-                status=ActionStatus.SUCCESS
+                status=ActionStatus.SUCCESS,
             )
 
         return mock_stream()
@@ -345,7 +331,7 @@ class TestText2SQLWorkflowIntegration:
                 messages="Intent analysis completed: sql",
                 action_type="intent_analysis",
                 status=ActionStatus.SUCCESS,
-                output={"detected_intent": "sql", "intent_confidence": 0.8}
+                output={"detected_intent": "sql", "intent_confidence": 0.8},
             )
 
             # Schema discovery depends on intent analysis
@@ -355,7 +341,7 @@ class TestText2SQLWorkflowIntegration:
                 messages="Schema discovery using intent: sql",
                 action_type="schema_discovery",
                 status=ActionStatus.SUCCESS,
-                input={"intent": "sql"}
+                input={"intent": "sql"},
             )
 
             # SQL generation depends on schema
@@ -364,7 +350,7 @@ class TestText2SQLWorkflowIntegration:
                 role=ActionRole.TOOL,
                 messages="SQL generation with schema context",
                 action_type="sql_generation",
-                status=ActionStatus.SUCCESS
+                status=ActionStatus.SUCCESS,
             )
 
         return mock_stream()

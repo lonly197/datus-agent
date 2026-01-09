@@ -197,6 +197,7 @@ logger = get_logger(__name__)
 DEFAULT_REFLECTION_NODES = {
     StrategyType.SCHEMA_LINKING.lower(): [
         NodeType.TYPE_SCHEMA_LINKING,
+        NodeType.TYPE_SCHEMA_VALIDATION,  # Validate newly discovered schemas
         NodeType.TYPE_GENERATE_SQL,
         NodeType.TYPE_EXECUTE_SQL,
         NodeType.TYPE_REFLECT,
@@ -734,7 +735,7 @@ class AgentConfig:
         errors = []
 
         # Validate scenarios configuration
-        if hasattr(self, 'scenarios') and self.scenarios:
+        if hasattr(self, "scenarios") and self.scenarios:
             errors.extend(self._validate_scenarios_config())
 
         # Validate node configurations
@@ -759,7 +760,12 @@ class AgentConfig:
                 if not scenario_config.preflight_tools:
                     errors.append("text2sql scenario: preflight_tools cannot be empty")
 
-                required_tools = ["search_table", "describe_table", "search_reference_sql", "parse_temporal_expressions"]
+                required_tools = [
+                    "search_table",
+                    "describe_table",
+                    "search_reference_sql",
+                    "parse_temporal_expressions",
+                ]
                 for tool in required_tools:
                     if tool not in scenario_config.preflight_tools:
                         errors.append(f"text2sql scenario: missing required preflight tool '{tool}'")
@@ -777,7 +783,7 @@ class AgentConfig:
         errors = []
 
         for node_name, node_config in self.nodes.items():
-            if not hasattr(node_config, 'type'):
+            if not hasattr(node_config, "type"):
                 errors.append(f"Node '{node_name}': missing type field")
                 continue
 

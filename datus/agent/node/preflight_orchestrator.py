@@ -126,15 +126,15 @@ class PreflightOrchestrator:
 
         # Get continue_on_failure setting from agent config (default: true for text2sql)
         continue_on_failure = True  # Default to continue on failure
-        if self.agent_config and hasattr(self.agent_config, 'scenarios'):
-            text2sql_config = self.agent_config.scenarios.get('text2sql', {})
-            continue_on_failure = text2sql_config.get('continue_on_failure', True)
+        if self.agent_config and hasattr(self.agent_config, "scenarios"):
+            text2sql_config = self.agent_config.scenarios.get("text2sql", {})
+            continue_on_failure = text2sql_config.get("continue_on_failure", True)
 
         # Get tool timeout from agent config (default: 30 seconds)
         tool_timeout = 30.0
-        if self.agent_config and hasattr(self.agent_config, 'scenarios'):
-            text2sql_config = self.agent_config.scenarios.get('text2sql', {})
-            tool_timeout = text2sql_config.get('tool_timeout_seconds', 30.0)
+        if self.agent_config and hasattr(self.agent_config, "scenarios"):
+            text2sql_config = self.agent_config.scenarios.get("text2sql", {})
+            tool_timeout = text2sql_config.get("tool_timeout_seconds", 30.0)
 
         # Ensure plan_hooks are available for caching support
         if not self.plan_hooks:
@@ -142,6 +142,7 @@ class PreflightOrchestrator:
             # Create minimal plan_hooks for caching support
             try:
                 from datus.cli.plan_hooks import PlanModeHooks
+
                 # Create a basic plan_hooks instance (may not have full functionality)
                 self.plan_hooks = PlanModeHooks.__new__(PlanModeHooks)
                 self.plan_hooks.enable_query_caching = False  # Disable caching without full setup
@@ -202,17 +203,23 @@ class PreflightOrchestrator:
                 cache_key_params = self._generate_cache_key(tool_name, workflow, catalog, database, schema, table_names)
                 cache_check_start = time.time()
 
-                if self.plan_hooks and getattr(self.plan_hooks, 'enable_query_caching', False):
+                if self.plan_hooks and getattr(self.plan_hooks, "enable_query_caching", False):
                     try:
                         cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
                         if cached_result is not None:
-                            logger.debug(f"Cache hit for {tool_name} (cache check took {time.time() - cache_check_start:.3f}s)")
+                            logger.debug(
+                                f"Cache hit for {tool_name} (cache check took {time.time() - cache_check_start:.3f}s)"
+                            )
                             cache_hit = True
                             result = cached_result
                         else:
-                            logger.debug(f"Cache miss for {tool_name} (cache check took {time.time() - cache_check_start:.3f}s)")
+                            logger.debug(
+                                f"Cache miss for {tool_name} (cache check took {time.time() - cache_check_start:.3f}s)"
+                            )
                     except Exception as cache_error:
-                        logger.warning(f"Cache operation failed for {tool_name}: {cache_error}, proceeding without cache")
+                        logger.warning(
+                            f"Cache operation failed for {tool_name}: {cache_error}, proceeding without cache"
+                        )
                         # Continue without cache - don't fail the tool execution
 
                 # Execute tool if not cached (with timeout)
@@ -222,21 +229,28 @@ class PreflightOrchestrator:
                     try:
                         tool_exec_start = time.time()
                         result = await asyncio.wait_for(
-                            self._execute_preflight_tool(
-                                tool_name, sql_query, table_names, catalog, database, schema
-                            ),
-                            timeout=tool_timeout
+                            self._execute_preflight_tool(tool_name, sql_query, table_names, catalog, database, schema),
+                            timeout=tool_timeout,
                         )
                         logger.debug(f"Tool {tool_name} executed successfully in {time.time() - tool_exec_start:.3f}s")
 
                         # Cache successful results (with error handling)
-                        if result and result.get("success") and self.plan_hooks and getattr(self.plan_hooks, 'enable_query_caching', False):
+                        if (
+                            result
+                            and result.get("success")
+                            and self.plan_hooks
+                            and getattr(self.plan_hooks, "enable_query_caching", False)
+                        ):
                             try:
                                 cache_set_start = time.time()
                                 self.plan_hooks.query_cache.set(tool_name, result, **cache_key_params)
-                                logger.debug(f"Successfully cached result for {tool_name} (cache set took {time.time() - cache_set_start:.3f}s)")
+                                logger.debug(
+                                    f"Successfully cached result for {tool_name} (cache set took {time.time() - cache_set_start:.3f}s)"
+                                )
                             except Exception as cache_error:
-                                logger.warning(f"Failed to cache result for {tool_name}: {cache_error}, continuing without caching")
+                                logger.warning(
+                                    f"Failed to cache result for {tool_name}: {cache_error}, continuing without caching"
+                                )
 
                     except asyncio.TimeoutError:
                         timeout_occurred = True
@@ -292,7 +306,9 @@ class PreflightOrchestrator:
 
             # Check continue_on_failure policy
             if not tool_result.success and not continue_on_failure:
-                logger.warning(f"Preflight tool {tool_name} failed and continue_on_failure is False, stopping execution")
+                logger.warning(
+                    f"Preflight tool {tool_name} failed and continue_on_failure is False, stopping execution"
+                )
                 break
 
         # Inject results into workflow context
@@ -454,28 +470,26 @@ class PreflightOrchestrator:
             return getattr(workflow.task, "task", "")
         return ""
 
-    def _generate_cache_key(self, tool_name: str, workflow, catalog: str, database: str, schema: str, table_names: List[str]) -> Dict[str, Any]:
+    def _generate_cache_key(
+        self, tool_name: str, workflow, catalog: str, database: str, schema: str, table_names: List[str]
+    ) -> Dict[str, Any]:
         """Generate consistent cache key parameters for a tool."""
         # Base parameters that are always included
-        cache_key = {
-            "catalog": catalog,
-            "database": database,
-            "schema": schema
-        }
+        cache_key = {"catalog": catalog, "database": database, "schema": schema}
 
         # Add tool-specific parameters
         if tool_name == "search_table":
             # Use query content for search_table
-            cache_key["query"] = getattr(workflow.task, 'task', '')[:200] if workflow.task else ''
+            cache_key["query"] = getattr(workflow.task, "task", "")[:200] if workflow.task else ""
         elif tool_name == "describe_table" and table_names:
             # Use first table name for describe_table
             cache_key["table_name"] = table_names[0]
         elif tool_name == "search_reference_sql":
             # Use query content for reference SQL search
-            cache_key["query"] = getattr(workflow.task, 'task', '')[:200] if workflow.task else ''
+            cache_key["query"] = getattr(workflow.task, "task", "")[:200] if workflow.task else ""
         elif tool_name == "parse_temporal_expressions":
             # Use full text for temporal parsing
-            cache_key["text"] = getattr(workflow.task, 'task', '') if workflow.task else ''
+            cache_key["text"] = getattr(workflow.task, "task", "") if workflow.task else ""
 
         return cache_key
 
