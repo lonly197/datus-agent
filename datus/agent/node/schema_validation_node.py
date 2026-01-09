@@ -152,11 +152,16 @@ class SchemaValidationNode(Node):
             # Check if schemas contain relevant columns/tables
             schema_coverage = self._check_schema_coverage(context.table_schemas, query_terms)
 
-            # Step 4: Determine if schemas are sufficient
+            # Step 4: Determine if schemas are sufficient using dynamic threshold
+            coverage_threshold = self._calculate_coverage_threshold(query_terms)
+            logger.info(
+                f"Using dynamic coverage threshold: {coverage_threshold:.2f} for {len(query_terms)} query terms"
+            )
+
             is_sufficient = (
                 table_count > 0
                 and len(missing_definitions) == 0
-                and schema_coverage["coverage_score"] > 0.3  # At least 30% coverage
+                and schema_coverage["coverage_score"] > coverage_threshold
             )
 
             # Build validation result
@@ -254,8 +259,9 @@ class SchemaValidationNode(Node):
         This hybrid approach ensures proper tokenization for mixed-language queries.
         """
         # Common SQL and business terms to look for (stop words)
+        # Only include pure grammatical particles, not business terms
         stop_words = {
-            # English stop words
+            # English stop words (pure grammatical particles)
             "the",
             "a",
             "an",
@@ -337,12 +343,21 @@ class SchemaValidationNode(Node):
             "leave",
             "call",
             "show",
-            # Chinese stop words (statistics terms that don't map to schema)
-            "每个",
-            "查询",
-            "分析",
-            "数据",
-            "表",
+            # Chinese stop words (pure grammatical particles only)
+            # Removed: "统计", "分析" (may have business meaning)
+            "的",
+            "了",
+            "和",
+            "与",
+            "或",
+            "在",
+            "从",
+            "到",
+            "是",
+            "这",
+            "那",
+            "每",
+            "个",
         }
 
         # Detect if query contains Chinese characters
@@ -361,6 +376,22 @@ class SchemaValidationNode(Node):
 
         return terms
 
+    def _calculate_coverage_threshold(self, query_terms: List[str]) -> float:
+        """
+        Calculate dynamic threshold based on query complexity.
+
+        Simple queries (≤3 terms) require higher coverage (50%).
+        Medium queries (4-6 terms) use standard coverage (30%).
+        Complex queries (>6 terms) allow lower coverage (20%).
+        """
+        term_count = len(query_terms)
+        if term_count <= 3:
+            return 0.5  # Simple queries need higher coverage
+        elif term_count <= 6:
+            return 0.3  # Standard threshold
+        else:
+            return 0.2  # Complex queries allow lower coverage
+
     def _check_schema_coverage(self, schemas: List[TableSchema], query_terms: List[str]) -> Dict[str, Any]:
         """
         Check how well the schemas cover the query terms.
@@ -370,7 +401,10 @@ class SchemaValidationNode(Node):
         match English database schema names.
         """
         if not query_terms:
+            logger.debug("No query terms provided, returning perfect coverage")
             return {"coverage_score": 1.0, "covered_terms": [], "uncovered_terms": []}
+
+        logger.debug(f"Checking schema coverage for {len(query_terms)} query terms: {query_terms}")
 
         covered = []
         uncovered = []
@@ -387,10 +421,13 @@ class SchemaValidationNode(Node):
                 columns = re.findall(r"`(\w+)`", schema.definition)
                 schema_terms.update([c.lower() for c in columns])
 
+        logger.debug(f"Built schema terms set with {len(schema_terms)} unique terms from {len(schemas)} schemas")
+
         # Check each query term with semantic mapping
         for term in query_terms:
             # Direct match (case-insensitive)
             if term.lower() in schema_terms:
+                logger.debug(f"Term '{term}' matched directly (case-insensitive)")
                 covered.append(term)
                 continue
 
@@ -399,21 +436,33 @@ class SchemaValidationNode(Node):
                 english_terms = self.BUSINESS_TERM_MAPPING[term]
                 # Check if any of the mapped English terms are in the schema
                 if any(eng_term.lower() in schema_terms for eng_term in english_terms):
+                    logger.debug(f"Term '{term}' matched via semantic mapping: {english_terms}")
                     covered.append(term)
                     continue
+                else:
+                    logger.debug(f"Term '{term}' has mapping {english_terms} but no match found in schema")
 
             # Partial match for compound terms (e.g., "首次试驾" contains "试驾")
             found_partial = False
             for schema_term in schema_terms:
                 if term in schema_term or schema_term in term:
+                    logger.debug(f"Term '{term}' matched partially with '{schema_term}'")
                     covered.append(term)
                     found_partial = True
                     break
 
             if not found_partial:
+                logger.debug(f"Term '{term}' not found in schema (uncovered)")
                 uncovered.append(term)
 
         coverage_score = len(covered) / len(query_terms) if query_terms else 1.0
+
+        logger.info(
+            f"Schema coverage result: score={coverage_score:.2f}, "
+            f"covered={len(covered)}/{len(query_terms)}, "
+            f"covered_terms={covered}, "
+            f"uncovered_terms={uncovered}"
+        )
 
         return {
             "coverage_score": coverage_score,
