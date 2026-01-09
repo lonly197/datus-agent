@@ -12,7 +12,10 @@ are sufficient for generating SQL for the given query. It checks for:
 - Basic query-schema alignment (keywords in query match schema)
 """
 
+import re
 from typing import Any, AsyncGenerator, Dict, List, Optional
+
+import jieba
 
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
@@ -34,6 +37,27 @@ class SchemaValidationNode(Node):
     to generate SQL for the given query. If schemas are insufficient, it
     provides actionable feedback for reflection strategies.
     """
+
+    # Business term mapping: Chinese → English schema terms
+    # This enables semantic matching between Chinese business terminology
+    # and English database schema names
+    BUSINESS_TERM_MAPPING = {
+        # Test drive related
+        "试驾": ["test_drive", "test_drive_date", "trial_drive", "testdrive"],
+        "首次": ["first", "initial", "first_time"],
+        "线索": ["clue", "clue_id", "lead", "lead_id"],
+        # Order related
+        "下定": ["order", "order_date", "booking", "book"],
+        "订单": ["order", "order_id", "orders"],
+        "转化": ["conversion", "convert", "transform"],
+        # Time related
+        "周期": ["cycle", "period", "duration"],
+        "天数": ["days", "date_diff", "day_count"],
+        "月份": ["month", "monthly", "mth"],
+        # Statistics
+        "统计": ["count", "sum", "avg", "calculate", "compute"],
+        "平均": ["avg", "average", "mean"],
+    }
 
     def __init__(
         self,
@@ -90,24 +114,26 @@ class SchemaValidationNode(Node):
 
             # Step 1: Check if schemas were discovered
             if not context or not context.table_schemas:
+                no_schemas_result = {
+                    "is_sufficient": False,
+                    "error": "No schemas discovered",
+                    "missing_tables": ["all"],
+                    "suggestions": ["Trigger schema_linking to discover tables"],
+                    "allow_reflection": True,  # Allow reflection to recover
+                }
                 yield ActionHistory(
                     action_id=f"{self.id}_no_schemas",
                     role=ActionRole.TOOL,
                     messages="Schema validation failed: No schemas discovered",
                     action_type="schema_validation",
                     input={"task": task.task[:50] if task else ""},
-                    status=ActionStatus.FAILED,
-                    output={
-                        "is_sufficient": False,
-                        "error": "No schemas discovered",
-                        "missing_tables": ["all"],
-                        "suggestions": ["Trigger schema_linking to discover tables"],
-                    },
+                    status=ActionStatus.SOFT_FAILED,  # Use SOFT_FAILED to allow reflection
+                    output=no_schemas_result,
                 )
                 self.result = BaseResult(
                     success=False,
                     error="No schemas discovered for validation",
-                    data={"is_sufficient": False, "missing_tables": ["all"]},
+                    data=no_schemas_result,
                 )
                 return
 
@@ -157,6 +183,9 @@ class SchemaValidationNode(Node):
                     ]
                     validation_result["missing_tables"] = schema_coverage["uncovered_terms"][:5]
 
+                # Set allow_reflection flag to enable workflow continuation
+                validation_result["allow_reflection"] = True
+
             # Emit result
             if is_sufficient:
                 yield ActionHistory(
@@ -182,7 +211,7 @@ class SchemaValidationNode(Node):
                         "task": task.task[:50] if task else "",
                         "table_count": table_count,
                     },
-                    status=ActionStatus.FAILED,
+                    status=ActionStatus.SOFT_FAILED,  # Use SOFT_FAILED to allow reflection
                     output=validation_result,
                 )
                 self.result = BaseResult(
@@ -218,9 +247,15 @@ class SchemaValidationNode(Node):
             self.result = BaseResult(success=False, error=str(e))
 
     def _extract_query_terms(self, query: str) -> List[str]:
-        """Extract key terms from the query for schema matching."""
-        # Common SQL and business terms to look for
+        """
+        Extract key terms from the query for schema matching.
+
+        Uses jieba for Chinese word segmentation and regex for English.
+        This hybrid approach ensures proper tokenization for mixed-language queries.
+        """
+        # Common SQL and business terms to look for (stop words)
         stop_words = {
+            # English stop words
             "the",
             "a",
             "an",
@@ -302,31 +337,38 @@ class SchemaValidationNode(Node):
             "leave",
             "call",
             "show",
-            "统计",
+            # Chinese stop words (statistics terms that don't map to schema)
             "每个",
-            "平均",
-            "转化",
-            "周期",
-            "天数",
-            "首次",
             "查询",
             "分析",
             "数据",
             "表",
         }
 
-        # Extract alphanumeric terms
-        import re
+        # Detect if query contains Chinese characters
+        has_chinese = any("\u4e00" <= char <= "\u9fff" for char in query)
 
-        words = re.findall(r"\b\w+\b", query)
-
-        # Filter out stop words and short words
-        terms = [w for w in words if w.lower() not in stop_words and len(w) > 2]
+        if has_chinese:
+            # Use jieba for Chinese word segmentation
+            words = jieba.lcut(query)
+            # Filter out stop words and short terms
+            terms = [w for w in words if w not in stop_words and len(w) > 1]
+        else:
+            # Use regex for English
+            words = re.findall(r"\b\w+\b", query)
+            # Filter out stop words and short words
+            terms = [w for w in words if w.lower() not in stop_words and len(w) > 2]
 
         return terms
 
     def _check_schema_coverage(self, schemas: List[TableSchema], query_terms: List[str]) -> Dict[str, Any]:
-        """Check how well the schemas cover the query terms."""
+        """
+        Check how well the schemas cover the query terms.
+
+        Uses semantic matching via business term mapping to enable Chinese-to-English
+        schema matching. This allows queries with Chinese business terminology to
+        match English database schema names.
+        """
         if not query_terms:
             return {"coverage_score": 1.0, "covered_terms": [], "uncovered_terms": []}
 
@@ -342,16 +384,33 @@ class SchemaValidationNode(Node):
             # Add column names from definition
             if schema.definition:
                 # Extract column names from CREATE TABLE statement
-                import re
-
                 columns = re.findall(r"`(\w+)`", schema.definition)
                 schema_terms.update([c.lower() for c in columns])
 
-        # Check each query term
+        # Check each query term with semantic mapping
         for term in query_terms:
+            # Direct match (case-insensitive)
             if term.lower() in schema_terms:
                 covered.append(term)
-            else:
+                continue
+
+            # Semantic match via business term mapping (Chinese → English)
+            if term in self.BUSINESS_TERM_MAPPING:
+                english_terms = self.BUSINESS_TERM_MAPPING[term]
+                # Check if any of the mapped English terms are in the schema
+                if any(eng_term.lower() in schema_terms for eng_term in english_terms):
+                    covered.append(term)
+                    continue
+
+            # Partial match for compound terms (e.g., "首次试驾" contains "试驾")
+            found_partial = False
+            for schema_term in schema_terms:
+                if term in schema_term or schema_term in term:
+                    covered.append(term)
+                    found_partial = True
+                    break
+
+            if not found_partial:
                 uncovered.append(term)
 
         coverage_score = len(covered) / len(query_terms) if query_terms else 1.0

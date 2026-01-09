@@ -35,6 +35,7 @@ class ActionStatus(str, Enum):
     PROCESSING = "processing"
     SUCCESS = "success"
     FAILED = "failed"
+    SOFT_FAILED = "soft_failed"  # Failed but allows recovery via reflection
 
 
 class ActionHistory(BaseModel):
@@ -77,7 +78,11 @@ class ActionHistory(BaseModel):
         )
 
     def is_done(self) -> bool:
-        return self.status == ActionStatus.SUCCESS or self.status == ActionStatus.FAILED
+        return (
+            self.status == ActionStatus.SUCCESS
+            or self.status == ActionStatus.FAILED
+            or self.status == ActionStatus.SOFT_FAILED
+        )
 
     def function_name(self) -> str:
         return "" if not self.input else str(self.input.get("function_name", "unknown"))

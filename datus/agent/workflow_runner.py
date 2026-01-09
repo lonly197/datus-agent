@@ -221,7 +221,18 @@ class WorkflowRunner:
             current_node.run()
 
             if current_node.status == "failed":
-                if current_node.type == NodeType.TYPE_PARALLEL:
+                # Check if this is a soft failure that allows reflection
+                allow_reflection = False
+                if current_node.result and hasattr(current_node.result, "data") and current_node.result.data:
+                    allow_reflection = current_node.result.data.get("allow_reflection", False)
+
+                # Check if workflow has a reflect node for recovery
+                has_reflect = any(n.type == NodeType.TYPE_REFLECT for n in self.workflow.nodes.values())
+
+                if allow_reflection and has_reflect:
+                    # Soft failure - continue to reflection for recovery
+                    logger.info(f"Node failed but allows reflection: {current_node.description}")
+                elif current_node.type == NodeType.TYPE_PARALLEL:
                     try:
                         has_any_success = False
                         if current_node.result and hasattr(current_node.result, "child_results"):
@@ -239,6 +250,7 @@ class WorkflowRunner:
                         logger.warning(f"Node failed: {current_node.description}")
                         break
                 else:
+                    # Hard failure - terminate workflow
                     logger.warning(f"Node failed: {current_node.description}")
                     break
 
@@ -350,11 +362,26 @@ class WorkflowRunner:
                         ensure_not_cancelled()
 
                     if current_node.status == "failed":
-                        self._update_action_status(
-                            node_start_action, success=False, error=f"Node execution failed: {current_node.description}"
-                        )
-                        logger.warning(f"Node failed: {current_node.description}")
-                        break
+                        # Check if this is a soft failure that allows reflection
+                        allow_reflection = False
+                        if current_node.result and hasattr(current_node.result, "data") and current_node.result.data:
+                            allow_reflection = current_node.result.data.get("allow_reflection", False)
+
+                        # Check if workflow has a reflect node for recovery
+                        has_reflect = any(n.type == NodeType.TYPE_REFLECT for n in self.workflow.nodes.values())
+
+                        if allow_reflection and has_reflect:
+                            # Soft failure - continue to reflection for recovery
+                            logger.info(f"Node failed but allows reflection: {current_node.description}")
+                        else:
+                            # Hard failure - terminate workflow
+                            self._update_action_status(
+                                node_start_action,
+                                success=False,
+                                error=f"Node execution failed: {current_node.description}",
+                            )
+                            logger.warning(f"Node failed: {current_node.description}")
+                            break
 
                     self._update_action_status(
                         node_start_action,
