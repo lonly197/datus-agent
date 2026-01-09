@@ -12,6 +12,10 @@ Datus is an open-source data engineering agent that builds evolvable context for
 
 The system automatically builds a living semantic map of company data, combining metadata, metrics, reference SQL, and external knowledge.
 
+## Important Rules
+
+> **CRITICAL**: Always activate the project's `.venv` virtual environment before executing any Python scripts or running tests. Use: `source .venv/bin/activate && <your-command>`
+
 ## Development Commands
 
 ### Package Management and Environment
