@@ -35,7 +35,9 @@ def load_builtin_workflow_config() -> dict:
     # Validate workflow configuration
     validation_errors = validate_workflow_config(config)
     if validation_errors:
-        error_msg = "Workflow configuration validation failed:\n" + "\n".join(f"  - {error}" for error in validation_errors)
+        error_msg = "Workflow configuration validation failed:\n" + "\n".join(
+            f"  - {error}" for error in validation_errors
+        )
         raise ValueError(error_msg)
 
     logger.debug(f"Workflow configuration loaded and validated: {config_path}")
@@ -244,7 +246,11 @@ def _process_workflow_config(
 
 
 def _create_single_node(
-    node_type: str, node_id: str, sql_task: SqlTask, agent_config: Optional[AgentConfig] = None, tools: Optional[List[Tool]] = None
+    node_type: str,
+    node_id: str,
+    sql_task: SqlTask,
+    agent_config: Optional[AgentConfig] = None,
+    tools: Optional[List[Tool]] = None,
 ) -> Node:
     # normalize aliases from config
     normalized_type = node_type

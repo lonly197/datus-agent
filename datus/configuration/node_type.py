@@ -48,6 +48,8 @@ class NodeType:
     TYPE_DATE_PARSER = "date_parser"  # For parsing temporal expressions
     TYPE_INTENT_ANALYSIS = "intent_analysis"  # For analyzing query intent
     TYPE_SCHEMA_DISCOVERY = "schema_discovery"  # For discovering relevant schema
+    TYPE_SCHEMA_VALIDATION = "schema_validation"  # For validating schema sufficiency
+    TYPE_RESULT_VALIDATION = "result_validation"  # For validating result quality
 
     # Agentic node types
     TYPE_CHAT = "chat"  # For conversational AI interactions
@@ -68,6 +70,8 @@ class NodeType:
         TYPE_DATE_PARSER,
         TYPE_INTENT_ANALYSIS,
         TYPE_SCHEMA_DISCOVERY,
+        TYPE_SCHEMA_VALIDATION,
+        TYPE_RESULT_VALIDATION,
         TYPE_CHAT,
         TYPE_GENSQL,
         TYPE_SEMANTIC,
@@ -93,6 +97,8 @@ class NodeType:
         TYPE_DATE_PARSER: "Parse temporal expressions in queries",
         TYPE_INTENT_ANALYSIS: "Analyze query intent using heuristics and optional LLM fallback",
         TYPE_SCHEMA_DISCOVERY: "Discover relevant schema and tables for the query",
+        TYPE_SCHEMA_VALIDATION: "Validate schema sufficiency for SQL generation",
+        TYPE_RESULT_VALIDATION: "Validate SQL execution result quality",
         TYPE_CHAT: "Conversational AI interactions with tool calling",
         TYPE_GENSQL: "SQL generation with conversational AI and tool calling",
         TYPE_SEMANTIC: "Semantic model generation with conversational AI",
@@ -137,6 +143,10 @@ class NodeType:
         elif node_type == NodeType.TYPE_INTENT_ANALYSIS:
             input_data_cls = BaseInput
         elif node_type == NodeType.TYPE_SCHEMA_DISCOVERY:
+            input_data_cls = BaseInput
+        elif node_type == NodeType.TYPE_SCHEMA_VALIDATION:
+            input_data_cls = BaseInput
+        elif node_type == NodeType.TYPE_RESULT_VALIDATION:
             input_data_cls = BaseInput
         elif node_type == NodeType.TYPE_CHAT:
             input_data_cls = ChatNodeInput

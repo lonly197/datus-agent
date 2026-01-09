@@ -702,9 +702,7 @@ class CatalogScreen(ContextScreen):
         total = len(semantic_records)
         record = semantic_records[0]
         table = Table(
-            title=(
-                f"[bold cyan]📋 Semantic Model #1 of {total}: " f"{record.get('semantic_model_name', 'Unnamed')}[/]"
-            ),
+            title=(f"[bold cyan]📋 Semantic Model #1 of {total}: " f"{record.get('semantic_model_name', 'Unnamed')}[/]"),
             show_header=False,
             box=box.SIMPLE,
             border_style="blue",

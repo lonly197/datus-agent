@@ -722,7 +722,7 @@ class DatusAPIService:
         predefined_configs = {
             "text2sql": {
                 "workflow": "text2sql",  # ✅ 使用专用Text2SQL工作流
-                "plan_mode": False,   # ✅ 禁用plan模式
+                "plan_mode": False,  # ✅ 禁用plan模式
                 "auto_execute_plan": False,  # ✅ 禁用自动执行
                 "system_prompt": "text2sql_system",
                 "output_format": "json",
@@ -1073,8 +1073,7 @@ class DatusAPIService:
         # Wait for tasks to complete, but bound total wait
         try:
             await asyncio.wait_for(
-                asyncio.gather(*(rt.task for rt in tasks_to_cancel), return_exceptions=True),
-                timeout=wait_timeout
+                asyncio.gather(*(rt.task for rt in tasks_to_cancel), return_exceptions=True), timeout=wait_timeout
             )
             logger.info(f"All {len(tasks_to_cancel)} tasks completed within {wait_timeout}s")
         except asyncio.TimeoutError:
@@ -1367,7 +1366,7 @@ async def lifespan(app: FastAPI):
 
     # Cancel all running tasks with bounded wait
     if service:
-        shutdown_timeout = getattr(args, 'shutdown_timeout_seconds', 5.0)
+        shutdown_timeout = getattr(args, "shutdown_timeout_seconds", 5.0)
         try:
             # Pass shutdown_timeout to allow full wait duration
             await service.cancel_all_running_tasks(wait_timeout=shutdown_timeout)

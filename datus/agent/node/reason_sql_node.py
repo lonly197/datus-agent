@@ -193,9 +193,9 @@ class ReasonSQLNode(Node):
                     "recovery_suggestions": [
                         "Check database connection",
                         "Verify table permissions",
-                        "Check MCP server status and configuration"
-                    ]
-                }
+                        "Check MCP server status and configuration",
+                    ],
+                },
             )
             # Do not re-raise to allow workflow to handle failure gracefully
             # raise

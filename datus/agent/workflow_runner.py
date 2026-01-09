@@ -44,9 +44,9 @@ class WorkflowRunner:
     def initialize_workflow(self, sql_task: SqlTask):
         """Generate a new workflow plan."""
         plan_type = (
-            self.initial_metadata.get("workflow") or  # 优先检查metadata中的workflow
-            getattr(self.args, "workflow", None) or
-            self.global_config.workflow_plan
+            self.initial_metadata.get("workflow")
+            or getattr(self.args, "workflow", None)  # 优先检查metadata中的workflow
+            or self.global_config.workflow_plan
         )
 
         # Check if plan_mode is specified in initial metadata (API context)
@@ -270,7 +270,7 @@ class WorkflowRunner:
 
         # Log workflow details for observability
         if self.workflow:
-            workflow_name = getattr(self.workflow, 'name', 'unknown')
+            workflow_name = getattr(self.workflow, "name", "unknown")
             node_count = len(self.workflow.nodes) if self.workflow.nodes else 0
             logger.info(f"Workflow '{workflow_name}' initialized with {node_count} nodes, max_steps={max_steps}")
 
@@ -279,6 +279,7 @@ class WorkflowRunner:
 
         # Performance tracking
         import time
+
         start_time = time.time()
         init_action = self._create_action_history(
             action_id="workflow_initialization",
@@ -409,10 +410,16 @@ class WorkflowRunner:
 
             # Calculate and log performance metrics
             execution_time = time.time() - start_time
-            nodes_executed = len([n for n in self.workflow.nodes.values() if n.status == "completed"]) if self.workflow else 0
-            nodes_failed = len([n for n in self.workflow.nodes.values() if n.status == "failed"]) if self.workflow else 0
+            nodes_executed = (
+                len([n for n in self.workflow.nodes.values() if n.status == "completed"]) if self.workflow else 0
+            )
+            nodes_failed = (
+                len([n for n in self.workflow.nodes.values() if n.status == "failed"]) if self.workflow else 0
+            )
 
-            logger.info(f"Workflow execution completed in {execution_time:.2f}s: {nodes_executed} nodes completed, {nodes_failed} nodes failed")
+            logger.info(
+                f"Workflow execution completed in {execution_time:.2f}s: {nodes_executed} nodes completed, {nodes_failed} nodes failed"
+            )
 
             self._update_action_status(
                 completion_action,

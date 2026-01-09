@@ -37,7 +37,11 @@ class DeepResearchEventConverter:
     # Define virtual steps for non-agentic workflows (Text2SQL)
     VIRTUAL_STEPS = [
         {"id": "step_intent", "content": "Analyze Query Intent", "node_types": ["intent_analysis"]},
-        {"id": "step_schema", "content": "Discover Database Schema", "node_types": ["schema_discovery", "schema_linking"]},
+        {
+            "id": "step_schema",
+            "content": "Discover Database Schema",
+            "node_types": ["schema_discovery", "schema_linking"],
+        },
         {"id": "step_sql", "content": "Generate SQL Query", "node_types": ["generate_sql"]},
         {"id": "step_exec", "content": "Execute SQL & Verify", "node_types": ["execute_sql"]},
         {"id": "step_reflect", "content": "Self-Correction & Optimization", "node_types": ["reflect"]},
@@ -50,7 +54,7 @@ class DeepResearchEventConverter:
         self.logger = get_logger(__name__)
         # small rolling cache to deduplicate near-identical assistant messages
         self._recent_assistant_hashes: "deque[str]" = deque(maxlen=50)
-        
+
         # State for virtual plan management
         self.virtual_plan_emitted = False
         self.active_virtual_step_id = None
@@ -67,11 +71,11 @@ class DeepResearchEventConverter:
         """Generate PlanUpdateEvent based on current progress."""
         todos = []
         current_step_id = self._get_virtual_step_id(current_node_type) if current_node_type else None
-        
+
         # If we found a new active step, update our state
         if current_step_id:
             self.active_virtual_step_id = current_step_id
-        
+
         # Determine the index of the current active step
         active_index = -1
         if self.active_virtual_step_id:
@@ -79,10 +83,10 @@ class DeepResearchEventConverter:
                 if step["id"] == self.active_virtual_step_id:
                     active_index = i
                     break
-        
+
         for i, step in enumerate(self.VIRTUAL_STEPS):
             status = TodoStatus.PENDING
-            
+
             # Robust state machine logic based on linear order
             if active_index != -1:
                 if i < active_index:
@@ -96,18 +100,9 @@ class DeepResearchEventConverter:
                 if step["id"] in self.completed_virtual_steps:
                     status = TodoStatus.COMPLETED
 
-            todos.append(TodoItem(
-                id=step["id"],
-                content=step["content"],
-                status=status
-            ))
-            
-        return PlanUpdateEvent(
-            id=str(uuid.uuid4()),
-            planId=None,
-            timestamp=int(time.time() * 1000),
-            todos=todos
-        )
+            todos.append(TodoItem(id=step["id"], content=step["content"], status=status))
+
+        return PlanUpdateEvent(id=str(uuid.uuid4()), planId=None, timestamp=int(time.time() * 1000), todos=todos)
 
     def _hash_text(self, s: str) -> str:
         try:
@@ -370,10 +365,10 @@ class DeepResearchEventConverter:
 
         # Extract todo_id if present (for plan-related events)
         todo_id = self._extract_todo_id_from_action(action)
-        
+
         # Fallback to virtual plan ID if no explicit todo_id (for Text2SQL workflow)
         if not todo_id and self.active_virtual_step_id:
-             todo_id = self.active_virtual_step_id
+            todo_id = self.active_virtual_step_id
 
         # 1. Handle chat/assistant messages
         if action.role == ActionRole.ASSISTANT:
@@ -452,7 +447,7 @@ class DeepResearchEventConverter:
             if action.output and isinstance(action.output, dict):
                 intent = action.output.get("intent", intent)
                 confidence = action.output.get("confidence", confidence)
-            
+
             content = f"🧐 **Intent Detected**: `{intent}` (Confidence: {confidence:.2f})"
             events.append(
                 ChatEvent(
@@ -470,14 +465,14 @@ class DeepResearchEventConverter:
             if action.output and isinstance(action.output, dict):
                 tables = action.output.get("candidate_tables", [])
                 table_count = len(tables)
-            
+
             content = f"📂 **Schema Discovery**: Found {table_count} relevant tables."
             if tables:
                 table_list = ", ".join(tables[:5])
                 if len(tables) > 5:
                     table_list += f", and {len(tables)-5} more..."
                 content += f"\nTables: `{table_list}`"
-                
+
             events.append(
                 ChatEvent(
                     id=event_id,
@@ -492,7 +487,7 @@ class DeepResearchEventConverter:
             tables_found = 0
             if action.output and isinstance(action.output, dict):
                 tables_found = action.output.get("tables_found", 0)
-            
+
             content = f"🔗 **Schema Linking**: Linked {tables_found} tables to the query context."
             events.append(
                 ChatEvent(
@@ -508,7 +503,7 @@ class DeepResearchEventConverter:
             knowledge_found = False
             if action.output and isinstance(action.output, dict):
                 knowledge_found = action.output.get("knowledge_found", False)
-            
+
             if knowledge_found:
                 content = "📚 **Knowledge Search**: Found relevant external business knowledge."
                 events.append(
@@ -547,7 +542,7 @@ class DeepResearchEventConverter:
             strategy = "UNKNOWN"
             if action.output and isinstance(action.output, dict):
                 strategy = action.output.get("strategy", strategy)
-            
+
             content = f"🤔 **Reflection**: Analyzing results... Strategy: `{strategy}`"
             events.append(
                 ChatEvent(
@@ -753,7 +748,7 @@ class DeepResearchEventConverter:
                     content=content,
                 )
             )
-            
+
             # Emit initial virtual plan for Text2SQL workflow
             # We assume if it's workflow_init, we can initialize the virtual plan
             if not self.virtual_plan_emitted:
@@ -768,7 +763,7 @@ class DeepResearchEventConverter:
             node_type = None
             if action.input and isinstance(action.input, dict):
                 node_type = action.input.get("node_type")
-            
+
             if node_type:
                 plan_update = self._generate_virtual_plan_update(node_type)
                 if plan_update and plan_update.todos:
@@ -781,12 +776,12 @@ class DeepResearchEventConverter:
             node_desc = "Unknown Node"
             if action.input and isinstance(action.input, dict):
                 node_desc = action.input.get("description", node_desc)
-            
+
             content = f"🔄 **Executing Step**: {node_desc}"
             events.append(
                 ChatEvent(
                     id=event_id,
-                    planId=self.active_virtual_step_id, # Use active step ID
+                    planId=self.active_virtual_step_id,  # Use active step ID
                     timestamp=timestamp,
                     content=content,
                 )
@@ -796,29 +791,25 @@ class DeepResearchEventConverter:
         elif action.status == ActionStatus.FAILED:
             # ErrorEvent should use todo_id if the error is related to a specific todo
             error_plan_id = todo_id if todo_id else None
-            
+
             error_msg = action.messages or "Unknown error"
-            
+
             # Enrich error message with details if available
             if action.output and isinstance(action.output, dict):
                 details = []
                 if action.output.get("error_code"):
                     details.append(f"Code: {action.output.get('error_code')}")
-                
+
                 # Check for recovery suggestions
                 suggestions = action.output.get("recovery_suggestions")
                 if suggestions and isinstance(suggestions, list):
                     suggestions_str = "\n".join([f"- {s}" for s in suggestions])
                     details.append(f"Suggestions:\n{suggestions_str}")
-                
+
                 if details:
                     error_msg += "\n\n" + "\n".join(details)
 
-            events.append(
-                ErrorEvent(
-                    id=event_id, planId=error_plan_id, timestamp=timestamp, error=error_msg
-                )
-            )
+            events.append(ErrorEvent(id=event_id, planId=error_plan_id, timestamp=timestamp, error=error_msg))
 
         # 9. Handle report generation
         elif action.action_type == "output_generation" and action.output:

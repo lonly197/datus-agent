@@ -59,7 +59,7 @@ class TestAPIShutdownIntegration:
             "task": "SELECT COUNT(*) FROM test_table WHERE created_at > '2023-01-01'",
             "database_name": "test_db",
             "schema_name": "test_schema",
-            "task_id": "test_cancel_task"
+            "task_id": "test_cancel_task",
         }
 
         # Start the workflow in a separate thread since it's blocking
@@ -72,9 +72,9 @@ class TestAPIShutdownIntegration:
         def run_workflow():
             try:
                 response = client.post("/workflows/run", json=workflow_request)
-                result['response'] = response
+                result["response"] = response
             except Exception as e:
-                exception['error'] = e
+                exception["error"] = e
 
         # Start workflow in background
         workflow_thread = threading.Thread(target=run_workflow, daemon=True)
@@ -108,11 +108,12 @@ class TestAPIShutdownIntegration:
 
         # Create app and manually set up service with running tasks
         app = create_app(test_app_args, root_path="")
-        service = app.state.service if hasattr(app.state, 'service') else None
+        service = app.state.service if hasattr(app.state, "service") else None
 
         if not service:
             # Manually initialize service for testing
             from datus.api.service import DatusAPIService
+
             service = DatusAPIService(test_app_args)
             app.state.service = service
 

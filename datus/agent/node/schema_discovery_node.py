@@ -77,7 +77,7 @@ class SchemaDiscoveryNode(Node):
                     ErrorCode.NODE_EXECUTION_FAILED,
                     "No workflow or task available for schema discovery",
                     "schema_discovery",
-                    {"workflow_id": getattr(self.workflow, 'id', 'unknown') if self.workflow else 'unknown'}
+                    {"workflow_id": getattr(self.workflow, "id", "unknown") if self.workflow else "unknown"},
                 )
                 yield ActionHistory(
                     action_id=f"{self.id}_error",
@@ -96,7 +96,7 @@ class SchemaDiscoveryNode(Node):
             intent = "text2sql"  # Default fallback
             intent_confidence = 0.0
 
-            if hasattr(self.workflow, 'metadata') and self.workflow.metadata:
+            if hasattr(self.workflow, "metadata") and self.workflow.metadata:
                 detected_intent = self.workflow.metadata.get("detected_intent")
                 confidence = self.workflow.metadata.get("intent_confidence", 0.0)
 
@@ -105,24 +105,26 @@ class SchemaDiscoveryNode(Node):
                     intent_confidence = confidence
                     logger.debug(f"Using detected intent from workflow metadata: {intent} (confidence: {confidence})")
                 else:
-                    logger.warning(f"Intent detection unreliable (intent: {detected_intent}, confidence: {confidence}), using default 'text2sql'")
+                    logger.warning(
+                        f"Intent detection unreliable (intent: {detected_intent}, confidence: {confidence}), using default 'text2sql'"
+                    )
             else:
                 logger.warning("Workflow metadata not available, using default intent 'text2sql'")
 
             # Validate task has required attributes
-            if not hasattr(task, 'task') or not task.task:
+            if not hasattr(task, "task") or not task.task:
                 error_result = self.create_error_result(
                     ErrorCode.NODE_EXECUTION_FAILED,
                     "Task has no content to analyze for schema discovery",
                     "schema_discovery",
-                    {"task_id": getattr(task, 'id', 'unknown')}
+                    {"task_id": getattr(task, "id", "unknown")},
                 )
                 yield ActionHistory(
                     action_id=f"{self.id}_error",
                     role=ActionRole.TOOL,
                     messages=f"Schema discovery failed: {error_result.error_message}",
                     action_type="schema_discovery",
-                    input={"task_content": getattr(task, 'task', '')},
+                    input={"task_content": getattr(task, "task", "")},
                     status=ActionStatus.FAILED,
                     output={"error": error_result.error_message, "error_code": error_result.error_code},
                 )
@@ -138,12 +140,12 @@ class SchemaDiscoveryNode(Node):
                 # Fail-Fast: If no tables found after all attempts, do not proceed
                 error_msg = f"No candidate tables found for task '{task.task[:50]}...'. Cannot generate SQL without schema context."
                 logger.error(error_msg)
-                
+
                 error_result = self.create_error_result(
                     ErrorCode.NODE_EXECUTION_FAILED,
                     error_msg,
                     "schema_discovery",
-                    {"task_id": getattr(task, 'id', 'unknown')}
+                    {"task_id": getattr(task, "id", "unknown")},
                 )
                 yield ActionHistory(
                     action_id=f"{self.id}_error_nofound",
@@ -154,12 +156,9 @@ class SchemaDiscoveryNode(Node):
                     status=ActionStatus.FAILED,
                     output={"error": error_msg, "error_code": ErrorCode.NODE_EXECUTION_FAILED},
                 )
-                
+
                 # Mark node as failed
-                self.result = BaseResult(
-                    success=False,
-                    error=error_msg
-                )
+                self.result = BaseResult(success=False, error=error_msg)
                 return
 
             # Emit success action with results
@@ -189,7 +188,7 @@ class SchemaDiscoveryNode(Node):
                     "candidate_tables": candidate_tables,
                     "table_count": len(candidate_tables),
                     "intent": intent,
-                }
+                },
             )
 
             logger.info(
@@ -202,7 +201,11 @@ class SchemaDiscoveryNode(Node):
                 ErrorCode.NODE_EXECUTION_FAILED,
                 f"Schema discovery execution failed: {str(e)}",
                 "schema_discovery",
-                {"task_id": getattr(self.workflow.task, 'id', 'unknown') if self.workflow and self.workflow.task else 'unknown'}
+                {
+                    "task_id": getattr(self.workflow.task, "id", "unknown")
+                    if self.workflow and self.workflow.task
+                    else "unknown"
+                },
             )
             yield ActionHistory(
                 action_id=f"{self.id}_error",
@@ -238,7 +241,7 @@ class SchemaDiscoveryNode(Node):
         # If intent is text2sql or sql (from intent analysis), try to discover tables
         if intent in ["text2sql", "sql"] and hasattr(task, "task"):
             task_text = task.task.lower()
-            
+
             # --- Stage 1: Fast Cache/Keyword & Semantic (Hybrid Search) ---
             # 1. Semantic Search (High Priority)
             semantic_tables = await self._semantic_table_discovery(task.task)
@@ -252,10 +255,10 @@ class SchemaDiscoveryNode(Node):
             if keyword_tables:
                 candidate_tables.extend(keyword_tables)
                 logger.info(f"[Stage 1] Found {len(keyword_tables)} tables via keyword matching")
-            
+
             # Deduplicate
             candidate_tables = list(set(candidate_tables))
-            
+
             # --- Stage 2: Deep Metadata Scan (Context Search) ---
             # If recall is low (e.g., 0 tables), try context search (Metrics, Reference SQL)
             if not candidate_tables:
@@ -264,7 +267,7 @@ class SchemaDiscoveryNode(Node):
                 if context_tables:
                     candidate_tables.extend(context_tables)
                     logger.info(f"[Stage 2] Found {len(context_tables)} tables via context search")
-            
+
             # Deduplicate
             candidate_tables = list(set(candidate_tables))
 
@@ -292,9 +295,9 @@ class SchemaDiscoveryNode(Node):
         try:
             if not self.agent_config:
                 return []
-            
+
             context_search = ContextSearchTools(self.agent_config)
-            
+
             # 1. Search Metrics
             if context_search.has_metrics:
                 metric_result = context_search.search_metrics(query_text=query, top_n=3)
@@ -303,17 +306,17 @@ class SchemaDiscoveryNode(Node):
                     # For now, we assume metric definitions might contain table references or hints
                     # This is a placeholder for extraction logic
                     pass
-            
+
             # 2. Search Reference SQL
             # Reference SQL often contains valid table names
             ref_sql_result = context_search.search_reference_sql(query_text=query, top_n=3)
             if ref_sql_result.success and ref_sql_result.result:
                 # Placeholder: Extract tables from SQL (would need sqlglot here)
                 pass
-                
+
         except Exception as e:
             logger.warning(f"Context-based discovery failed: {e}")
-        
+
         return found_tables
 
     async def _semantic_table_discovery(self, query: str) -> List[str]:
@@ -329,17 +332,14 @@ class SchemaDiscoveryNode(Node):
         try:
             if not self.agent_config:
                 return []
-            
+
             tables = []
-            
+
             # 1. Use SchemaWithValueRAG for direct table semantic search
             rag = SchemaWithValueRAG(agent_config=self.agent_config)
             # Use search_similar to find tables based on vector similarity of their definitions
-            schema_results, _ = rag.search_similar(
-                query_text=query,
-                top_n=5
-            )
-            
+            schema_results, _ = rag.search_similar(query_text=query, top_n=5)
+
             if schema_results and len(schema_results) > 0:
                 # Extract table names from arrow table
                 found_tables = schema_results.column("table_name").to_pylist()
@@ -355,7 +355,7 @@ class SchemaDiscoveryNode(Node):
                     # Logic to extract tables from metrics would go here
                     # For now, we rely primarily on SchemaWithValueRAG
                     pass
-            
+
             return list(set(tables))
         except Exception as e:
             logger.warning(f"Semantic table discovery failed: {e}")
@@ -372,59 +372,77 @@ class SchemaDiscoveryNode(Node):
             List of table names
         """
         candidate_tables = []
-        
+
         # Simple keyword-based table discovery
         table_keywords = [
             # Common business tables
-            "user", "users",
-            "customer", "customers",
-            "order", "orders",
-            "product", "products",
-            "sale", "sales",
-            "transaction", "transactions",
-            "employee", "employees",
-            "department", "departments",
+            "user",
+            "users",
+            "customer",
+            "customers",
+            "order",
+            "orders",
+            "product",
+            "products",
+            "sale",
+            "sales",
+            "transaction",
+            "transactions",
+            "employee",
+            "employees",
+            "department",
+            "departments",
             # Chinese keywords support
-            "用户", "user",
-            "客户", "customer",
-            "订单", "order",
-            "产品", "product",
-            "销售", "sale",
-            "交易", "transaction",
-            "员工", "employee",
-            "部门", "department",
-            "试驾", "test_drive",  # Based on user query
-            "转化", "conversion",
+            "用户",
+            "user",
+            "客户",
+            "customer",
+            "订单",
+            "order",
+            "产品",
+            "product",
+            "销售",
+            "sale",
+            "交易",
+            "transaction",
+            "员工",
+            "employee",
+            "部门",
+            "department",
+            "试驾",
+            "test_drive",  # Based on user query
+            "转化",
+            "conversion",
             # Add more as needed
         ]
 
         # Iterate in pairs (keyword, table_name)
         # For English words, keyword == table_name (mostly)
         # For Chinese words, keyword maps to English table_name
-        
+
         # Refined logic: the list above is mixed. Let's make it a mapping for better accuracy
         keyword_map = {
             "用户": "users",
             "user": "users",
-            "客户": "customers", 
+            "客户": "customers",
             "customer": "customers",
-            "订单": "orders", 
+            "订单": "orders",
             "order": "orders",
-            "产品": "products", 
+            "产品": "products",
             "product": "products",
-            "销售": "sales", 
+            "销售": "sales",
             "sale": "sales",
-            "交易": "transactions", 
+            "交易": "transactions",
             "transaction": "transactions",
-            "员工": "employees", 
+            "员工": "employees",
             "employee": "employees",
-            "部门": "departments", 
+            "部门": "departments",
             "department": "departments",
-            "试驾": "dwd_assign_dlr_clue_fact_di", # Updated mapping based on log analysis
+            "试驾": "dwd_assign_dlr_clue_fact_di",  # Updated mapping based on log analysis
             "线索": "dwd_assign_dlr_clue_fact_di",
             "转化": "conversions",
         }
-        
+
         # Check mapping first
         for keyword, table_name in keyword_map.items():
             if keyword in task_text:
@@ -449,36 +467,33 @@ class SchemaDiscoveryNode(Node):
     async def _fallback_get_all_tables(self, task) -> List[str]:
         """
         Fallback: Get all tables from the database if no candidates found.
-        
+
         Args:
             task: The SQL task
-            
+
         Returns:
             List of all table names (limited to top N)
         """
         try:
             db_manager = db_manager_instance(self.agent_config.namespaces)
-            connector = db_manager.get_conn(
-                self.agent_config.current_namespace,
-                task.database_name
-            )
-            
+            connector = db_manager.get_conn(self.agent_config.current_namespace, task.database_name)
+
             if not connector:
                 return []
-                
+
             # Get all tables
             # Note: get_all_table_names might be expensive for large DBs
             # We should probably limit this or cache it
             all_tables = connector.get_all_table_names()
-            
+
             # Limit to reasonable number to avoid context overflow
             MAX_TABLES = 50
             if len(all_tables) > MAX_TABLES:
                 logger.warning(f"Too many tables ({len(all_tables)}), limiting to first {MAX_TABLES} for fallback")
                 return all_tables[:MAX_TABLES]
-                
+
             return all_tables
-            
+
         except Exception as e:
             logger.warning(f"Fallback table discovery failed: {e}")
             return []
@@ -517,7 +532,6 @@ class SchemaDiscoveryNode(Node):
         except Exception as e:
             logger.warning(f"Failed to load table schemas: {e}")
             # Don't fail the entire node for schema loading issues
-
 
     def execute(self) -> BaseResult:
         """
@@ -561,35 +575,33 @@ class SchemaDiscoveryNode(Node):
         """
         try:
             if not self.result or not self.result.success:
-                return {
-                    "success": False,
-                    "message": "Schema discovery failed, cannot update context"
-                }
+                return {"success": False, "message": "Schema discovery failed, cannot update context"}
 
             # If result has schema information, update workflow context
-            if hasattr(self.result, 'data') and self.result.data:
+            if hasattr(self.result, "data") and self.result.data:
                 output = self.result.data
 
                 # Update candidate tables if available
-                if 'candidate_tables' in output:
+                if "candidate_tables" in output:
                     # Store discovered tables in workflow metadata for downstream nodes
-                    if not hasattr(workflow, 'metadata'):
+                    if not hasattr(workflow, "metadata"):
                         workflow.metadata = {}
-                    workflow.metadata['discovered_tables'] = output['candidate_tables']
+                    workflow.metadata["discovered_tables"] = output["candidate_tables"]
 
-                # Update table schemas if they were loaded
-                if 'table_schemas' in output and workflow.context:
-                    workflow.context.table_schemas.update(output.get('table_schemas', {}))
-                    workflow.context.table_values.update(output.get('table_values', {}))
+                # Note: Table schemas are already loaded via _load_table_schemas() which calls
+                # workflow.context.update_schema_and_values(). The schema loading happens
+                # during the run() method before this update_context() is called.
+                if "table_schemas" in output and workflow.context:
+                    # Schemas were already loaded by _load_table_schemas(), log for verification
+                    schema_count = len(workflow.context.table_schemas)
+                    value_count = len(workflow.context.table_values)
+                    logger.debug(f"Schema discovery context contains {schema_count} schemas and {value_count} values")
 
             return {
                 "success": True,
-                "message": f"Schema discovery context updated with {len(self.result.data.get('candidate_tables', []))} tables"
+                "message": f"Schema discovery context updated with {len(self.result.data.get('candidate_tables', []))} tables",
             }
 
         except Exception as e:
             logger.error(f"Failed to update schema discovery context: {str(e)}")
-            return {
-                "success": False,
-                "message": f"Schema discovery context update failed: {str(e)}"
-            }
+            return {"success": False, "message": f"Schema discovery context update failed: {str(e)}"}

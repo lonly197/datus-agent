@@ -11,11 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath("."))
 
 try:
-    from datus.agent.node.execution_event_manager import (
-        ExecutionContext,
-        ExecutionEventManager,
-        create_execution_mode,
-    )
+    from datus.agent.node.execution_event_manager import ExecutionContext, ExecutionEventManager, create_execution_mode
     from datus.schemas.action_history import ActionHistoryManager
 
     async def test_execution_manager():

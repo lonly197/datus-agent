@@ -48,14 +48,31 @@ class SchemaLinkingNode(Node):
             yield action
 
     def update_context(self, workflow: Workflow) -> Dict:
-        """Update schema linking results to workflow context."""
+        """Update schema linking results to workflow context.
+
+        When schema_linking is triggered by reflection, it may find additional
+        tables that weren't discovered by the initial schema_discovery. This
+        method merges the new schemas with existing ones.
+        """
         result = self.result
         try:
             if len(workflow.context.table_schemas) == 0:
+                # First schema linking - set directly
                 workflow.context.table_schemas = result.table_schemas
                 workflow.context.table_values = result.table_values
+                logger.info(f"Schema linking set initial context with {len(result.table_schemas)} schemas")
             else:
-                pass  # if it's not the first schema linking, wait it after execute_sql
+                # Merge schemas: add only tables that don't already exist
+                existing_table_names = {s.table_name for s in workflow.context.table_schemas}
+                new_schemas = [s for s in result.table_schemas if s.table_name not in existing_table_names]
+                new_values = [v for v in result.table_values if v.table_name not in existing_table_names]
+
+                if new_schemas:
+                    workflow.context.table_schemas.extend(new_schemas)
+                    workflow.context.table_values.extend(new_values)
+                    logger.info(f"Schema linking added {len(new_schemas)} new tables to existing context")
+                else:
+                    logger.debug("Schema linking found no new tables to add to context")
 
             return {"success": True, "message": "Updated schema linking context"}
         except Exception as e:
@@ -124,25 +141,25 @@ class SchemaLinkingNode(Node):
         tool = None
         try:
             tool = SchemaLineageTool(agent_config=self.agent_config)
-            
+
             # Execute with RAG tool
             result = tool.execute(self.input, self.model)
             if not result.success:
                 logger.warning(f"Schema linking failed: {result.error}")
                 return self._execute_schema_linking_fallback(tool)
-                
+
             logger.info(f"Schema linking result: found {len(result.table_schemas)} tables")
             if len(result.table_schemas) > 0:
                 return result
-                
+
             logger.info("No tables found, using fallback method")
             return self._execute_schema_linking_fallback(tool)
-            
+
         except Exception as e:
             logger.warning(f"Schema linking tool initialization/execution failed: {e}")
             if tool:
                 return self._execute_schema_linking_fallback(tool)
-                
+
             # If tool failed to initialize, try to initialize it with minimal dependencies for fallback
             # Note: This assumes SchemaLineageTool might fail due to storage issues but we still want fallback
             try:

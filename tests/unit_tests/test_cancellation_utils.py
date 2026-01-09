@@ -1,11 +1,14 @@
 import asyncio
 import unittest
+
 from datus.utils.async_utils import await_cancellable, ensure_not_cancelled
+
 
 class TestAsyncUtils(unittest.IsolatedAsyncioTestCase):
     async def test_await_cancellable_success(self):
         async def fast_task():
             return "done"
+
         result = await await_cancellable(fast_task(), timeout=1.0)
         self.assertEqual(result, "done")
 
@@ -13,6 +16,7 @@ class TestAsyncUtils(unittest.IsolatedAsyncioTestCase):
         async def slow_task():
             await asyncio.sleep(2.0)
             return "done"
+
         with self.assertRaises(asyncio.TimeoutError):
             await await_cancellable(slow_task(), timeout=0.1)
 
@@ -20,7 +24,7 @@ class TestAsyncUtils(unittest.IsolatedAsyncioTestCase):
         async def slow_task():
             await asyncio.sleep(2.0)
             return "done"
-        
+
         task = asyncio.create_task(await_cancellable(slow_task(), timeout=5.0))
         await asyncio.sleep(0.1)
         task.cancel()
@@ -40,5 +44,6 @@ class TestAsyncUtils(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await t
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()
