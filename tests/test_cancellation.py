@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from datus.api.service import RunningTask, Service
+from datus.api.service import Service
 from datus.utils.async_utils import await_cancellable, ensure_not_cancelled
 
 

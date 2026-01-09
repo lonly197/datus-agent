@@ -6,7 +6,7 @@
 IntentAnalysisNode implementation for analyzing query intent.
 """
 
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, Optional, TYPE_CHECKING
 
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
@@ -16,6 +16,9 @@ from datus.schemas.base import BaseResult
 from datus.schemas.node_models import BaseInput
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
+
+if TYPE_CHECKING:
+    from datus.agent.intent_detection import IntentResult
 
 logger = get_logger(__name__)
 
@@ -231,8 +234,6 @@ class IntentAnalysisNode(Node):
 
         # First try heuristic detection (fast)
         heuristic_result = detector.detect_sql_intent_by_keyword(task_text)
-        # Convert heuristic result to IntentResult format
-        from datus.agent.intent_detection import IntentResult
 
         is_sql_intent, metadata = heuristic_result
 

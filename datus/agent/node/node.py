@@ -567,7 +567,7 @@ class Node(ErrorHandlerMixin, ABC):
         operation: str,
         error_details: Optional[Dict[str, Any]] = None,
         retryable: bool = False,
-    ) -> NodeErrorResult:
+    ) -> UtilsNodeErrorResult:
         """
         Create a standardized error result for this node.
 

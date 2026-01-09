@@ -12,9 +12,6 @@ import time
 sys.path.insert(0, os.path.abspath("."))
 
 import json
-
-# Define monitoring components locally to avoid import issues
-import time
 from collections import defaultdict, deque
 from typing import Any, Dict, Optional
 
@@ -385,10 +382,10 @@ class ExecutionMonitor:
         trends = report["performance_trends"][-5:]
         if trends:
             for i, trend in enumerate(trends):
-                trend.get("duration", 0)
-                trend.get("todos_count", 0)
+                duration = trend.get("duration", 0)
+                todos_count = trend.get("todos_count", 0)
                 status_icon = "✅" if trend.get("status") == "completed" else "❌"
-                dashboard_lines.append(".1f")
+                dashboard_lines.append(f"║ {i+1}. {duration:.2f}s | {todos_count} todos | {status_icon}                      ║")
         else:
             dashboard_lines.append("║                              No recent executions                          ║")
 

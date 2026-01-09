@@ -15,8 +15,6 @@ are sufficient for generating SQL for the given query. It checks for:
 import re
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-import jieba
-
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
@@ -253,128 +251,38 @@ class SchemaValidationNode(Node):
 
     def _extract_query_terms(self, query: str) -> List[str]:
         """
-        Extract key terms from the query for schema matching.
-
-        Uses jieba for Chinese word segmentation and regex for English.
-        This hybrid approach ensures proper tokenization for mixed-language queries.
+        Extract key terms from the query for schema matching using LLM.
         """
-        # Common SQL and business terms to look for (stop words)
-        # Only include pure grammatical particles, not business terms
-        stop_words = {
-            # English stop words (pure grammatical particles)
-            "the",
-            "a",
-            "an",
-            "and",
-            "or",
-            "but",
-            "in",
-            "on",
-            "at",
-            "to",
-            "for",
-            "of",
-            "with",
-            "by",
-            "from",
-            "as",
-            "is",
-            "was",
-            "are",
-            "were",
-            "be",
-            "this",
-            "that",
-            "these",
-            "those",
-            "what",
-            "which",
-            "who",
-            "when",
-            "where",
-            "how",
-            "why",
-            "all",
-            "each",
-            "every",
-            "both",
-            "few",
-            "more",
-            "most",
-            "other",
-            "some",
-            "such",
-            "no",
-            "not",
-            "only",
-            "own",
-            "same",
-            "so",
-            "than",
-            "too",
-            "very",
-            "just",
-            "also",
-            "now",
-            "here",
-            "there",
-            "then",
-            "once",
-            "get",
-            "got",
-            "make",
-            "go",
-            "see",
-            "know",
-            "take",
-            "come",
-            "think",
-            "look",
-            "want",
-            "give",
-            "use",
-            "find",
-            "tell",
-            "ask",
-            "work",
-            "seem",
-            "feel",
-            "try",
-            "leave",
-            "call",
-            "show",
-            # Chinese stop words (pure grammatical particles only)
-            # Removed: "统计", "分析" (may have business meaning)
-            "的",
-            "了",
-            "和",
-            "与",
-            "或",
-            "在",
-            "从",
-            "到",
-            "是",
-            "这",
-            "那",
-            "每",
-            "个",
-        }
+        if not query:
+            return []
 
-        # Detect if query contains Chinese characters
-        has_chinese = any("\u4e00" <= char <= "\u9fff" for char in query)
+        prompt = f"""
+Extract key business terms from the following user query for database schema matching.
+Focus on potential table names, column names, and business concepts.
+Ignore common stop words and grammatical particles.
+Return a JSON object with a single key "terms" containing a list of strings.
 
-        if has_chinese:
-            # Use jieba for Chinese word segmentation
-            words = jieba.lcut(query)
-            # Filter out stop words and short terms
-            terms = [w for w in words if w not in stop_words and len(w) > 1]
-        else:
-            # Use regex for English
+Query: {query}
+"""
+        try:
+            # Use LLM to extract terms
+            # generate_with_json_output is synchronous in OpenAICompatibleModel
+            response = self.model.generate_with_json_output(prompt)
+            terms = response.get("terms", [])
+
+            # Ensure all terms are strings and remove duplicates
+            cleaned_terms = list(set([str(t) for t in terms if isinstance(t, (str, int, float))]))
+
+            logger.info(f"LLM extracted terms for query '{query}': {cleaned_terms}")
+            return cleaned_terms
+
+        except Exception as e:
+            logger.warning(f"LLM term extraction failed: {e}. Fallback to simple regex split.")
+            # Fallback to simple split if LLM fails
             words = re.findall(r"\b\w+\b", query)
-            # Filter out stop words and short words
-            terms = [w for w in words if w.lower() not in stop_words and len(w) > 2]
-
-        return terms
+            # Simple stop word filtering for fallback
+            stop_words = {"the", "a", "an", "and", "or", "in", "on", "at", "to", "for", "of", "with", "is", "are"}
+            return [w for w in words if w.lower() not in stop_words and len(w) > 1]
 
     def _calculate_coverage_threshold(self, query_terms: List[str]) -> float:
         """
