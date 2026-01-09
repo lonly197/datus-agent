@@ -339,16 +339,48 @@ class AgenticNode(Node):
 
         node_config = nodes_config[node_name]
 
-        # Extract configuration attributes
+        # Extract configuration in stages
+        config = {}
+        config.update(self._extract_basic_config(node_config))
+        config.update(self._extract_direct_attributes(node_config))
+        config = self._normalize_config_special_fields(config)
+
+        logger.info(f"Parsed node configuration for '{node_name}': {config}")
+        return config
+
+    def _extract_basic_config(self, node_config: Any) -> dict:
+        """
+        Extract basic configuration fields from node config.
+
+        Args:
+            node_config: Raw node configuration (dict or object)
+
+        Returns:
+            Dictionary with basic config fields
+        """
         config = {}
 
-        # Basic node config attributes
+        # Extract model field
         if isinstance(node_config, dict):
             config["model"] = node_config.get("model")
         elif hasattr(node_config, "model"):
             config["model"] = node_config.model
 
-        # Check direct attributes on node_config
+        return config
+
+    def _extract_direct_attributes(self, node_config: Any) -> dict:
+        """
+        Extract direct attributes from node config.
+
+        Args:
+            node_config: Raw node configuration
+
+        Returns:
+            Dictionary with attribute values
+        """
+        config = {}
+
+        # Attributes to extract
         direct_attributes = [
             "system_prompt",
             "agent_description",
@@ -363,32 +395,57 @@ class AgenticNode(Node):
             "scoped_context",
             "scoped_kb_path",
         ]
+
         for attr in direct_attributes:
-            # Handle both dict and object access patterns
-            if attr not in config:
-                value = None
-                if isinstance(node_config, dict):
-                    value = node_config.get(attr)
-                elif hasattr(node_config, attr):
-                    value = getattr(node_config, attr)
+            if attr in config:  # Skip if already extracted
+                continue
 
-                if value is not None:
-                    config[attr] = value
+            value = None
+            if isinstance(node_config, dict):
+                value = node_config.get(attr)
+            elif hasattr(node_config, attr):
+                value = getattr(node_config, attr)
 
-        # Normalize rules: convert dict items to strings (YAML parsing issue workaround)
-        if "rules" in config and isinstance(config["rules"], list):
-            normalized_rules = []
-            for rule in config["rules"]:
-                if isinstance(rule, dict):
-                    # Convert dict to string format "key: value"
-                    rule_str = ", ".join(f"{k}: {v}" for k, v in rule.items())
-                    normalized_rules.append(rule_str)
-                else:
-                    normalized_rules.append(str(rule))
-            config["rules"] = normalized_rules
+            if value is not None:
+                config[attr] = value
 
-        logger.info(f"Parsed node configuration for '{node_name}': {config}")
         return config
+
+    def _normalize_config_special_fields(self, config: dict) -> dict:
+        """
+        Normalize special configuration fields that need processing.
+
+        Args:
+            config: Configuration dictionary
+
+        Returns:
+            Normalized configuration dictionary
+        """
+        # Normalize rules: convert dict items to strings (YAML parsing workaround)
+        if "rules" in config and isinstance(config["rules"], list):
+            config["rules"] = self._normalize_rules(config["rules"])
+
+        return config
+
+    def _normalize_rules(self, rules: list) -> list:
+        """
+        Normalize rules list to ensure all items are strings.
+
+        Args:
+            rules: List of rules (may contain dicts from YAML parsing)
+
+        Returns:
+            List of string rules
+        """
+        normalized_rules = []
+        for rule in rules:
+            if isinstance(rule, dict):
+                # Convert dict to string format "key: value"
+                rule_str = ", ".join(f"{k}: {v}" for k, v in rule.items())
+                normalized_rules.append(rule_str)
+            else:
+                normalized_rules.append(str(rule))
+        return normalized_rules
 
     def setup_input(self, workflow: "Workflow") -> Dict:
         """
@@ -583,23 +640,6 @@ class AgenticNode(Node):
         """
         raise NotImplementedError("execute_stream() must be implemented by subclasses")
 
-    def clear_session(self) -> None:
-        """Clear the current session and reset token count."""
-        if self.model and self.session_id:
-            self.model.clear_session(self.session_id)
-            self._session = None
-            self._session_tokens = 0  # Reset token count
-            logger.info(f"Cleared session: {self.session_id}, tokens reset to 0")
-
-    def delete_session(self) -> None:
-        """Delete the current session completely and reset token count."""
-        if self.model and self.session_id:
-            self.model.delete_session(self.session_id)
-            self._session = None
-            self.session_id = None
-            self._session_tokens = 0  # Reset token count
-            logger.info("Deleted session, tokens reset to 0")
-
     def get_session_info(self) -> Dict[str, Any]:
         """
         Get information about the current session.
@@ -667,3 +707,92 @@ class AgenticNode(Node):
             logger.debug(f"Expanded workspace_root from '{workspace_root}' to '{expanded_path}'")
 
         return expanded_path
+
+    def __del__(self) -> None:
+        """
+        Destructor to ensure session cleanup when node is garbage collected.
+
+        This prevents resource leaks by ensuring SQLite sessions are properly
+        deleted even if explicit cleanup is not called.
+
+        Note: Exceptions in destructors are suppressed as per Python best practices.
+        """
+        try:
+            if self._session is not None:
+                logger.debug(f"AgenticNode.__del__: Cleaning up session {self.session_id}")
+                self._cleanup_session_internal()
+        except Exception:
+            # Suppress exceptions in destructor
+            pass
+
+    def _cleanup_session_internal(self) -> None:
+        """
+        Internal method to clean up session resources without logging overhead.
+
+        This method performs the actual cleanup without verbose logging, making it
+        suitable for calling from __del__ and other cleanup paths.
+
+        The cleanup always clears session references to prevent double-cleanup issues.
+        """
+        if self.model and self.session_id:
+            try:
+                self.model.delete_session(self.session_id)
+            except Exception as e:
+                logger.debug(f"Failed to delete session {self.session_id}: {e}")
+            finally:
+                # Always clear references to prevent double-cleanup
+                self._session = None
+                self.session_id = None
+                self._session_tokens = 0
+
+    def clear_session(self) -> None:
+        """
+        Clear the current session's message history and reset token count.
+
+        This method preserves the session ID but removes all messages from the
+        session history. Use this when you want to start fresh with the same
+        session (e.g., new conversation with same context).
+
+        Note: This is different from delete_session() which removes the session
+        entirely. Use clear_session for soft reset, delete_session for hard reset.
+        """
+        if self.model and self.session_id:
+            self.model.clear_session(self.session_id)
+            self._session = None
+            self._session_tokens = 0
+            logger.info(f"Cleared session messages: {self.session_id}, tokens reset to 0")
+
+    def delete_session(self) -> None:
+        """
+        Delete the current session completely and reset all session state.
+
+        This method removes the session entirely from storage and clears all
+        session-related state including session_id. Use this when you want to
+        completely clean up (e.g., node destruction, workflow completion).
+
+        Note: This is different from clear_session() which preserves the session.
+        Use delete_session for complete cleanup, clear_session for soft reset.
+        """
+        self._cleanup_session_internal()
+        logger.info(
+            f"Deleted session: {self.session_id if hasattr(self, '_session_id_before_cleanup') else 'N/A'}"
+        )
+
+    async def __aenter__(self):
+        """
+        Async context manager entry for automatic cleanup.
+
+        Usage:
+            async with agentic_node:
+                result = await agentic_node.execute_stream()
+        """
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """
+        Async context manager exit with automatic session cleanup.
+
+        Ensures sessions are cleaned up even if exceptions occur.
+        """
+        self.delete_session()
+        return False

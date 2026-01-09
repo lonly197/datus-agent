@@ -59,8 +59,24 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
 
     ActionHistory events yielded by execute_stream are forwarded to the node's
     action_history_manager for proper event tracking.
+
+    Args:
+        node: The node to execute
+
+    Returns:
+        BaseResult with execution results
     """
     import concurrent.futures
+
+    # Determine timeout from agent config or use default
+    timeout = 60  # Default timeout
+    if hasattr(node, 'agent_config') and node.agent_config:
+        timeout = getattr(node.agent_config, 'async_stream_timeout_seconds', 60)
+
+    # Determine max_workers from agent config or use default
+    max_workers = 1  # Default to single thread for async stream execution
+    if hasattr(node, 'agent_config') and node.agent_config:
+        max_workers = getattr(node.agent_config, 'parallel_min_workers', 1)
 
     def _run_async_in_thread():
         """Run the async operation in a separate thread to avoid event loop conflicts."""
@@ -86,9 +102,9 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
 
     try:
         # Run async operation in a thread to avoid conflicts with pytest's event loop
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future = executor.submit(_run_async_in_thread)
-            last_action = future.result(timeout=60)  # 60 second timeout
+            last_action = future.result(timeout=timeout)
 
         # Infer result from the last ActionHistory and node state
         from datus.schemas.action_history import ActionStatus
@@ -344,6 +360,71 @@ class Node(ErrorHandlerMixin, ABC):
         if error:
             self.result = BaseResult(success=False, error=error)
         self.end_time = time.time()
+
+    def execute_with_standardized_handling(self) -> BaseResult:
+        """
+        Execute this node with standardized initialization, status management, and error handling.
+
+        This helper method encapsulates the common pattern of node execution:
+        1. Initialize the node (model, tools, etc.)
+        2. Mark node as started
+        3. Execute the node's core logic
+        4. Finalize status based on result (complete or fail)
+        5. Handle both successful and error cases uniformly
+
+        This method should be used by wrapper nodes (ParallelNode, SubworkflowNode)
+        to ensure consistent child node execution behavior.
+
+        Returns:
+            BaseResult: The execution result with proper error handling
+
+        Example:
+            # In ParallelNode._execute_child_node
+            result = child_node.execute_with_standardized_handling()
+        """
+        try:
+            self._initialize()
+            self.start()
+
+            # Execute the node's core logic
+            result = self.execute()  # This sets self.result
+
+            # Finalize status based on result
+            if result is not None:
+                if hasattr(result, "success") and result.success:
+                    self.complete(result)
+                elif isinstance(result, (UtilsNodeErrorResult, AgentNodeErrorResult)):
+                    # Standardized error result - error message is stored in 'error' attribute
+                    self.fail(result.error if hasattr(result, "error") else str(result))
+                else:
+                    # Non-success result
+                    error_msg = getattr(result, "error", "Execution failed")
+                    self.fail(f"Node execution failed: {error_msg}")
+            else:
+                self.fail("Node execution returned no result")
+
+            return self.result
+
+        except DatusException as e:
+            # Already standardized exception
+            self.fail(str(e))
+            # Convert to error result if needed
+            if not isinstance(self.result, (UtilsNodeErrorResult, AgentNodeErrorResult)):
+                self.result = self.create_error_result(
+                    e.code, str(e), "node_execution", error_details=e.message_args
+                )
+            return self.result
+        except Exception as e:
+            # Generic exception - use unified error handling
+            error_result = self.create_error_result(
+                ErrorCode.NODE_EXECUTION_FAILED,
+                f"Unexpected error during {self.type} execution: {str(e)}",
+                "node_execution",
+                error_details={"exception_type": type(e).__name__},
+            )
+            self.fail(error_result.error)
+            self.result = error_result
+            return self.result
 
     @abstractmethod
     def execute(self) -> BaseResult:

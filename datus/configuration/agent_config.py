@@ -273,6 +273,14 @@ class AgentConfig:
         self.default_query_timeout_seconds = int(kwargs.get("default_query_timeout_seconds", 60))
         self.db_type = ""
 
+        # Node execution configuration (v2.5)
+        # async_stream_timeout_seconds: Timeout for async stream execution in node.py
+        self.async_stream_timeout_seconds = int(kwargs.get("async_stream_timeout_seconds", 60))
+        # parallel_max_workers: Maximum concurrent workers for parallel node execution
+        self.parallel_max_workers = int(kwargs.get("parallel_max_workers", 10))
+        # parallel_min_workers: Minimum workers for thread pool execution
+        self.parallel_min_workers = int(kwargs.get("parallel_min_workers", 1))
+
         # Plan executor configuration (keyword map and fallback toggle)
         plan_executor_config = kwargs.get("plan_executor", {})
         self.plan_executor_keyword_map = plan_executor_config.get("keyword_tool_map", None)

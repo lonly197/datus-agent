@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from typing import Optional, get_type_hints
+from typing import Dict, Optional, Type, get_type_hints
 
 from pydantic import BaseModel, create_model
 
@@ -23,6 +23,9 @@ from datus.schemas.subworkflow_node_models import SubworkflowInput
 
 
 class NodeType:
+    # Registry for node type to input class mapping
+    _input_class_registry: Dict[str, Type[BaseInput]] = {}
+
     # Workflow control node types
     TYPE_BEGIN = "start"
     # TYPE_EVALUATE = "evaluate"
@@ -110,54 +113,94 @@ class NodeType:
         return cls.NODE_TYPE_DESCRIPTIONS.get(node_type, f"Unknown node type: {node_type} for workflow")
 
     @classmethod
-    def type_input(cls, node_type: str, input_data: dict, ignore_require_check: bool = False):
-        # TODO: use factory pattern to create the input data
-        if node_type == NodeType.TYPE_SCHEMA_LINKING:
-            input_data_cls = SchemaLinkingInput
-        elif node_type == NodeType.TYPE_GENERATE_SQL:
-            input_data_cls = GenerateSQLInput
-        elif node_type == NodeType.TYPE_EXECUTE_SQL:
-            input_data_cls = ExecuteSQLInput
-        elif node_type == NodeType.TYPE_REFLECT:
-            input_data_cls = ReflectionInput
-        elif node_type == NodeType.TYPE_REASONING:
-            input_data_cls = ReasoningInput
-        elif node_type == NodeType.TYPE_OUTPUT:
-            input_data_cls = OutputInput
-        elif node_type == NodeType.TYPE_FIX:
-            input_data_cls = FixInput
-        elif node_type == NodeType.TYPE_DOC_SEARCH:
-            input_data_cls = DocSearchInput
-        elif node_type == NodeType.TYPE_SEARCH_METRICS:
-            input_data_cls = SearchMetricsInput
-        elif node_type == NodeType.TYPE_PARALLEL:
-            input_data_cls = ParallelInput
-        elif node_type == NodeType.TYPE_SELECTION:
-            input_data_cls = SelectionInput
-        elif node_type == NodeType.TYPE_SUBWORKFLOW:
-            input_data_cls = SubworkflowInput
-        elif node_type == NodeType.TYPE_COMPARE:
-            input_data_cls = CompareInput
-        elif node_type == NodeType.TYPE_DATE_PARSER:
-            input_data_cls = DateParserInput
-        elif node_type == NodeType.TYPE_INTENT_ANALYSIS:
-            input_data_cls = BaseInput
-        elif node_type == NodeType.TYPE_SCHEMA_DISCOVERY:
-            input_data_cls = BaseInput
-        elif node_type == NodeType.TYPE_SCHEMA_VALIDATION:
-            input_data_cls = BaseInput
-        elif node_type == NodeType.TYPE_RESULT_VALIDATION:
-            input_data_cls = BaseInput
-        elif node_type == NodeType.TYPE_CHAT:
-            input_data_cls = ChatNodeInput
-        elif node_type == NodeType.TYPE_GENSQL:
-            input_data_cls = GenSQLNodeInput
-        elif node_type == NodeType.TYPE_SEMANTIC:
-            input_data_cls = SemanticNodeInput
-        elif node_type == NodeType.TYPE_SQL_SUMMARY:
-            input_data_cls = SqlSummaryNodeInput
-        else:
-            raise NotImplementedError(f"node_type {node_type} not implemented")
+    def register_input_class(cls, node_type: str, input_class: Type[BaseInput]) -> None:
+        """
+        Register an input class for a node type.
+
+        This allows extending node types without modifying the NodeType class,
+        following the Open/Closed Principle.
+
+        Args:
+            node_type: The node type identifier
+            input_class: The input class to register
+
+        Example:
+            NodeType.register_input_class("custom_node", CustomNodeInput)
+        """
+        cls._input_class_registry[node_type] = input_class
+
+    @classmethod
+    def _get_default_input_classes(cls) -> Dict[str, Type[BaseInput]]:
+        """
+        Get the default mapping of node types to input classes.
+
+        This method is called once to initialize the registry with built-in
+        node types. Custom node types can be added using register_input_class().
+
+        Returns:
+            Dictionary mapping node type strings to input classes
+        """
+        return {
+            cls.TYPE_SCHEMA_LINKING: SchemaLinkingInput,
+            cls.TYPE_GENERATE_SQL: GenerateSQLInput,
+            cls.TYPE_EXECUTE_SQL: ExecuteSQLInput,
+            cls.TYPE_REFLECT: ReflectionInput,
+            cls.TYPE_REASONING: ReasoningInput,
+            cls.TYPE_OUTPUT: OutputInput,
+            cls.TYPE_FIX: FixInput,
+            cls.TYPE_DOC_SEARCH: DocSearchInput,
+            cls.TYPE_SEARCH_METRICS: SearchMetricsInput,
+            cls.TYPE_PARALLEL: ParallelInput,
+            cls.TYPE_SELECTION: SelectionInput,
+            cls.TYPE_SUBWORKFLOW: SubworkflowInput,
+            cls.TYPE_COMPARE: CompareInput,
+            cls.TYPE_DATE_PARSER: DateParserInput,
+            cls.TYPE_INTENT_ANALYSIS: BaseInput,
+            cls.TYPE_SCHEMA_DISCOVERY: BaseInput,
+            cls.TYPE_SCHEMA_VALIDATION: BaseInput,
+            cls.TYPE_RESULT_VALIDATION: BaseInput,
+            cls.TYPE_CHAT: ChatNodeInput,
+            cls.TYPE_GENSQL: GenSQLNodeInput,
+            cls.TYPE_SEMANTIC: SemanticNodeInput,
+            cls.TYPE_SQL_SUMMARY: SqlSummaryNodeInput,
+        }
+
+    @classmethod
+    def type_input(
+        cls, node_type: str, input_data: dict, ignore_require_check: bool = False
+    ) -> BaseInput:
+        """
+        Create an input instance for the given node type.
+
+        This method uses a registry pattern to map node types to their input
+        classes, making it extensible without modifying this method.
+
+        Args:
+            node_type: The type of node
+            input_data: Dictionary of input data
+            ignore_require_check: If True, make all fields optional
+
+        Returns:
+            An instance of the appropriate input class
+
+        Raises:
+            NotImplementedError: If node_type is not registered
+
+        Example:
+            input_obj = NodeType.type_input("generate_sql", {"task": "..."})
+        """
+        # Initialize registry on first call
+        if not cls._input_class_registry:
+            cls._input_class_registry = cls._get_default_input_classes()
+
+        # Look up input class in registry
+        input_data_cls = cls._input_class_registry.get(node_type)
+
+        if input_data_cls is None:
+            raise NotImplementedError(
+                f"Node type '{node_type}' not implemented. "
+                f"Available types: {list(cls._input_class_registry.keys())}"
+            )
 
         if ignore_require_check:
             input_data_cls = cls.make_optional_model(input_data_cls)
@@ -166,7 +209,18 @@ class NodeType:
 
     # By default, Pydantic v2 validates required fields, but since we are using it as a config,
     # we don't need that strict validation. Therefore, we introduce this to relax the checks.
-    def make_optional_model(base_model: type[BaseModel], name_suffix="_Relaxed"):
+    @classmethod
+    def make_optional_model(cls, base_model: type[BaseModel], name_suffix: str = "_Relaxed") -> type[BaseModel]:
+        """
+        Create a relaxed version of a Pydantic model with all fields optional.
+
+        Args:
+            base_model: The base model to relax
+            name_suffix: Suffix to add to the generated model name
+
+        Returns:
+            A new model class with all fields optional
+        """
         # Get field types from class annotations
         type_hints = get_type_hints(base_model)
 

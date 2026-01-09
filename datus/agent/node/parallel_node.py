@@ -79,8 +79,17 @@ class ParallelNode(Node):
             # Create child nodes
             child_nodes = self._create_child_nodes(workflow)
 
+            # Determine max_workers from agent config with sensible defaults
+            max_workers = len(child_nodes)  # Default to number of child nodes
+            if hasattr(self, 'agent_config') and self.agent_config:
+                max_workers = min(
+                    max_workers,
+                    getattr(self.agent_config, 'parallel_max_workers', 10)
+                )
+            logger.info(f"Parallel execution: {len(child_nodes)} children with max_workers={max_workers}")
+
             # Execute child nodes in parallel using ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=len(child_nodes)) as executor:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # Submit all child node executions
                 future_to_node = {executor.submit(self._execute_child_node, node): node.id for node in child_nodes}
 
@@ -234,50 +243,33 @@ class ParallelNode(Node):
         return child_nodes
 
     def _execute_child_node(self, child_node: Node) -> Dict:
-        """Execute a single child node"""
-        try:
-            logger.info(f"Executing child node: {child_node.id}")
+        """
+        Execute a single child node using standardized execution pattern.
 
-            child_node._initialize()
+        This method leverages Node.execute_with_standardized_handling() to ensure
+        consistent execution behavior across all child nodes, including proper
+        error handling and status management.
 
-            child_node.start()
-            child_node.execute()  # This sets child_node.result
+        Args:
+            child_node: The child node to execute
 
-            result = child_node.result
+        Returns:
+            Dictionary with execution results including success status, node info
+        """
+        logger.info(f"Executing child node: {child_node.id}")
 
-            success = False
-            if result is not None:
-                # Check if result has success attribute and it's True
-                if hasattr(result, "success") and result.success:
-                    success = True
-                    child_node.complete(result)
-                else:
-                    # Result exists but indicates failure
-                    error_msg = getattr(result, "error", "Execution failed")
-                    child_node.fail(f"Child node execution failed: {error_msg}")
-            else:
-                # No result returned
-                child_node.fail("Child node execution returned no result")
+        # Use standardized execution from base class
+        result = child_node.execute_with_standardized_handling()
 
-            return {
-                "success": success,
-                "status": child_node.status,
-                "result": result,
-                "node_id": child_node.id,
-                "node_type": child_node.type,
-                "start_time": child_node.start_time,
-                "end_time": child_node.end_time,
-            }
+        # Extract status information
+        success = child_node.status == "completed"
 
-        except Exception as e:
-            logger.error(f"Child node {child_node.id} execution failed: {str(e)}")
-            child_node.fail(str(e))
-            return {
-                "success": False,
-                "status": "failed",
-                "error": str(e),
-                "node_id": child_node.id,
-                "node_type": child_node.type,
-                "start_time": child_node.start_time,
-                "end_time": child_node.end_time,
-            }
+        return {
+            "success": success,
+            "status": child_node.status,
+            "result": result,
+            "node_id": child_node.id,
+            "node_type": child_node.type,
+            "start_time": child_node.start_time,
+            "end_time": child_node.end_time,
+        }
