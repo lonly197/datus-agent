@@ -18,44 +18,31 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
+from datus.configuration.business_term_config import (
+    SCHEMA_VALIDATION_CONFIG,
+    LLM_TERM_EXTRACTION_CONFIG,
+    get_schema_term_mapping,
+)
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseInput, BaseResult
 from datus.schemas.node_models import TableSchema
+from datus.utils.error_handler import LLMMixin, NodeExecutionResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
 
-class SchemaValidationNode(Node):
+class SchemaValidationNode(Node, LLMMixin):
     """
     Node for validating schema sufficiency before SQL generation.
 
     This node checks if the discovered schemas contain sufficient information
     to generate SQL for the given query. If schemas are insufficient, it
     provides actionable feedback for reflection strategies.
-    """
 
-    # Business term mapping: Chinese → English schema terms
-    # This enables semantic matching between Chinese business terminology
-    # and English database schema names
-    BUSINESS_TERM_MAPPING = {
-        # Test drive related
-        "试驾": ["test_drive", "test_drive_date", "trial_drive", "testdrive"],
-        "首次": ["first", "initial", "first_time"],
-        "线索": ["clue", "clue_id", "lead", "lead_id"],
-        # Order related
-        "下定": ["order", "order_date", "booking", "book"],
-        "订单": ["order", "order_id", "orders"],
-        "转化": ["conversion", "convert", "transform"],
-        # Time related
-        "周期": ["cycle", "period", "duration"],
-        "天数": ["days", "date_diff", "day_count"],
-        "月份": ["month", "monthly", "mth"],
-        # Statistics
-        "统计": ["count", "sum", "avg", "calculate", "compute"],
-        "平均": ["avg", "average", "mean"],
-    }
+    ✅ Fixed: Uses LLMMixin for LLM retry and centralized business term config.
+    """
 
     def __init__(
         self,
@@ -66,7 +53,8 @@ class SchemaValidationNode(Node):
         agent_config: Optional[AgentConfig] = None,
         tools: Optional[list] = None,
     ):
-        super().__init__(
+        Node.__init__(
+            self,
             node_id=node_id,
             description=description,
             node_type=node_type,
@@ -74,6 +62,7 @@ class SchemaValidationNode(Node):
             agent_config=agent_config,
             tools=tools,
         )
+        LLMMixin.__init__(self)
 
     def setup_input(self, workflow: Workflow) -> Dict[str, Any]:
         """Setup schema validation input from workflow context."""
@@ -249,35 +238,31 @@ class SchemaValidationNode(Node):
             )
             self.result = BaseResult(success=False, error=str(e))
 
-    def _extract_query_terms(self, query: str) -> List[str]:
+    async def _extract_query_terms(self, query: str) -> List[str]:
         """
         Extract key terms from the query for schema matching using LLM.
+
+        ✅ Fixed: Uses LLMMixin for automatic retry and configured prompt template.
         """
         if not query:
             return []
 
-        prompt = f"""
-Analyze the user query and extract key database search terms for schema matching.
+        # ✅ Use configured prompt template
+        prompt_template = LLM_TERM_EXTRACTION_CONFIG.get("prompt_template", "")
+        prompt = prompt_template.format(query=query)
 
-Rules:
-1. Extract potential table names, column names, and business concepts.
-2. Break down compound business terms into atomic concepts (e.g., "首次试驾" -> "首次", "试驾").
-3. Ignore common stop words and grammatical particles.
-4. Return a JSON object with a single key "terms" containing a list of strings.
-
-Examples:
-Input: "统计每个月首次试驾的平均转化周期"
-Output: {{"terms": ["统计", "每个月", "首次", "试驾", "平均", "转化", "周期"]}}
-
-Input: "查询最近一周的下定订单数"
-Output: {{"terms": ["查询", "最近", "一周", "下定", "订单", "数"]}}
-
-Query: {query}
-"""
         try:
-            # Use LLM to extract terms
-            # generate_with_json_output is synchronous in OpenAICompatibleModel
-            response = self.model.generate_with_json_output(prompt)
+            # ✅ Use LLMMixin with retry and caching
+            cache_key = f"llm_term_extraction:{hash(query)}"
+            max_retries = LLM_TERM_EXTRACTION_CONFIG.get("max_retries", 3)
+
+            response = await self.llm_call_with_retry(
+                prompt=prompt,
+                operation_name="term_extraction",
+                cache_key=cache_key,
+                max_retries=max_retries,
+            )
+
             terms = response.get("terms", [])
 
             # Ensure all terms are strings and remove duplicates
@@ -286,33 +271,44 @@ Query: {query}
             logger.info(f"LLM extracted terms for query '{query}': {cleaned_terms}")
             return cleaned_terms
 
+        except NodeExecutionResult as e:
+            logger.warning(f"LLM term extraction failed after retries: {e.error_message}. Fallback to regex.")
+            return self._fallback_term_extraction(query)
         except Exception as e:
-            logger.warning(f"LLM term extraction failed: {e}. Fallback to simple regex split.")
-            # Fallback to simple split if LLM fails
-            words = re.findall(r"\b\w+\b", query)
-            # Simple stop word filtering for fallback
-            stop_words = {"the", "a", "an", "and", "or", "in", "on", "at", "to", "for", "of", "with", "is", "are"}
-            return [w for w in words if w.lower() not in stop_words and len(w) > 1]
+            logger.warning(f"LLM term extraction failed with unexpected error: {e}. Fallback to regex.")
+            return self._fallback_term_extraction(query)
+
+    def _fallback_term_extraction(self, query: str) -> List[str]:
+        """Fallback to simple regex split if LLM fails."""
+        words = re.findall(r"\b\w+\b", query)
+        # Simple stop word filtering for fallback
+        stop_words = {"the", "a", "an", "and", "or", "in", "on", "at", "to", "for", "of", "with", "is", "are"}
+        return [w for w in words if w.lower() not in stop_words and len(w) > 1]
 
     def _calculate_coverage_threshold(self, query_terms: List[str]) -> float:
         """
         Calculate dynamic threshold based on query complexity.
 
-        Simple queries (≤3 terms) require higher coverage (50%).
-        Medium queries (4-6 terms) use standard coverage (30%).
-        Complex queries (>6 terms) allow lower coverage (20%).
+        ✅ Fixed: Uses configured thresholds from SCHEMA_VALIDATION_CONFIG.
         """
         term_count = len(query_terms)
-        if term_count <= 3:
-            return 0.5  # Simple queries need higher coverage
-        elif term_count <= 6:
-            return 0.3  # Standard threshold
+        thresholds = SCHEMA_VALIDATION_CONFIG.get("coverage_thresholds", {})
+
+        # Simple queries (≤3 terms) require higher coverage
+        if term_count <= thresholds.get("simple", {}).get("max_terms", 3):
+            return thresholds.get("simple", {}).get("threshold", 0.5)
+        # Medium queries (4-6 terms) use standard coverage
+        elif term_count <= thresholds.get("medium", {}).get("max_terms", 6):
+            return thresholds.get("medium", {}).get("threshold", 0.3)
+        # Complex queries (>6 terms) allow lower coverage
         else:
-            return 0.2  # Complex queries allow lower coverage
+            return thresholds.get("complex", {}).get("threshold", 0.2)
 
     def _check_schema_coverage(self, schemas: List[TableSchema], query_terms: List[str]) -> Dict[str, Any]:
         """
         Check how well the schemas cover the query terms.
+
+        ✅ Fixed: Uses centralized business term mapping from config for semantic matching.
 
         Uses semantic matching via business term mapping to enable Chinese-to-English
         schema matching. This allows queries with Chinese business terminology to
@@ -349,9 +345,9 @@ Query: {query}
                 covered.append(term)
                 continue
 
-            # Semantic match via business term mapping (Chinese → English)
-            if term in self.BUSINESS_TERM_MAPPING:
-                english_terms = self.BUSINESS_TERM_MAPPING[term]
+            # ✅ Semantic match via centralized business term mapping (Chinese → English)
+            english_terms = get_schema_term_mapping(term)
+            if english_terms:
                 # Check if any of the mapped English terms are in the schema
                 if any(eng_term.lower() in schema_terms for eng_term in english_terms):
                     logger.debug(f"Term '{term}' matched via semantic mapping: {english_terms}")
@@ -361,15 +357,19 @@ Query: {query}
                     logger.debug(f"Term '{term}' has mapping {english_terms} but no match found in schema")
 
             # Partial match for compound terms (e.g., "首次试驾" contains "试驾")
-            found_partial = False
-            for schema_term in schema_terms:
-                if term in schema_term or schema_term in term:
-                    logger.debug(f"Term '{term}' matched partially with '{schema_term}'")
-                    covered.append(term)
-                    found_partial = True
-                    break
+            if SCHEMA_VALIDATION_CONFIG.get("enable_partial_matching", True):
+                found_partial = False
+                for schema_term in schema_terms:
+                    if term in schema_term or schema_term in term:
+                        logger.debug(f"Term '{term}' matched partially with '{schema_term}'")
+                        covered.append(term)
+                        found_partial = True
+                        break
 
-            if not found_partial:
+                if not found_partial:
+                    logger.debug(f"Term '{term}' not found in schema (uncovered)")
+                    uncovered.append(term)
+            else:
                 logger.debug(f"Term '{term}' not found in schema (uncovered)")
                 uncovered.append(term)
 

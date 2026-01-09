@@ -14,6 +14,7 @@ from datus.schemas.action_history import ActionHistory, ActionHistoryManager, Ac
 from datus.schemas.base import BaseResult
 from datus.schemas.node_models import SqlTask
 from datus.utils.async_utils import ensure_not_cancelled
+from datus.utils.error_handler import check_reflect_node_reachable, NodeStatus
 from datus.utils.loggings import get_logger
 from datus.utils.traceable_utils import optional_traceable
 
@@ -222,16 +223,41 @@ class WorkflowRunner:
 
             is_soft_failure = False
             if current_node.status == "failed":
-                # Check if workflow has a reflect node for recovery
-                has_reflect = any(n.type == NodeType.TYPE_REFLECT for n in self.workflow.nodes.values())
+                # ✅ Fix: Check ActionStatus first (SOFT_FAILED vs FAILED)
+                if hasattr(current_node, 'last_action_status'):
+                    last_status = current_node.last_action_status
+                    if last_status == ActionStatus.SOFT_FAILED:
+                        is_soft_failure = True
+                        logger.info(f"Node returned SOFT_FAILED status: {current_node.description}")
+                    elif last_status == ActionStatus.FAILED:
+                        # Check if reflect node is reachable for recovery
+                        has_reflect = check_reflect_node_reachable(self.workflow)
 
-                if has_reflect:
-                    # Soft failure - continue to reflection for recovery
-                    logger.info(
-                        f"Node failed but workflow has reflection. Continuing as Soft Failure: {current_node.description}"
-                    )
-                    is_soft_failure = True
-                elif current_node.type == NodeType.TYPE_PARALLEL:
+                        if has_reflect:
+                            # Soft failure - continue to reflection for recovery
+                            logger.info(
+                                f"Node failed but reflect node is reachable. Continuing as Soft Failure: {current_node.description}"
+                            )
+                            is_soft_failure = True
+                        else:
+                            # Hard failure - no recovery path
+                            logger.warning(
+                                f"Node failed with no reachable reflect node. Hard Failure: {current_node.description}"
+                            )
+                    else:
+                        # Unknown status, default to checking for reflect
+                        has_reflect = check_reflect_node_reachable(self.workflow)
+                        is_soft_failure = has_reflect
+                else:
+                    # Fallback to old logic if last_action_status not available
+                    has_reflect = check_reflect_node_reachable(self.workflow)
+                    if has_reflect:
+                        logger.info(
+                            f"Node failed but workflow has reflection. Continuing as Soft Failure: {current_node.description}"
+                        )
+                        is_soft_failure = True
+
+                if not is_soft_failure and current_node.type == NodeType.TYPE_PARALLEL:
                     try:
                         has_any_success = False
                         if current_node.result and hasattr(current_node.result, "child_results"):
@@ -367,24 +393,52 @@ class WorkflowRunner:
 
                     is_soft_failure = False
                     if current_node.status == "failed":
-                        # Check if workflow has a reflect node for recovery
-                        has_reflect = any(n.type == NodeType.TYPE_REFLECT for n in self.workflow.nodes.values())
+                        # ✅ Fix: Check ActionStatus first (SOFT_FAILED vs FAILED)
+                        if hasattr(current_node, 'last_action_status'):
+                            last_status = current_node.last_action_status
+                            if last_status == ActionStatus.SOFT_FAILED:
+                                is_soft_failure = True
+                                logger.info(f"Node returned SOFT_FAILED status: {current_node.description}")
+                            elif last_status == ActionStatus.FAILED:
+                                # Check if reflect node is reachable for recovery
+                                has_reflect = check_reflect_node_reachable(self.workflow)
 
-                        if has_reflect:
-                            # Soft failure - continue to reflection for recovery
-                            logger.info(
-                                f"Node failed but workflow has reflection. Continuing as Soft Failure: {current_node.description}"
-                            )
-                            is_soft_failure = True
+                                if has_reflect:
+                                    # Soft failure - continue to reflection for recovery
+                                    logger.info(
+                                        f"Node failed but reflect node is reachable. Continuing as Soft Failure: {current_node.description}"
+                                    )
+                                    is_soft_failure = True
+                                else:
+                                    # Hard failure - terminate workflow
+                                    self._update_action_status(
+                                        node_start_action,
+                                        success=False,
+                                        error=f"Node execution failed (no recovery path): {current_node.description}",
+                                    )
+                                    logger.warning(f"Node failed with no reachable reflect: {current_node.description}")
+                                    break
+                            else:
+                                # Unknown status, default to checking for reflect
+                                has_reflect = check_reflect_node_reachable(self.workflow)
+                                is_soft_failure = has_reflect
                         else:
-                            # Hard failure - terminate workflow
-                            self._update_action_status(
-                                node_start_action,
-                                success=False,
-                                error=f"Node execution failed: {current_node.description}",
-                            )
-                            logger.warning(f"Node failed: {current_node.description}")
-                            break
+                            # Fallback to old logic if last_action_status not available
+                            has_reflect = check_reflect_node_reachable(self.workflow)
+                            if has_reflect:
+                                logger.info(
+                                    f"Node failed but workflow has reflection. Continuing as Soft Failure: {current_node.description}"
+                                )
+                                is_soft_failure = True
+                            else:
+                                # Hard failure - terminate workflow
+                                self._update_action_status(
+                                    node_start_action,
+                                    success=False,
+                                    error=f"Node execution failed: {current_node.description}",
+                                )
+                                logger.warning(f"Node failed: {current_node.description}")
+                                break
 
                     self._update_action_status(
                         node_start_action,

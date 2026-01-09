@@ -11,19 +11,27 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
+from datus.configuration.business_term_config import (
+    TABLE_DISCOVERY_STAGES,
+    LLM_TABLE_DISCOVERY_CONFIG,
+    get_business_term_mapping,
+    get_table_keyword_pattern,
+)
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseResult
 from datus.schemas.node_models import BaseInput
 from datus.storage.schema_metadata import SchemaWithValueRAG
 from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool.context_search import ContextSearchTools
+from datus.utils.context_lock import safe_context_update
+from datus.utils.error_handler import LLMMixin, NodeExecutionResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
 
-class SchemaDiscoveryNode(Node):
+class SchemaDiscoveryNode(Node, LLMMixin):
     """
     Node for discovering relevant schema and tables for a query.
 
@@ -40,7 +48,8 @@ class SchemaDiscoveryNode(Node):
         agent_config: Optional[AgentConfig] = None,
         tools: Optional[list] = None,
     ):
-        super().__init__(
+        Node.__init__(
+            self,
             node_id=node_id,
             description=description,
             node_type=node_type,
@@ -48,6 +57,7 @@ class SchemaDiscoveryNode(Node):
             agent_config=agent_config,
             tools=tools,
         )
+        LLMMixin.__init__(self)
 
     def setup_input(self, workflow: Workflow) -> Dict[str, Any]:
         """
@@ -368,6 +378,8 @@ class SchemaDiscoveryNode(Node):
         """
         Discover tables using keyword matching.
 
+        ✅ Fixed: Uses centralized configuration from business_term_config.py
+
         Args:
             task_text: Lowercase user query text
 
@@ -376,78 +388,11 @@ class SchemaDiscoveryNode(Node):
         """
         candidate_tables = []
 
-        # Simple keyword-based table discovery
-        table_keywords = [
-            # Common business tables
-            "user",
-            "users",
-            "customer",
-            "customers",
-            "order",
-            "orders",
-            "product",
-            "products",
-            "sale",
-            "sales",
-            "transaction",
-            "transactions",
-            "employee",
-            "employees",
-            "department",
-            "departments",
-            # Chinese keywords support
-            "用户",
-            "user",
-            "客户",
-            "customer",
-            "订单",
-            "order",
-            "产品",
-            "product",
-            "销售",
-            "sale",
-            "交易",
-            "transaction",
-            "员工",
-            "employee",
-            "部门",
-            "department",
-            "试驾",
-            "test_drive",  # Based on user query
-            "转化",
-            "conversion",
-            # Add more as needed
-        ]
+        # ✅ Use configured keyword patterns from business_term_config.py
+        from datus.configuration.business_term_config import TABLE_KEYWORD_PATTERNS
 
-        # Iterate in pairs (keyword, table_name)
-        # For English words, keyword == table_name (mostly)
-        # For Chinese words, keyword maps to English table_name
-
-        # Refined logic: the list above is mixed. Let's make it a mapping for better accuracy
-        keyword_map = {
-            "用户": "users",
-            "user": "users",
-            "客户": "customers",
-            "customer": "customers",
-            "订单": "orders",
-            "order": "orders",
-            "产品": "products",
-            "product": "products",
-            "销售": "sales",
-            "sale": "sales",
-            "交易": "transactions",
-            "transaction": "transactions",
-            "员工": "employees",
-            "employee": "employees",
-            "部门": "departments",
-            "department": "departments",
-            "试驾": "dwd_assign_dlr_clue_fact_di",  # Updated mapping based on log analysis
-            "线索": "dwd_assign_dlr_clue_fact_di",
-            "转化": "conversions",
-        }
-
-        # Check mapping first
-        for keyword, table_name in keyword_map.items():
+        # Check configured keyword patterns
+        for keyword, table_name in TABLE_KEYWORD_PATTERNS.items():
             if keyword in task_text:
                 candidate_tables.append(table_name)
                 # Also add singular/plural variations
@@ -456,40 +401,56 @@ class SchemaDiscoveryNode(Node):
                 else:
                     candidate_tables.append(table_name + "s")
 
-        # Fallback to the original list check for direct matches
-        for keyword in table_keywords:
-            if keyword in task_text and keyword not in keyword_map:
-                # Assuming keyword itself is a potential table name
-                candidate_tables.append(keyword)
-                table_name = keyword.rstrip("s")
-                if table_name != keyword:
-                    candidate_tables.append(table_name)
+                # ✅ Also check business term mappings for additional tables
+                business_mappings = get_business_term_mapping(keyword)
+                if business_mappings:
+                    candidate_tables.extend(business_mappings)
 
-        return candidate_tables
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_tables = []
+        for table in candidate_tables:
+            if table not in seen:
+                seen.add(table)
+                unique_tables.append(table)
+
+        return unique_tables
 
     async def _llm_based_table_discovery(self, query: str) -> List[str]:
         """
         Stage 1.5: Use LLM to infer potential English table names from Chinese query.
+
+        ✅ Fixed: Uses LLMMixin for automatic retry with exponential backoff
+        and configured prompt template from business_term_config.py
         """
         if not query:
             return []
 
-        prompt = f"""
-Analyze the user query and list potential database table names or business entities.
-The query might be in Chinese, but the database schema uses English table names.
-Translate business concepts into English database terms (e.g., "试驾" -> "test_drive", "lead", "clue").
-Return a JSON object with a single key "tables" containing a list of strings (potential English table names).
+        # ✅ Use configured prompt template
+        prompt_template = LLM_TABLE_DISCOVERY_CONFIG.get("prompt_template", "")
+        prompt = prompt_template.format(query=query)
 
-Query: {query}
-"""
         try:
-            response = self.model.generate_with_json_output(prompt)
+            # ✅ Use LLMMixin with retry and caching
+            cache_key = f"llm_table_discovery:{hash(query)}"
+            max_retries = LLM_TABLE_DISCOVERY_CONFIG.get("max_retries", 3)
+
+            response = await self.llm_call_with_retry(
+                prompt=prompt,
+                operation_name="table_discovery",
+                cache_key=cache_key,
+                max_retries=max_retries,
+            )
+
             tables = response.get("tables", [])
             cleaned_tables = list(set([str(t) for t in tables if isinstance(t, (str, int, float))]))
             logger.info(f"LLM inferred potential tables: {cleaned_tables}")
             return cleaned_tables
+        except NodeExecutionResult as e:
+            logger.warning(f"LLM table discovery failed after retries: {e.error_message}")
+            return []
         except Exception as e:
-            logger.warning(f"LLM table discovery failed: {e}")
+            logger.warning(f"LLM table discovery failed with unexpected error: {e}")
             return []
 
     async def _fallback_get_all_tables(self, task) -> List[str]:
@@ -530,6 +491,8 @@ Query: {query}
         """
         Load schemas for candidate tables and update workflow context.
 
+        ✅ Fixed: Uses thread-safe context update to prevent race conditions.
+
         Args:
             task: The SQL task
             candidate_tables: List of table names to load schemas for
@@ -551,9 +514,21 @@ Query: {query}
                 )
 
                 if schemas:
-                    # Update workflow context with discovered schemas
-                    self.workflow.context.update_schema_and_values(schemas, values)
-                    logger.debug(f"Loaded schemas for {len(schemas)} tables")
+                    # ✅ Use thread-safe context update
+                    def update_schemas():
+                        self.workflow.context.update_schema_and_values(schemas, values)
+                        return {"loaded_count": len(schemas)}
+
+                    result = safe_context_update(
+                        self.workflow.context,
+                        update_schemas,
+                        operation_name="load_table_schemas",
+                    )
+
+                    if result["success"]:
+                        logger.debug(f"Loaded schemas for {result['result']['loaded_count']} tables")
+                    else:
+                        logger.warning(f"Context update failed: {result.get('error')}")
                 else:
                     logger.warning(f"No schemas found for candidate tables: {candidate_tables}")
 
@@ -595,6 +570,8 @@ Query: {query}
         """
         Update workflow context with schema discovery results.
 
+        ✅ Fixed: Uses thread-safe context update to prevent race conditions.
+
         Args:
             workflow: The workflow instance to update
 
@@ -609,12 +586,23 @@ Query: {query}
             if hasattr(self.result, "data") and self.result.data:
                 output = self.result.data
 
-                # Update candidate tables if available
+                # ✅ Thread-safe metadata update
                 if "candidate_tables" in output:
-                    # Store discovered tables in workflow metadata for downstream nodes
-                    if not hasattr(workflow, "metadata"):
-                        workflow.metadata = {}
-                    workflow.metadata["discovered_tables"] = output["candidate_tables"]
+                    def update_metadata():
+                        # Store discovered tables in workflow metadata for downstream nodes
+                        if not hasattr(workflow, "metadata"):
+                            workflow.metadata = {}
+                        workflow.metadata["discovered_tables"] = output["candidate_tables"]
+                        return {"table_count": len(output["candidate_tables"])}
+
+                    result = safe_context_update(
+                        workflow,
+                        update_metadata,
+                        operation_name="update_discovered_tables",
+                    )
+
+                    if not result["success"]:
+                        logger.warning(f"Metadata update failed: {result.get('error')}")
 
                 # Note: Table schemas are already loaded via _load_table_schemas() which calls
                 # workflow.context.update_schema_and_values(). The schema loading happens
