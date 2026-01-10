@@ -12,7 +12,7 @@ import json
 import time
 import uuid
 from collections import deque
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, cast
 
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
@@ -40,12 +40,15 @@ class DeepResearchEventConverter:
         {
             "id": "step_schema",
             "content": "Discover Database Schema",
-            "node_types": ["schema_discovery", "schema_linking"],
+            "node_types": ["schema_discovery", "schema_linking", "schema_validation"],
         },
         {"id": "step_sql", "content": "Generate SQL Query", "node_types": ["generate_sql"]},
-        {"id": "step_exec", "content": "Execute SQL & Verify", "node_types": ["execute_sql"]},
-        {"id": "step_reflect", "content": "Self-Correction & Optimization", "node_types": ["reflect"]},
-        {"id": "step_reason", "content": "Deep Reasoning Analysis", "node_types": ["reasoning"]},
+        {
+            "id": "step_exec",
+            "content": "Execute SQL & Verify",
+            "node_types": ["execute_sql", "result_validation"],
+        },
+        {"id": "step_reflect", "content": "Self-Correction & Optimization", "node_types": ["reflect", "output"]},
     ]
 
     def __init__(self):
@@ -64,7 +67,7 @@ class DeepResearchEventConverter:
         """Map node type to virtual step ID."""
         for step in self.VIRTUAL_STEPS:
             if node_type in step["node_types"]:
-                return step["id"]
+                return str(step["id"])
         return None
 
     def _generate_virtual_plan_update(self, current_node_type: Optional[str] = None) -> Optional[PlanUpdateEvent]:
@@ -80,7 +83,7 @@ class DeepResearchEventConverter:
         active_index = -1
         if self.active_virtual_step_id:
             for i, step in enumerate(self.VIRTUAL_STEPS):
-                if step["id"] == self.active_virtual_step_id:
+                if str(step["id"]) == self.active_virtual_step_id:
                     active_index = i
                     break
 
@@ -100,7 +103,7 @@ class DeepResearchEventConverter:
                 if step["id"] in self.completed_virtual_steps:
                     status = TodoStatus.COMPLETED
 
-            todos.append(TodoItem(id=step["id"], content=step["content"], status=status))
+            todos.append(TodoItem(id=str(step["id"]), content=str(step["content"]), status=status))
 
         return PlanUpdateEvent(id=str(uuid.uuid4()), planId=None, timestamp=int(time.time() * 1000), todos=todos)
 
@@ -356,12 +359,34 @@ class DeepResearchEventConverter:
                 return True
         return False
 
+    def validate_event_flow(self, action_type: str, events: List[DeepResearchEvent]) -> bool:
+        """Validate event flow completeness for critical actions.
+
+        Args:
+            action_type: The type of action being converted
+            events: The generated events list
+
+        Returns:
+            bool: True if event flow is valid, False otherwise
+        """
+        if action_type in ["schema_discovery", "sql_execution"]:
+            # Should have both ToolCallEvent and ToolCallResultEvent
+            has_call = any(e.event == "tool_call" for e in events)
+            has_result = any(e.event == "tool_call_result" for e in events)
+            if not (has_call and has_result):
+                self.logger.warning(f"Action {action_type} missing tool call/result events")
+                return False
+        return True
+
     def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
         """Convert ActionHistory to DeepResearchEvent list."""
 
         timestamp = int(time.time() * 1000)
         event_id = f"{action.action_id}_{seq_num}"
         events: List[DeepResearchEvent] = []
+
+        # Debug logging: track action conversion
+        self.logger.debug(f"Converting action: {action.action_type}, role: {action.role}, status: {action.status}")
 
         # Extract todo_id if present (for plan-related events)
         todo_id = self._extract_todo_id_from_action(action)
@@ -458,27 +483,36 @@ class DeepResearchEventConverter:
                 )
             )
 
-        # Handle Schema Discovery (convert to ChatEvent for visibility)
-        elif action.action_type == "schema_discovery" and action.status == ActionStatus.SUCCESS:
-            table_count = 0
-            tables = []
-            if action.output and isinstance(action.output, dict):
-                tables = action.output.get("candidate_tables", [])
-                table_count = len(tables)
+        # Handle Schema Discovery (convert to ToolCallEvent)
+        elif action.action_type == "schema_discovery":
+            tool_call_id = str(uuid.uuid4())
+            # Ensure input is a dict
+            tool_input = {}
+            if action.input and isinstance(action.input, dict):
+                tool_input = action.input
 
-            content = f"📂 **Schema Discovery**: Found {table_count} relevant tables."
-            if tables:
-                table_list = ", ".join(tables[:5])
-                if len(tables) > 5:
-                    table_list += f", and {len(tables)-5} more..."
-                content += f"\nTables: `{table_list}`"
+            # Use virtual step ID as planId (fix for Text2SQL workflow)
+            schema_plan_id = todo_id if todo_id else self.active_virtual_step_id
 
             events.append(
-                ChatEvent(
-                    id=event_id,
-                    planId=todo_id,
+                ToolCallEvent(
+                    id=f"{event_id}_call",
+                    planId=schema_plan_id,
                     timestamp=timestamp,
-                    content=content,
+                    toolCallId=tool_call_id,
+                    toolName="schema_discovery",
+                    input=tool_input,
+                )
+            )
+
+            events.append(
+                ToolCallResultEvent(
+                    id=f"{event_id}_result",
+                    planId=schema_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    data=action.output,
+                    error=action.status == ActionStatus.FAILED,
                 )
             )
 
@@ -515,25 +549,35 @@ class DeepResearchEventConverter:
                     )
                 )
 
-        # Handle SQL Execution
+        # Handle SQL Execution (convert to ToolCallEvent)
         elif action.action_type == "sql_execution":
-            if action.status == ActionStatus.SUCCESS:
-                row_count = 0
-                if action.output and isinstance(action.output, dict):
-                    row_count = action.output.get("row_count", 0)
-                content = f"⚡ **SQL Execution**: Successfully executed. Rows returned: {row_count}."
-            else:
-                error = "Unknown error"
-                if action.output and isinstance(action.output, dict):
-                    error = action.output.get("error", error)
-                content = f"❌ **SQL Execution Failed**: {error}"
+            tool_call_id = str(uuid.uuid4())
+            tool_input = {}
+            if action.input and isinstance(action.input, dict):
+                tool_input = action.input
+
+            # Use virtual step ID as planId (fix for Text2SQL workflow)
+            exec_plan_id = todo_id if todo_id else self.active_virtual_step_id
 
             events.append(
-                ChatEvent(
-                    id=event_id,
-                    planId=todo_id,
+                ToolCallEvent(
+                    id=f"{event_id}_call",
+                    planId=exec_plan_id,
                     timestamp=timestamp,
-                    content=content,
+                    toolCallId=tool_call_id,
+                    toolName="execute_sql",
+                    input=tool_input,
+                )
+            )
+
+            events.append(
+                ToolCallResultEvent(
+                    id=f"{event_id}_result",
+                    planId=exec_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    data=action.output,
+                    error=action.status == ActionStatus.FAILED,
                 )
             )
 
@@ -694,7 +738,7 @@ class DeepResearchEventConverter:
                         id=event_id,
                         planId=self.plan_id,
                         timestamp=timestamp,
-                        toolCallId=tool_call_id,
+                        toolCallId=str(tool_call_id),
                         data=action.output,
                         error=action.status == ActionStatus.FAILED,
                     )
@@ -727,6 +771,17 @@ class DeepResearchEventConverter:
 
         # 5. Handle workflow completion (修复 CompleteEvent 处理)
         elif action.action_type == "workflow_completion" and action.status == ActionStatus.SUCCESS:
+            # Force complete all virtual steps
+            if self.virtual_plan_emitted:
+                final_todos = []
+                for step in self.VIRTUAL_STEPS:
+                    final_todos.append(TodoItem(id=str(step["id"]), content=str(step["content"]), status=TodoStatus.COMPLETED))
+                events.append(
+                    PlanUpdateEvent(
+                        id=f"{event_id}_plan_final", planId=None, timestamp=timestamp, todos=final_todos
+                    )
+                )
+
             events.append(
                 CompleteEvent(
                     id=event_id,
@@ -825,6 +880,13 @@ class DeepResearchEventConverter:
                             id=event_id, planId=report_plan_id, timestamp=timestamp, url=report_url, data=report_data
                         )
                     )
+
+        # Debug logging: track generated events
+        for event in events:
+            self.logger.debug(f"Generated event: {event.event}, planId: {event.planId}, id: {event.id}")
+
+        # Validate event flow for critical actions
+        self.validate_event_flow(action.action_type, events)
 
         return events
 
