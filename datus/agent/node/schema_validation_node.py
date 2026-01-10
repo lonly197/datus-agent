@@ -88,11 +88,11 @@ class SchemaValidationNode(Node, LLMMixin):
                 yield ActionHistory(
                     action_id=f"{self.id}_error",
                     role=ActionRole.TOOL,
-                    messages=f"Schema validation failed: {error_result.error_message}",
+                    messages=f"Schema validation failed: {error_result.error}",
                     action_type="schema_validation",
                     input={},
                     status=ActionStatus.FAILED,
-                    output={"error": error_result.error_message, "error_code": error_result.error_code},
+                    output={"error": error_result.error, "error_code": error_result.error_code},
                 )
                 return
 
@@ -134,7 +134,7 @@ class SchemaValidationNode(Node, LLMMixin):
             # Step 3: Check basic query-schema alignment
             # Extract key terms from the query
             query_lower = task.task.lower() if task else ""
-            query_terms = self._extract_query_terms(query_lower)
+            query_terms = await self._extract_query_terms(query_lower)
 
             # Check if schemas contain relevant columns/tables
             schema_coverage = self._check_schema_coverage(context.table_schemas, query_terms)
@@ -230,11 +230,11 @@ class SchemaValidationNode(Node, LLMMixin):
             yield ActionHistory(
                 action_id=f"{self.id}_error",
                 role=ActionRole.TOOL,
-                messages=f"Schema validation failed: {error_result.error_message}",
+                messages=f"Schema validation failed: {error_result.error}",
                 action_type="schema_validation",
                 input={},
                 status=ActionStatus.FAILED,
-                output={"error": error_result.error_message, "error_code": error_result.error_code},
+                output={"error": error_result.error, "error_code": error_result.error_code},
             )
             self.result = BaseResult(success=False, error=str(e))
 
