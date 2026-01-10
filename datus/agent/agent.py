@@ -115,6 +115,38 @@ class Agent:
 
         logger.info(f"Storage modules initialized: {list(self.storage_modules.keys())}")
 
+    def _safe_delete_directory(self, dir_path: str, context: str = "") -> None:
+        """
+        Safely delete a directory with path validation.
+
+        Args:
+            dir_path: Path to directory to delete
+            context: Description of what is being deleted (for logging)
+
+        Raises:
+            ValueError: If path is outside project root
+            OSError: If deletion fails
+        """
+        # Validate path is within project directory
+        abs_path = os.path.abspath(dir_path)
+        project_root = os.path.abspath(self.global_config.rag_storage_path())
+
+        if not abs_path.startswith(project_root):
+            raise ValueError(
+                f"Refusing to delete directory outside project root: {abs_path}"
+            )
+
+        if not os.path.exists(abs_path):
+            logger.debug(f"Directory does not exist, skipping deletion: {abs_path}")
+            return
+
+        try:
+            shutil.rmtree(abs_path)
+            logger.info(f"Deleted directory: {context} ({abs_path})")
+        except Exception as e:
+            logger.error(f"Failed to delete directory {abs_path}: {e}")
+            raise
+
     def create_workflow_runner(
         self, check_db: bool = True, run_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None
     ) -> WorkflowRunner:
@@ -281,6 +313,17 @@ class Agent:
         # Get selected components from args
         selected_components = self.args.components
 
+        # Validate component names
+        valid_components = {
+            "metadata", "metrics", "document", "ext_knowledge", "reference_sql"
+        }
+        invalid = set(selected_components) - valid_components
+        if invalid:
+            raise ValueError(
+                f"Invalid bootstrap components: {invalid}. "
+                f"Valid components: {sorted(valid_components)}"
+            )
+
         kb_update_strategy = self.args.kb_update_strategy
         benchmark_platform = self.args.benchmark
         pool_size = 4 if not self.args.pool_size else self.args.pool_size
@@ -315,13 +358,9 @@ class Agent:
                 if kb_update_strategy == "overwrite":
                     self.global_config.save_storage_config("database")
                     schema_metadata_path = os.path.join(dir_path, "schema_metadata.lance")
-                    if os.path.exists(schema_metadata_path):
-                        shutil.rmtree(schema_metadata_path)
-                        logger.info(f"Deleted existing directory {schema_metadata_path}")
+                    self._safe_delete_directory(schema_metadata_path, "schema_metadata")
                     schema_value_path = os.path.join(dir_path, "schema_value.lance")
-                    if os.path.exists(schema_value_path):
-                        shutil.rmtree(schema_value_path)
-                        logger.info(f"Deleted existing directory {schema_value_path}")
+                    self._safe_delete_directory(schema_value_path, "schema_value")
                 else:
                     self.global_config.check_init_storage_config("database")
                 self.metadata_store = SchemaWithValueRAG(self.global_config)
@@ -382,12 +421,8 @@ class Agent:
                 semantic_model_path = os.path.join(dir_path, "semantic_model.lance")
                 metrics_path = os.path.join(dir_path, "metrics.lance")
                 if kb_update_strategy == "overwrite":
-                    if os.path.exists(semantic_model_path):
-                        shutil.rmtree(semantic_model_path)
-                        logger.info(f"Deleted existing directory {semantic_model_path}")
-                    if os.path.exists(metrics_path):
-                        shutil.rmtree(metrics_path)
-                        logger.info(f"Deleted existing directory {metrics_path}")
+                    self._safe_delete_directory(semantic_model_path, "semantic_model")
+                    self._safe_delete_directory(metrics_path, "metrics")
                     self.global_config.save_storage_config("metric")
                 else:
                     self.global_config.check_init_storage_config("metric")
@@ -422,9 +457,7 @@ class Agent:
             elif component == "ext_knowledge":
                 ext_knowledge_path = os.path.join(dir_path, "ext_knowledge.lance")
                 if kb_update_strategy == "overwrite":
-                    if os.path.exists(ext_knowledge_path):
-                        shutil.rmtree(ext_knowledge_path)
-                        logger.info(f"Deleted existing directory {ext_knowledge_path}")
+                    self._safe_delete_directory(ext_knowledge_path, "ext_knowledge")
                     self.global_config.save_storage_config("ext_knowledge")
                 else:
                     self.global_config.check_init_storage_config("ext_knowledge")
@@ -440,9 +473,7 @@ class Agent:
             elif component == "reference_sql":
                 reference_sql_path = os.path.join(dir_path, "reference_sql.lance")
                 if kb_update_strategy == "overwrite":
-                    if os.path.exists(reference_sql_path):
-                        shutil.rmtree(reference_sql_path)
-                        logger.info(f"Deleted existing directory {reference_sql_path}")
+                    self._safe_delete_directory(reference_sql_path, "reference_sql")
                     self.global_config.save_storage_config("reference_sql")
                 else:
                     self.global_config.check_init_storage_config("reference_sql")
@@ -669,7 +700,16 @@ class Agent:
         # Clean up namespace directory in output directory
         output_dir = self.global_config.output_dir
         namespace_dir = os.path.join(output_dir, current_namespace)
-        if os.path.exists(namespace_dir):
+
+        # Safety check: ensure we're only deleting within output directory
+        if namespace_dir and os.path.exists(namespace_dir):
+            namespace_abs = os.path.abspath(namespace_dir)
+            output_abs = os.path.abspath(output_dir)
+            if not namespace_abs.startswith(output_abs):
+                raise ValueError(
+                    f"Namespace directory outside output root: {namespace_dir}"
+                )
+
             logger.info(f"Cleaning up namespace directory: {namespace_dir}")
             try:
                 shutil.rmtree(namespace_dir)
@@ -679,7 +719,14 @@ class Agent:
 
         # Clean up gold directory (which contains exec_result)
         gold_path = os.path.join(benchmark_path, "gold")
-        if os.path.exists(gold_path):
+        if gold_path and os.path.exists(gold_path):
+            gold_abs = os.path.abspath(gold_path)
+            benchmark_abs = os.path.abspath(benchmark_path)
+            if not gold_abs.startswith(benchmark_abs):
+                raise ValueError(
+                    f"Gold directory outside benchmark path: {gold_path}"
+                )
+
             logger.info(f"Cleaning up gold directory: {gold_path}")
             try:
                 shutil.rmtree(gold_path)

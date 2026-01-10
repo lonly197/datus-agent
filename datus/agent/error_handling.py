@@ -104,15 +104,27 @@ def unified_error_handler(node_type: str, operation: str, log_errors: bool = Tru
                     operation,
                     error_details=error_details,
                 )
-            except (TimeoutError, OSError) as e:
-                # Network/connection related errors
-                error_code = (
-                    ErrorCode.DB_CONNECTION_TIMEOUT if "timeout" in str(e).lower() else ErrorCode.DB_CONNECTION_FAILED
-                )
+            except (TimeoutError, ConnectionError, OSError) as e:
+                # Network/connection related errors - use isinstance checks for reliability
+                if isinstance(e, TimeoutError):
+                    error_code = ErrorCode.DB_EXECUTION_TIMEOUT
+                    retryable = True
+                elif isinstance(e, ConnectionError):
+                    error_code = ErrorCode.DB_CONNECTION_FAILED
+                    retryable = True
+                else:
+                    # OSError but not TimeoutError or ConnectionError
+                    error_code = ErrorCode.DB_CONNECTION_FAILED
+                    retryable = True
+
                 if log_errors:
                     logger.error(
                         f"{node_type}.{operation} failed with connection error: {str(e)}",
-                        extra={"node_type": node_type, "operation": operation, "error_type": "connection_error"},
+                        extra={
+                            "node_type": node_type,
+                            "operation": operation,
+                            "error_type": type(e).__name__,
+                        },
                     )
                 return _create_node_error_result(
                     self,
@@ -120,7 +132,7 @@ def unified_error_handler(node_type: str, operation: str, log_errors: bool = Tru
                     f"Connection error: {str(e)}",
                     operation,
                     error_details={"connection_error": str(e)},
-                    retryable=True,
+                    retryable=retryable,
                 )
             except Exception as e:
                 # Generic error handling

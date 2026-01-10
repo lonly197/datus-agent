@@ -59,9 +59,24 @@ def evaluate_result(node: Node, workflow: Workflow) -> Dict:
         # Update context from previous node
         update_result = update_context_from_node(node, workflow)
 
-        # skip the error. continue. because it's not a blocker for the workflow
+        # Check for critical failures that should stop the workflow
         if not update_result["success"]:
-            logger.warning(f"Failed to update context from node {node.id}: {update_result['message']}")
+            error_msg = update_result.get("message", "Unknown error")
+
+            # Determine if this is a critical failure
+            if "critical" in error_msg.lower() or "required" in error_msg.lower():
+                logger.error(
+                    f"Critical context update failure at node {node.id}: {error_msg}"
+                )
+                return {
+                    "success": False,
+                    "message": f"Critical context update failed: {error_msg}",
+                }
+            else:
+                # Non-critical issue, log and continue
+                logger.warning(
+                    f"Non-critical context update issue at node {node.id}: {error_msg}"
+                )
 
         # Note: With dedicated chat_agentic_plan workflow, plan mode no longer has execute_sql node
         # The workflow naturally progresses from chat → output
@@ -73,5 +88,5 @@ def evaluate_result(node: Node, workflow: Workflow) -> Dict:
         else:
             return {"success": True, "message": "Last node, finished"}
     except Exception as e:
-        logger.error(f"Failed to evaluate result: {e}")
+        logger.error(f"Failed to evaluate result: {e}", exc_info=True)
         return {"success": False, "message": f"Evaluation failed: {str(e)}"}

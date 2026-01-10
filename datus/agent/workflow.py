@@ -53,6 +53,10 @@ class Workflow:
         self._global_config = agent_config
         self._init_tools()
 
+        # Performance optimization: cache last node by type
+        self._last_node_by_type_cache: Dict[str, str] = {}
+        self._cache_dirty = True
+
     @property
     def global_config(self) -> AgentConfig:
         return self._global_config
@@ -158,17 +162,29 @@ class Workflow:
 
     def get_last_node_by_type(self, node_type: str) -> Optional["Node"]:
         """
-        Get the last node of a specific type.
+        Get the last node of a specific type with caching.
+
         Args:
             node_type: Type of the node to get
+
         Returns:
             The last node of the specified type if found, None otherwise
         """
+        # Rebuild cache if dirty
+        if self._cache_dirty:
+            self._rebuild_node_type_cache()
+
+        node_id = self._last_node_by_type_cache.get(node_type)
+        return self.nodes.get(node_id) if node_id else None
+
+    def _rebuild_node_type_cache(self):
+        """Rebuild the node type cache."""
+        self._last_node_by_type_cache = {}
         for nid in reversed(range(self.current_node_index)):
             node = self.nodes[self.node_order[nid]]
-            if node.type == node_type:
-                return node
-        return None
+            if node.type not in self._last_node_by_type_cache:
+                self._last_node_by_type_cache[node.type] = node.id
+        self._cache_dirty = False
 
     def get_current_node(self) -> Optional["Node"]:
         """
@@ -206,6 +222,8 @@ class Workflow:
             self.completion_time = time.time()
             return None
         self.current_node_index += 1
+        # Mark cache as dirty when advancing
+        self._cache_dirty = True
         next_node_id = self.node_order[self.current_node_index]
         return self.nodes.get(next_node_id)
 

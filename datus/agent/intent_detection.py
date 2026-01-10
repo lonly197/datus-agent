@@ -12,6 +12,7 @@ to automatically inject relevant external knowledge when front-end omits ext_kno
 import asyncio
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Dict, Tuple
 
 from datus.utils.loggings import get_logger
@@ -126,7 +127,15 @@ class IntentDetector:
         """
         self.keyword_threshold = keyword_threshold
         self.llm_confidence_threshold = llm_confidence_threshold
+        # Clear cache on initialization
+        self._clear_cache()
 
+    def _clear_cache(self):
+        """Clear the keyword detection cache."""
+        if hasattr(self, 'detect_sql_intent_by_keyword'):
+            self.detect_sql_intent_by_keyword.cache_clear()
+
+    @lru_cache(maxsize=256)
     def detect_sql_intent_by_keyword(self, text: str) -> Tuple[bool, Dict[str, Any]]:
         """
         Fast keyword-based intent detection.
@@ -202,6 +211,14 @@ User request: {text}
                 result = json.loads(response.strip())
                 intent = result.get("intent", "other")
                 confidence = float(result.get("confidence", 0.0))
+
+                # Validate confidence range
+                if not 0.0 <= confidence <= 1.0:
+                    logger.warning(
+                        f"Invalid confidence {confidence}, clamping to [0, 1]"
+                    )
+                    confidence = max(0.0, min(1.0, confidence))
+
                 return intent, confidence
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 logger.warning(f"Failed to parse LLM response: {e}, response: {response}")

@@ -21,6 +21,29 @@ from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
+# Node type alias mapping for config normalization
+NODE_TYPE_ALIASES = {
+    # Reasoning aliases
+    "reason_sql": NodeType.TYPE_REASONING,
+    "reasoning_sql": NodeType.TYPE_REASONING,
+    "reason": NodeType.TYPE_REASONING,
+    # Reflection aliases
+    "reflection": NodeType.TYPE_REFLECT,
+    "reflect": NodeType.TYPE_REFLECT,
+    # Execution aliases
+    "execute": NodeType.TYPE_EXECUTE_SQL,
+    # Chat aliases
+    "chat": NodeType.TYPE_CHAT,
+    "chat_agentic": NodeType.TYPE_CHAT,
+    # SQL generation aliases
+    "chatbot": NodeType.TYPE_GENSQL,  # Deprecated, use sql_chatbot
+    "sql_chatbot": NodeType.TYPE_GENSQL,
+    "sql_generation": NodeType.TYPE_GENSQL,
+    # Syntax/execution preview aliases
+    "syntax_validation": NodeType.TYPE_CHAT,
+    "execution_preview": NodeType.TYPE_CHAT,
+}
+
 
 def load_builtin_workflow_config() -> dict:
     current_dir = Path(__file__).parent
@@ -70,18 +93,28 @@ def validate_workflow_config(workflow_config: dict) -> List[str]:
         errors.append("'workflow' section must be a dictionary")
         return errors
 
-    # Validate text2sql workflow specifically
-    if "text2sql" in workflows:
-        text2sql_errors = _validate_text2sql_workflow(workflows["text2sql"])
-        errors.extend(text2sql_errors)
-
-    # Validate other workflows
+    # Validate all workflows with specific validators
     for workflow_name, workflow_nodes in workflows.items():
         if workflow_name == "text2sql":
-            continue  # Already validated above
-
-        node_errors = _validate_workflow_nodes(workflow_name, workflow_nodes)
-        errors.extend(node_errors)
+            # Text2SQL workflow with comprehensive validation
+            text2sql_errors = _validate_text2sql_workflow(workflow_nodes)
+            errors.extend(text2sql_errors)
+        elif workflow_name in ["reflection", "fixed", "dynamic"]:
+            # Standard SQL workflows require core nodes
+            node_errors = _validate_standard_sql_workflow(workflow_name, workflow_nodes)
+            errors.extend(node_errors)
+        elif workflow_name == "metric_to_sql":
+            # Metric-based workflow requires specific nodes
+            node_errors = _validate_metric_to_sql_workflow(workflow_nodes)
+            errors.extend(node_errors)
+        elif workflow_name in ["chat_agentic", "chat_agentic_plan", "gensql_agentic"]:
+            # Agentic workflows require chat/gensql node and output
+            node_errors = _validate_agentic_workflow(workflow_name, workflow_nodes)
+            errors.extend(node_errors)
+        else:
+            # Generic validation for unknown workflow types
+            node_errors = _validate_workflow_nodes(workflow_name, workflow_nodes)
+            errors.extend(node_errors)
 
     return errors
 
@@ -121,6 +154,88 @@ def _validate_workflow_nodes(workflow_name: str, workflow_nodes: List[str]) -> L
     for node in workflow_nodes:
         if not isinstance(node, str):
             errors.append(f"Workflow '{workflow_name}': node '{node}' must be a string")
+
+    return errors
+
+
+def _validate_standard_sql_workflow(workflow_name: str, workflow_nodes: List[str]) -> List[str]:
+    """Validate standard SQL workflow has required nodes.
+
+    Standard workflows include: reflection, fixed, dynamic
+    These workflows should have core SQL generation nodes.
+    """
+    errors = []
+
+    if not isinstance(workflow_nodes, list):
+        errors.append(f"{workflow_name} workflow must be a list of node names")
+        return errors
+
+    # Required nodes for standard SQL workflows
+    required_nodes = ["schema_linking", "generate_sql", "execute_sql", "output"]
+    for required_node in required_nodes:
+        if required_node not in workflow_nodes:
+            errors.append(
+                f"{workflow_name} workflow missing required node: {required_node}"
+            )
+
+    return errors
+
+
+def _validate_metric_to_sql_workflow(workflow_nodes: List[str]) -> List[str]:
+    """Validate metric_to_sql workflow has required nodes."""
+    errors = []
+
+    if not isinstance(workflow_nodes, list):
+        errors.append("metric_to_sql workflow must be a list of node names")
+        return errors
+
+    # Metric workflow requires specific nodes for metric handling
+    required_nodes = ["schema_linking", "search_metrics", "generate_sql", "execute_sql", "output"]
+    for required_node in required_nodes:
+        if required_node not in workflow_nodes:
+            errors.append(
+                f"metric_to_sql workflow missing required node: {required_node}"
+            )
+
+    return errors
+
+
+def _validate_agentic_workflow(workflow_name: str, workflow_nodes: List[str]) -> List[str]:
+    """Validate agentic workflow has required nodes.
+
+    Agentic workflows include: chat_agentic, chat_agentic_plan, gensql_agentic
+    These workflows focus on conversational AI interactions.
+    """
+    errors = []
+
+    if not isinstance(workflow_nodes, list):
+        errors.append(f"{workflow_name} workflow must be a list of node names")
+        return errors
+
+    # All agentic workflows require output node
+    if "output" not in workflow_nodes:
+        errors.append(
+            f"{workflow_name} workflow missing required node: output"
+        )
+
+    # Agentic workflows should have a chat/gensql node
+    chat_patterns = ["chat_agentic", "sql_chatbot", "chat"]
+    has_chat_node = any(
+        any(pattern in node for pattern in chat_patterns)
+        for node in workflow_nodes
+    )
+
+    if not has_chat_node:
+        errors.append(
+            f"{workflow_name} workflow should have a chat or sql_chatbot node"
+        )
+
+    # Plan workflows should not have execute_sql (plan-only mode)
+    if workflow_name.endswith("_plan"):
+        if "execute_sql" in workflow_nodes:
+            errors.append(
+                f"{workflow_name} workflow should not contain execute_sql node (plan-only mode)"
+            )
 
     return errors
 
@@ -252,35 +367,15 @@ def _create_single_node(
     agent_config: Optional[AgentConfig] = None,
     tools: Optional[List[Tool]] = None,
 ) -> Node:
-    # normalize aliases from config
-    normalized_type = node_type
-    if node_type in {"reason_sql", "reasoning_sql", "reason"}:
-        normalized_type = NodeType.TYPE_REASONING
-    elif node_type in {"reflection", "reflect"}:
-        normalized_type = NodeType.TYPE_REFLECT
-    elif node_type == "execute":
-        normalized_type = NodeType.TYPE_EXECUTE_SQL
-    elif node_type == "chat":
-        normalized_type = NodeType.TYPE_CHAT
-    elif node_type == "chat_agentic":
-        normalized_type = NodeType.TYPE_CHAT
-    elif node_type == "chatbot":
-        # Map chatbot to GenSQLAgenticNode for SQL generation workflows (deprecated, use sql_chatbot)
-        normalized_type = NodeType.TYPE_GENSQL
-    elif node_type == "sql_chatbot":
-        # Map sql_chatbot to GenSQLAgenticNode for specialized SQL generation
-        normalized_type = NodeType.TYPE_GENSQL
-    elif node_type == "sql_generation":
-        # Map sql_generation to GenSQLAgenticNode for the text2sql workflow
-        normalized_type = NodeType.TYPE_GENSQL
-    elif node_type == "syntax_validation":
-        # Map syntax_validation to existing chat workflow (handled by preflight tools)
-        normalized_type = NodeType.TYPE_CHAT
-    elif node_type == "execution_preview":
-        # Map execution_preview to existing chat workflow (handled by preflight tools)
-        normalized_type = NodeType.TYPE_CHAT
+    # Normalize aliases from config using dictionary lookup
+    normalized_type = NODE_TYPE_ALIASES.get(node_type, node_type)
+
     # Check if node_type is defined in agentic_nodes config - if so, map to gensql
-    elif agent_config and hasattr(agent_config, "agentic_nodes") and node_type in agent_config.agentic_nodes:
+    if (
+        agent_config
+        and hasattr(agent_config, "agentic_nodes")
+        and node_type in agent_config.agentic_nodes
+    ):
         normalized_type = NodeType.TYPE_GENSQL
 
     description = NodeType.get_description(normalized_type)

@@ -1,5 +1,6 @@
 workflow:
 
+  # Reflection-based SQL generation workflow
   reflection:
     - schema_linking
     - generate_sql
@@ -7,6 +8,7 @@ workflow:
     - reflect
     - output
 
+  # Fixed SQL generation workflow (no reflection)
   fixed:
     - schema_linking
     - generate_sql
@@ -15,6 +17,7 @@ workflow:
 
   empty: []
 
+  # Dynamic SQL generation workflow
   dynamic:
     - schema_linking
     - generate_sql
@@ -22,6 +25,7 @@ workflow:
     - reflect
     - output
 
+  # Metric-based SQL generation workflow
   metric_to_sql:
     - schema_linking
     - search_metrics
@@ -30,33 +34,31 @@ workflow:
     - execute_sql
     - output
 
-  # Agentic workflow using ChatAgenticNode (multi-purpose conversational AI)
-  # Supports multiple modes: text2sql, data_analysis, sql_review, deep_analysis
+  # Interactive chat workflow for multi-turn conversations
   chat_agentic:
-    - chat_agentic  # Maps to ChatAgenticNode (TYPE_CHAT) for flexible chat interactions
+    - chat_agentic
     - execute_sql
     - output
 
-  # Dedicated workflow for plan mode - chat node handles everything internally
+  # Plan mode workflow for execution planning
   chat_agentic_plan:
-    - chat_agentic  # Maps to ChatAgenticNode (TYPE_CHAT) with plan mode support
+    - chat_agentic
     - output
 
-  # Specialized SQL generation workflow using GenSQLAgenticNode
-  # Focused on SQL generation with enhanced context and tool support
+  # Focused SQL generation with enhanced context
   gensql_agentic:
-    - sql_chatbot  # Maps to GenSQLAgenticNode (TYPE_GENSQL) for focused SQL generation
+    - sql_chatbot
     - execute_sql
     - output
 
-  # Text2SQL workflow with preflight evidence and structured generation
-  # Legacy names: text2sql_standard, nl2sql (mapped at API level for backward compatibility)
+  # Text2SQL workflow with comprehensive validation and reflection
   text2sql:
-    - intent_analysis       # Analyze query intent (IntentAnalysisNode)
-    - schema_discovery      # Discover relevant schema (SchemaDiscoveryNode)
-    - schema_validation     # Validate schema sufficiency (SchemaValidationNode) - NEW
-    - generate_sql          # Generate SQL with evidence (GenerateSQLNode)
-    - execute_sql           # Execute SQL query (ExecuteSQLNode)
-    - result_validation     # Validate result quality (ResultValidationNode) - NEW
-    - reflect               # Reflect on execution results and self-correct (ReflectNode)
-    - output                # Return results (OutputNode)
+    - intent_analysis       # Analyze query intent
+    - schema_discovery      # Discover relevant schema
+    - schema_validation     # Validate schema sufficiency
+    - generate_sql          # Generate SQL query
+    - execute_sql           # Execute SQL query
+    - result_validation     # Validate result quality
+    - reflect               # Reflect and self-correct if needed
+    - output                # Return results
+

@@ -41,6 +41,8 @@ class WorkflowRunner:
         # Generate run_id if not provided (format: YYYYMMDD_HHMMSS)
         self.run_id = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
         self.initial_metadata = metadata or {}
+        # Performance optimization: track completed nodes incrementally
+        self._completed_nodes_count = 0
 
     def initialize_workflow(self, sql_task: SqlTask):
         """Generate a new workflow plan."""
@@ -154,17 +156,24 @@ class WorkflowRunner:
         logger.info(f"Workflow saved to {save_path}")
         final_result = self.workflow.get_final_result()
 
-        # compute completed nodes instead of trusting step_count
-        completed_nodes = sum(1 for n in self.workflow.nodes.values() if n.status == "completed")
-        logger.info(f"Workflow execution completed. StepsAttempted:{step_count} CompletedNodes:{completed_nodes}")
+        # Use incremental count instead of scanning all nodes (O(1) vs O(n))
+        logger.info(
+            f"Workflow execution completed. "
+            f"StepsAttempted:{step_count} "
+            f"CompletedNodes:{self._completed_nodes_count}"
+        )
 
         return {
             "final_result": final_result,
             "save_path": save_path,
             "steps": step_count,
-            "completed_nodes": completed_nodes,
+            "completed_nodes": self._completed_nodes_count,
             "run_id": self.run_id,
         }
+
+    def _increment_completed_count(self):
+        """Increment the completed nodes counter."""
+        self._completed_nodes_count += 1
 
     def _ensure_prerequisites(self, sql_task: Optional[SqlTask], check_storage: bool) -> bool:
         if check_storage:
@@ -201,6 +210,117 @@ class WorkflowRunner:
             if output_data:
                 action.output.update(output_data)
 
+    def _handle_node_failure(
+        self,
+        current_node: Node,
+        node_start_action: Optional[ActionHistory] = None
+    ) -> tuple[bool, bool]:
+        """
+        Handle node failure with unified soft/hard failure logic.
+
+        Args:
+            current_node: The failed node
+            node_start_action: Optional action history entry for streaming mode
+
+        Returns:
+            tuple: (is_soft_failure: bool, should_continue: bool)
+        """
+        is_soft_failure = False
+        should_continue = True
+
+        # 1. Check ActionStatus first (SOFT_FAILED vs FAILED)
+        if hasattr(current_node, 'last_action_status'):
+            last_status = current_node.last_action_status
+            if last_status == ActionStatus.SOFT_FAILED:
+                is_soft_failure = True
+                logger.info(
+                    f"Node returned SOFT_FAILED status: {current_node.description}"
+                )
+            elif last_status == ActionStatus.FAILED:
+                # Check if reflect node is reachable for recovery
+                has_reflect = check_reflect_node_reachable(self.workflow)
+
+                if has_reflect:
+                    # Soft failure - continue to reflection for recovery
+                    logger.info(
+                        f"Node failed but reflect node is reachable. "
+                        f"Continuing as Soft Failure: {current_node.description}"
+                    )
+                    is_soft_failure = True
+                else:
+                    # Hard failure - terminate workflow
+                    logger.warning(
+                        f"Node failed with no reachable reflect node. "
+                        f"Hard Failure: {current_node.description}"
+                    )
+                    should_continue = False
+
+                    # Update action history if in streaming mode
+                    if node_start_action:
+                        self._update_action_status(
+                            node_start_action,
+                            success=False,
+                            error=(
+                                f"Node execution failed (no recovery path): "
+                                f"{current_node.description}"
+                            ),
+                        )
+            else:
+                # Unknown status - default to checking for reflect
+                has_reflect = check_reflect_node_reachable(self.workflow)
+                is_soft_failure = has_reflect
+        else:
+            # Fallback to old logic if last_action_status not available
+            has_reflect = check_reflect_node_reachable(self.workflow)
+            if has_reflect:
+                logger.info(
+                    f"Node failed but workflow has reflection. "
+                    f"Continuing as Soft Failure: {current_node.description}"
+                )
+                is_soft_failure = True
+            else:
+                # Hard failure - terminate workflow
+                logger.warning(f"Node failed: {current_node.description}")
+                should_continue = False
+
+                # Update action history if in streaming mode
+                if node_start_action:
+                    self._update_action_status(
+                        node_start_action,
+                        success=False,
+                        error=f"Node execution failed: {current_node.description}",
+                    )
+
+        # 2. Handle parallel node special cases
+        if not is_soft_failure and current_node.type == NodeType.TYPE_PARALLEL:
+            has_any_success = self._check_parallel_node_success(current_node)
+            if has_any_success:
+                logger.warning(
+                    "Parallel node partial failure, continuing to selection"
+                )
+            else:
+                logger.warning(f"Parallel node all failed: {current_node.description}")
+                should_continue = False
+
+        return is_soft_failure, should_continue
+
+    def _check_parallel_node_success(self, node: Node) -> bool:
+        """Check if any child of parallel node succeeded."""
+        try:
+            if node.result and hasattr(node.result, "child_results"):
+                for v in node.result.child_results.values():
+                    ok = (
+                        v.get("success", False)
+                        if isinstance(v, dict)
+                        else getattr(v, "success", False)
+                    )
+                    if ok:
+                        return True
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking parallel node success: {e}")
+            return False
+
     @optional_traceable(name="agent")
     def run(self, sql_task: Optional[SqlTask] = None, check_storage: bool = False) -> Dict:
         """Execute the workflow synchronously."""
@@ -221,62 +341,14 @@ class WorkflowRunner:
             logger.info(f"Executing task: {current_node.description}")
             current_node.run()
 
+            # Track completed nodes incrementally
+            if current_node.status == "completed":
+                self._increment_completed_count()
+
             is_soft_failure = False
             if current_node.status == "failed":
-                # ✅ Fix: Check ActionStatus first (SOFT_FAILED vs FAILED)
-                if hasattr(current_node, 'last_action_status'):
-                    last_status = current_node.last_action_status
-                    if last_status == ActionStatus.SOFT_FAILED:
-                        is_soft_failure = True
-                        logger.info(f"Node returned SOFT_FAILED status: {current_node.description}")
-                    elif last_status == ActionStatus.FAILED:
-                        # Check if reflect node is reachable for recovery
-                        has_reflect = check_reflect_node_reachable(self.workflow)
-
-                        if has_reflect:
-                            # Soft failure - continue to reflection for recovery
-                            logger.info(
-                                f"Node failed but reflect node is reachable. Continuing as Soft Failure: {current_node.description}"
-                            )
-                            is_soft_failure = True
-                        else:
-                            # Hard failure - no recovery path
-                            logger.warning(
-                                f"Node failed with no reachable reflect node. Hard Failure: {current_node.description}"
-                            )
-                    else:
-                        # Unknown status, default to checking for reflect
-                        has_reflect = check_reflect_node_reachable(self.workflow)
-                        is_soft_failure = has_reflect
-                else:
-                    # Fallback to old logic if last_action_status not available
-                    has_reflect = check_reflect_node_reachable(self.workflow)
-                    if has_reflect:
-                        logger.info(
-                            f"Node failed but workflow has reflection. Continuing as Soft Failure: {current_node.description}"
-                        )
-                        is_soft_failure = True
-
-                if not is_soft_failure and current_node.type == NodeType.TYPE_PARALLEL:
-                    try:
-                        has_any_success = False
-                        if current_node.result and hasattr(current_node.result, "child_results"):
-                            for v in current_node.result.child_results.values():
-                                ok = v.get("success", False) if isinstance(v, dict) else getattr(v, "success", False)
-                                if ok:
-                                    has_any_success = True
-                                    break
-                        if has_any_success:
-                            logger.warning("Parallel node partial failure, continue to selection")
-                        else:
-                            logger.warning(f"Parallel node all failed: {current_node.description}")
-                            break
-                    except Exception:
-                        logger.warning(f"Node failed: {current_node.description}")
-                        break
-                else:
-                    # Hard failure - terminate workflow
-                    logger.warning(f"Node failed: {current_node.description}")
+                is_soft_failure, should_continue = self._handle_node_failure(current_node)
+                if not should_continue:
                     break
 
             evaluation = evaluate_result(current_node, self.workflow)
@@ -391,54 +463,17 @@ class WorkflowRunner:
                         # Check for cancellation during node execution
                         ensure_not_cancelled()
 
+                    # Track completed nodes incrementally
+                    if current_node.status == "completed":
+                        self._increment_completed_count()
+
                     is_soft_failure = False
                     if current_node.status == "failed":
-                        # ✅ Fix: Check ActionStatus first (SOFT_FAILED vs FAILED)
-                        if hasattr(current_node, 'last_action_status'):
-                            last_status = current_node.last_action_status
-                            if last_status == ActionStatus.SOFT_FAILED:
-                                is_soft_failure = True
-                                logger.info(f"Node returned SOFT_FAILED status: {current_node.description}")
-                            elif last_status == ActionStatus.FAILED:
-                                # Check if reflect node is reachable for recovery
-                                has_reflect = check_reflect_node_reachable(self.workflow)
-
-                                if has_reflect:
-                                    # Soft failure - continue to reflection for recovery
-                                    logger.info(
-                                        f"Node failed but reflect node is reachable. Continuing as Soft Failure: {current_node.description}"
-                                    )
-                                    is_soft_failure = True
-                                else:
-                                    # Hard failure - terminate workflow
-                                    self._update_action_status(
-                                        node_start_action,
-                                        success=False,
-                                        error=f"Node execution failed (no recovery path): {current_node.description}",
-                                    )
-                                    logger.warning(f"Node failed with no reachable reflect: {current_node.description}")
-                                    break
-                            else:
-                                # Unknown status, default to checking for reflect
-                                has_reflect = check_reflect_node_reachable(self.workflow)
-                                is_soft_failure = has_reflect
-                        else:
-                            # Fallback to old logic if last_action_status not available
-                            has_reflect = check_reflect_node_reachable(self.workflow)
-                            if has_reflect:
-                                logger.info(
-                                    f"Node failed but workflow has reflection. Continuing as Soft Failure: {current_node.description}"
-                                )
-                                is_soft_failure = True
-                            else:
-                                # Hard failure - terminate workflow
-                                self._update_action_status(
-                                    node_start_action,
-                                    success=False,
-                                    error=f"Node execution failed: {current_node.description}",
-                                )
-                                logger.warning(f"Node failed: {current_node.description}")
-                                break
+                        is_soft_failure, should_continue = self._handle_node_failure(
+                            current_node, node_start_action
+                        )
+                        if not should_continue:
+                            break
 
                     self._update_action_status(
                         node_start_action,
@@ -499,9 +534,8 @@ class WorkflowRunner:
 
             # Calculate and log performance metrics
             execution_time = time.time() - start_time
-            nodes_executed = (
-                len([n for n in self.workflow.nodes.values() if n.status == "completed"]) if self.workflow else 0
-            )
+            # Use incremental counter for completed nodes (O(1) vs O(n) scan)
+            nodes_executed = self._completed_nodes_count if self.workflow else 0
             nodes_failed = (
                 len([n for n in self.workflow.nodes.values() if n.status == "failed"]) if self.workflow else 0
             )

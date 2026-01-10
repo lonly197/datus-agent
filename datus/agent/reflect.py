@@ -13,18 +13,43 @@ from datus.utils.traceable_utils import optional_traceable
 
 logger = get_logger(__name__)
 
+# Constant for sample line indication
+USE_ALL_ROWS = -1
+
 
 @optional_traceable()
 def evaluate_with_model(task: SqlTask, node_input: BaseInput, model: LLMBaseModel) -> Dict:
     """
     Use a language model to evaluate SQL execution results.
     """
+    # Validate inputs
+    if not task or not task.to_str():
+        return {
+            "success": False,
+            "error": "Invalid task: task description is empty",
+            "strategy": "UNKNOWN",
+        }
+
+    if not node_input or not hasattr(node_input, "sql_context"):
+        return {
+            "success": False,
+            "error": "Invalid node_input: missing sql_context attribute",
+            "strategy": "UNKNOWN",
+        }
+
+    if not node_input.sql_context:
+        return {
+            "success": False,
+            "error": "Invalid node_input: sql_context is empty",
+            "strategy": "UNKNOWN",
+        }
+
     # Get evaluation prompt
     sql_context = node_input.sql_context[-1]
     prompt_version = node_input.prompt_version
     sample_line = node_input.sql_return_sample_line
     sample_return = sql_context.sql_return
-    if sample_line != -1 and sql_context.sql_return:
+    if sample_line != USE_ALL_ROWS and sql_context.sql_return:
         sample_return_list = sql_context.sql_return.split("\n")[: sample_line + 1]
         sample_return = "\n".join(sample_return_list)
 
