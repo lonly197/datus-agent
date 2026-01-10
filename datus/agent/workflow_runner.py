@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
 from datus.agent.evaluate import evaluate_result, setup_node_input
+from datus.agent.node import Node
 from datus.agent.plan import generate_workflow
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
