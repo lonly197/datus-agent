@@ -8,7 +8,6 @@ ChatAgenticNode implementation for flexible CLI chat interactions.
 This module provides a concrete implementation of GenSQLAgenticNode specifically
 designed for chat interactions with database and filesystem tool support.
 """
-import asyncio
 import re
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
@@ -18,14 +17,13 @@ try:
 except ImportError:
     from typing_extensions import override
 
-from datus.agent.node.execution_event_manager import ExecutionEventManager, create_execution_mode
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.chat_agentic_node_models import ChatNodeInput
 from datus.schemas.node_models import SQLContext
-from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool import ContextSearchTools, DBFuncTool
 from datus.utils.async_utils import ensure_not_cancelled
 from datus.utils.loggings import get_logger
@@ -894,7 +892,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
     def setup_tools(self):
         """Initialize all tools with default database connection."""
         # Chat node uses all available tools by default
-        db_manager = db_manager_instance(self.agent_config.namespaces)
+        db_manager = get_db_manager(self.agent_config.namespaces)
         conn = db_manager.get_conn(self.agent_config.current_namespace, self.agent_config.current_database)
         self.db_func_tool = DBFuncTool(conn, agent_config=self.agent_config)
         self.context_search_tools = ContextSearchTools(self.agent_config)
@@ -1576,7 +1574,18 @@ class ChatAgenticNode(GenSQLAgenticNode):
             logger.debug(f"Determining execution scenario for message: {message[:100]}...")
 
             # Check for SQL review keywords with SQL content validation
-            sql_review_keywords = ["审查", "review", "检查", "check", "评估", "evaluate", "质量", "quality", "审核", "audit"]
+            sql_review_keywords = [
+                "审查",
+                "review",
+                "检查",
+                "check",
+                "评估",
+                "evaluate",
+                "质量",
+                "quality",
+                "审核",
+                "audit",
+            ]
             sql_indicators = ["select", "from", "where", "join", "group by", "order by", "```sql", "```"]
 
             has_sql_review_keywords = any(keyword in message for keyword in sql_review_keywords)

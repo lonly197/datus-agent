@@ -190,9 +190,9 @@ class SchemaLinkingNode(Node):
         logger.info("Get tables directly from database")
         try:
             # Get database connector through db_manager
-            from datus.tools.db_tools.db_manager import db_manager_instance
+            from datus.tools.db_tools.db_manager import get_db_manager
 
-            db_manager = db_manager_instance(self.agent_config.namespaces)
+            db_manager = get_db_manager(self.agent_config.namespaces)
 
             # Get current namespace and database connection
             current_namespace = self.agent_config.current_namespace

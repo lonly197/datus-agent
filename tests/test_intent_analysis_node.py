@@ -124,7 +124,7 @@ class TestIntentAnalysisNode:
         node.workflow = mock_workflow
 
         # Run the node
-        run_result = node.run()
+        node.run()
 
         # Verify it completes successfully
         assert node.status == "completed"

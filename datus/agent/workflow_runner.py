@@ -15,7 +15,7 @@ from datus.schemas.action_history import ActionHistory, ActionHistoryManager, Ac
 from datus.schemas.base import BaseResult
 from datus.schemas.node_models import SqlTask
 from datus.utils.async_utils import ensure_not_cancelled
-from datus.utils.error_handler import check_reflect_node_reachable, NodeStatus
+from datus.utils.error_handler import check_reflect_node_reachable
 from datus.utils.loggings import get_logger
 from datus.utils.traceable_utils import optional_traceable
 
@@ -212,9 +212,7 @@ class WorkflowRunner:
                 action.output.update(output_data)
 
     def _handle_node_failure(
-        self,
-        current_node: Node,
-        node_start_action: Optional[ActionHistory] = None
+        self, current_node: Node, node_start_action: Optional[ActionHistory] = None
     ) -> tuple[bool, bool]:
         """
         Handle node failure with unified soft/hard failure logic.
@@ -230,13 +228,11 @@ class WorkflowRunner:
         should_continue = True
 
         # 1. Check ActionStatus first (SOFT_FAILED vs FAILED)
-        if hasattr(current_node, 'last_action_status'):
+        if hasattr(current_node, "last_action_status"):
             last_status = current_node.last_action_status
             if last_status == ActionStatus.SOFT_FAILED:
                 is_soft_failure = True
-                logger.info(
-                    f"Node returned SOFT_FAILED status: {current_node.description}"
-                )
+                logger.info(f"Node returned SOFT_FAILED status: {current_node.description}")
             elif last_status == ActionStatus.FAILED:
                 # Check if reflect node is reachable for recovery
                 has_reflect = check_reflect_node_reachable(self.workflow)
@@ -251,8 +247,7 @@ class WorkflowRunner:
                 else:
                     # Hard failure - terminate workflow
                     logger.warning(
-                        f"Node failed with no reachable reflect node. "
-                        f"Hard Failure: {current_node.description}"
+                        f"Node failed with no reachable reflect node. " f"Hard Failure: {current_node.description}"
                     )
                     should_continue = False
 
@@ -261,10 +256,7 @@ class WorkflowRunner:
                         self._update_action_status(
                             node_start_action,
                             success=False,
-                            error=(
-                                f"Node execution failed (no recovery path): "
-                                f"{current_node.description}"
-                            ),
+                            error=(f"Node execution failed (no recovery path): " f"{current_node.description}"),
                         )
             else:
                 # Unknown status - default to checking for reflect
@@ -296,9 +288,7 @@ class WorkflowRunner:
         if not is_soft_failure and current_node.type == NodeType.TYPE_PARALLEL:
             has_any_success = self._check_parallel_node_success(current_node)
             if has_any_success:
-                logger.warning(
-                    "Parallel node partial failure, continuing to selection"
-                )
+                logger.warning("Parallel node partial failure, continuing to selection")
             else:
                 logger.warning(f"Parallel node all failed: {current_node.description}")
                 should_continue = False
@@ -310,11 +300,7 @@ class WorkflowRunner:
         try:
             if node.result and hasattr(node.result, "child_results"):
                 for v in node.result.child_results.values():
-                    ok = (
-                        v.get("success", False)
-                        if isinstance(v, dict)
-                        else getattr(v, "success", False)
-                    )
+                    ok = v.get("success", False) if isinstance(v, dict) else getattr(v, "success", False)
                     if ok:
                         return True
             return False
@@ -470,9 +456,7 @@ class WorkflowRunner:
 
                     is_soft_failure = False
                     if current_node.status == "failed":
-                        is_soft_failure, should_continue = self._handle_node_failure(
-                            current_node, node_start_action
-                        )
+                        is_soft_failure, should_continue = self._handle_node_failure(current_node, node_start_action)
                         if not should_continue:
                             break
 
@@ -502,9 +486,7 @@ class WorkflowRunner:
                     if evaluation.get("success"):
                         self.workflow.advance_to_next_node()
                     elif is_soft_failure:
-                        logger.warning(
-                            f"Node evaluation failed but continuing due to Soft Failure mode: {evaluation}"
-                        )
+                        logger.warning(f"Node evaluation failed but continuing due to Soft Failure mode: {evaluation}")
                         self.workflow.advance_to_next_node()
                     else:
                         logger.warning(f"Node evaluation failed: {evaluation}")

@@ -6,7 +6,7 @@
 IntentAnalysisNode implementation for analyzing query intent.
 """
 
-from typing import Any, AsyncGenerator, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
 
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow

@@ -428,7 +428,7 @@ def db_config_name(namespace: str, db_type: str, name: str = "") -> str:
 _INSTANCE = None
 
 
-def db_manager_instance(
+def get_db_manager(
     db_configs: Optional[Dict[str, Dict[str, DbConfig]]] = None,
 ) -> DBManager:
     global _INSTANCE

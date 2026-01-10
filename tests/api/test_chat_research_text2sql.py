@@ -4,8 +4,7 @@ API tests for chat research endpoint with text2sql scenarios.
 Tests the complete API flow from HTTP request to SSE response streaming.
 """
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient

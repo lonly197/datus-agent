@@ -18,7 +18,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.storage.metric.store import SemanticMetricsRAG
 from datus.storage.schema_metadata.store import SchemaWithValueRAG
 from datus.tools.db_tools import BaseSqlConnector
-from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool.base import FuncToolResult
 from datus.utils.loggings import get_logger
 
@@ -47,7 +47,7 @@ class EnhancedPreflightTools:
         self.metrics_rag = SemanticMetricsRAG(agent_config, sub_agent_name) if agent_config else None
 
         # Initialize database manager
-        self.db_manager = db_manager_instance(agent_config.namespaces) if agent_config else None
+        self.db_manager = get_db_manager(agent_config.namespaces) if agent_config else None
 
         # Check availability
         self.has_schema = self.schema_rag and self.schema_rag.schema_store.table_size() > 0

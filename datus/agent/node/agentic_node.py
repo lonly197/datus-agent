@@ -774,9 +774,7 @@ class AgenticNode(Node):
         Use delete_session for complete cleanup, clear_session for soft reset.
         """
         self._cleanup_session_internal()
-        logger.info(
-            f"Deleted session: {self.session_id if hasattr(self, '_session_id_before_cleanup') else 'N/A'}"
-        )
+        logger.info(f"Deleted session: {self.session_id if hasattr(self, '_session_id_before_cleanup') else 'N/A'}")
 
     async def __aenter__(self):
         """

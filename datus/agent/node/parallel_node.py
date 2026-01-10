@@ -81,11 +81,8 @@ class ParallelNode(Node):
 
             # Determine max_workers from agent config with sensible defaults
             max_workers = len(child_nodes)  # Default to number of child nodes
-            if hasattr(self, 'agent_config') and self.agent_config:
-                max_workers = min(
-                    max_workers,
-                    getattr(self.agent_config, 'parallel_max_workers', 10)
-                )
+            if hasattr(self, "agent_config") and self.agent_config:
+                max_workers = min(max_workers, getattr(self.agent_config, "parallel_max_workers", 10))
             logger.info(f"Parallel execution: {len(child_nodes)} children with max_workers={max_workers}")
 
             # Execute child nodes in parallel using ThreadPoolExecutor

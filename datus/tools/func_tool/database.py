@@ -14,7 +14,7 @@ from datus.schemas.agent_models import SubAgentConfig
 from datus.storage.metric.store import SemanticMetricsRAG
 from datus.storage.schema_metadata.store import SchemaWithValueRAG
 from datus.tools.db_tools import BaseSqlConnector
-from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.compress_utils import DataCompressor
 from datus.utils.constants import SUPPORT_DATABASE_DIALECTS, SUPPORT_SCHEMA_DIALECTS, DBType
@@ -1660,7 +1660,7 @@ class DBFuncTool:
 def db_function_tool_instance(
     agent_config: AgentConfig, database_name: str = "", sub_agent_name: Optional[str] = None
 ) -> DBFuncTool:
-    db_manager = db_manager_instance(agent_config.namespaces)
+    db_manager = get_db_manager(agent_config.namespaces)
     return DBFuncTool(
         db_manager.get_conn(agent_config.current_namespace, database_name or agent_config.current_database),
         agent_config=agent_config,

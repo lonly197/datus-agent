@@ -5,12 +5,10 @@ Tests complete workflow execution from API request to SQL output,
 including error scenarios and recovery mechanisms.
 """
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from datus.agent.workflow import Workflow
 from datus.agent.workflow_runner import WorkflowRunner
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.base import SqlTask
@@ -83,9 +81,10 @@ class TestText2SQLWorkflowIntegration:
     @pytest.mark.asyncio
     async def test_text2sql_workflow_with_preflight_tools(self, mock_agent_config, sample_sql_task):
         """Test text2sql workflow with preflight tool execution."""
-        with patch("datus.agent.workflow_runner.WorkflowRunner") as mock_runner_class, patch(
-            "datus.agent.node.preflight_orchestrator.PreflightOrchestrator"
-        ) as mock_preflight_class:
+        with (
+            patch("datus.agent.workflow_runner.WorkflowRunner") as mock_runner_class,
+            patch("datus.agent.node.preflight_orchestrator.PreflightOrchestrator") as mock_preflight_class,
+        ):
             # Mock preflight orchestrator
             mock_preflight = MagicMock()
             mock_preflight_class.return_value = mock_preflight

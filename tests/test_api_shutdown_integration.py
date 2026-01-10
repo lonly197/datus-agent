@@ -3,20 +3,12 @@ Integration tests for API shutdown and task cancellation behavior.
 """
 
 import asyncio
-import os
-import signal
-import subprocess
-import sys
-import tempfile
 import time
-from pathlib import Path
 
 import pytest
-import requests
 from fastapi.testclient import TestClient
 
 from datus.api.server import create_app
-from datus.api.service import DatusAPIService
 
 
 class TestAPIShutdownIntegration:

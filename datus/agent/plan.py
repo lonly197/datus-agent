@@ -10,8 +10,6 @@ import yaml
 from agents import Tool
 
 from datus.agent.node import Node
-from datus.agent.node.intent_analysis_node import IntentAnalysisNode
-from datus.agent.node.schema_discovery_node import SchemaDiscoveryNode
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.node_type import NodeType
@@ -174,9 +172,7 @@ def _validate_standard_sql_workflow(workflow_name: str, workflow_nodes: List[str
     required_nodes = ["schema_linking", "generate_sql", "execute_sql", "output"]
     for required_node in required_nodes:
         if required_node not in workflow_nodes:
-            errors.append(
-                f"{workflow_name} workflow missing required node: {required_node}"
-            )
+            errors.append(f"{workflow_name} workflow missing required node: {required_node}")
 
     return errors
 
@@ -193,9 +189,7 @@ def _validate_metric_to_sql_workflow(workflow_nodes: List[str]) -> List[str]:
     required_nodes = ["schema_linking", "search_metrics", "generate_sql", "execute_sql", "output"]
     for required_node in required_nodes:
         if required_node not in workflow_nodes:
-            errors.append(
-                f"metric_to_sql workflow missing required node: {required_node}"
-            )
+            errors.append(f"metric_to_sql workflow missing required node: {required_node}")
 
     return errors
 
@@ -214,28 +208,19 @@ def _validate_agentic_workflow(workflow_name: str, workflow_nodes: List[str]) ->
 
     # All agentic workflows require output node
     if "output" not in workflow_nodes:
-        errors.append(
-            f"{workflow_name} workflow missing required node: output"
-        )
+        errors.append(f"{workflow_name} workflow missing required node: output")
 
     # Agentic workflows should have a chat/gensql node
     chat_patterns = ["chat_agentic", "sql_chatbot", "chat"]
-    has_chat_node = any(
-        any(pattern in node for pattern in chat_patterns)
-        for node in workflow_nodes
-    )
+    has_chat_node = any(any(pattern in node for pattern in chat_patterns) for node in workflow_nodes)
 
     if not has_chat_node:
-        errors.append(
-            f"{workflow_name} workflow should have a chat or sql_chatbot node"
-        )
+        errors.append(f"{workflow_name} workflow should have a chat or sql_chatbot node")
 
     # Plan workflows should not have execute_sql (plan-only mode)
     if workflow_name.endswith("_plan"):
         if "execute_sql" in workflow_nodes:
-            errors.append(
-                f"{workflow_name} workflow should not contain execute_sql node (plan-only mode)"
-            )
+            errors.append(f"{workflow_name} workflow should not contain execute_sql node (plan-only mode)")
 
     return errors
 
@@ -371,11 +356,7 @@ def _create_single_node(
     normalized_type = NODE_TYPE_ALIASES.get(node_type, node_type)
 
     # Check if node_type is defined in agentic_nodes config - if so, map to gensql
-    if (
-        agent_config
-        and hasattr(agent_config, "agentic_nodes")
-        and node_type in agent_config.agentic_nodes
-    ):
+    if agent_config and hasattr(agent_config, "agentic_nodes") and node_type in agent_config.agentic_nodes:
         normalized_type = NodeType.TYPE_GENSQL
 
     description = NodeType.get_description(normalized_type)

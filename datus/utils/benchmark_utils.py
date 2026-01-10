@@ -30,7 +30,7 @@ import yaml
 
 from datus.configuration.agent_config import AgentConfig, BenchmarkConfig
 from datus.tools.db_tools import BaseSqlConnector
-from datus.tools.db_tools.db_manager import db_manager_instance, get_connection
+from datus.tools.db_tools.db_manager import get_connection, get_db_manager
 from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
@@ -167,8 +167,7 @@ class SqlData:
 
 
 class SqlProvider(Protocol):
-    def fetch(self, task_id: str) -> SqlData:
-        ...
+    def fetch(self, task_id: str) -> SqlData: ...
 
 
 @dataclass
@@ -550,8 +549,7 @@ class EvaluationReport:
 
 
 class ResultProvider(Protocol):
-    def fetch(self, task_id: str) -> ResultData:
-        ...
+    def fetch(self, task_id: str) -> ResultData: ...
 
 
 class CsvPerTaskResultProvider(ResultProvider):
@@ -2075,7 +2073,7 @@ def _build_gold_result_provider(
             message="At least one of gold_result_key or gold_sql_key must be provided for gold result evaluation.",
         )
 
-    db_manager = db_manager_instance(agent_config.namespaces)
+    db_manager = get_db_manager(agent_config.namespaces)
     connections = db_manager.get_connections(agent_config.current_namespace)
 
     return SingleFileGoldProvider(

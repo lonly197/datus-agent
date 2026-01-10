@@ -34,7 +34,7 @@ from datus.configuration.agent_config_loader import configuration_manager, load_
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import SQLContext
 from datus.tools.db_tools import BaseSqlConnector
-from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.db_tools.db_manager import get_db_manager
 from datus.utils.constants import SYS_SUB_AGENTS, DBType, SQLType
 from datus.utils.exceptions import setup_exception_handler
 from datus.utils.loggings import get_logger
@@ -109,7 +109,7 @@ class DatusCLI:
             current_catalog=getattr(args, "catalog", ""),
             current_schema=getattr(args, "schema", ""),
         )
-        self.db_manager = db_manager_instance(self.agent_config.namespaces)
+        self.db_manager = get_db_manager(self.agent_config.namespaces)
 
         # Initialize available subagents from agentic_nodes (excluding 'chat') and include built-in subagents
         self.available_subagents = set(SYS_SUB_AGENTS)

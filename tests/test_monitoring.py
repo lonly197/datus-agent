@@ -385,7 +385,9 @@ class ExecutionMonitor:
                 duration = trend.get("duration", 0)
                 todos_count = trend.get("todos_count", 0)
                 status_icon = "✅" if trend.get("status") == "completed" else "❌"
-                dashboard_lines.append(f"║ {i+1}. {duration:.2f}s | {todos_count} todos | {status_icon}                      ║")
+                dashboard_lines.append(
+                    f"║ {i+1}. {duration:.2f}s | {todos_count} todos | {status_icon}                      ║"
+                )
         else:
             dashboard_lines.append("║                              No recent executions                          ║")
 

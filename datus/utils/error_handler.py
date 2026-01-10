@@ -8,17 +8,17 @@ Unified error handling and retry mechanisms for node execution.
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, Optional, TypeVar
+from typing import Any, Dict, Optional
 
 from tenacity import (
+    after_log,
+    before_sleep_log,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    before_sleep_log,
-    after_log,
 )
 
 from datus.utils.exceptions import ErrorCode
@@ -29,6 +29,7 @@ logger = get_logger(__name__)
 
 class NodeStatus(Enum):
     """Unified node execution status."""
+
     SUCCESS = "success"
     SOFT_FAILED = "soft_failed"  # Recoverable failure
     FAILED = "failed"  # Hard failure, terminate workflow
@@ -37,6 +38,7 @@ class NodeStatus(Enum):
 
 class RetryStrategy(Enum):
     """Retry strategy for failed operations."""
+
     NONE = "none"  # No retry
     EXPONENTIAL_BACKOFF = "exponential_backoff"  # Exponential backoff
     FIXED_DELAY = "fixed_delay"  # Fixed delay between retries
@@ -51,6 +53,7 @@ class NodeExecutionResult:
     This provides a consistent interface for node execution outcomes,
     enabling proper error propagation and retry logic.
     """
+
     status: NodeStatus
     error_code: Optional[ErrorCode] = None
     error_message: Optional[str] = None
@@ -123,22 +126,18 @@ class NodeExecutionResult:
 
 class RetryableLLMError(Exception):
     """Base class for retryable LLM errors."""
-    pass
 
 
 class LLMTimeoutError(RetryableLLMError):
     """LLM request timeout."""
-    pass
 
 
 class LLMRateLimitError(RetryableLLMError):
     """LLM rate limit exceeded."""
-    pass
 
 
 class LLMInvalidResponseError(Exception):
     """LLM returned invalid response (non-retryable)."""
-    pass
 
 
 class LLMMixin:
@@ -164,7 +163,7 @@ class LLMMixin:
         operation_name: str = "llm_call",
         max_retries: int = 3,
         cache_key: Optional[str] = None,
-        **llm_kwargs
+        **llm_kwargs,
     ) -> Dict[str, Any]:
         """
         Call LLM with automatic retry and caching.
@@ -188,7 +187,7 @@ class LLMMixin:
             return self._llm_call_cache[cache_key]
 
         # Get model from instance
-        if not hasattr(self, 'model'):
+        if not hasattr(self, "model"):
             raise RuntimeError("LLMMixin requires 'model' attribute on the instance")
 
         model = self.model
@@ -207,16 +206,16 @@ class LLMMixin:
             stop=stop_after_attempt(max_retries),
             wait=wait_exponential(multiplier=multiplier, min=min_wait, max=60),
             retry=retry_if_exception_type(RetryableLLMError),
-            before_sleep=before_sleep_log(logger, logger.level) if hasattr(logger, 'level') else None,
-            after=after_log(logger, logger.level) if hasattr(logger, 'level') else None,
+            before_sleep=before_sleep_log(logger, logger.level) if hasattr(logger, "level") else None,
+            after=after_log(logger, logger.level) if hasattr(logger, "level") else None,
             reraise=True,
         )
         def _llm_call_sync():
             """Synchronous LLM call with retry."""
             try:
-                if hasattr(model, 'generate_with_json_output'):
+                if hasattr(model, "generate_with_json_output"):
                     return model.generate_with_json_output(prompt, **llm_kwargs)
-                elif hasattr(model, 'generate'):
+                elif hasattr(model, "generate"):
                     return {"result": model.generate(prompt, **llm_kwargs)}
                 else:
                     raise ValueError(f"Model {type(model)} has no compatible generate method")
@@ -244,16 +243,13 @@ class LLMMixin:
             elapsed = time.time() - start_time
 
             # Get retry statistics if available
-            retry_stats = getattr(_llm_call_sync, 'retry', None)
-            if retry_stats and hasattr(retry_stats, 'statistics'):
-                attempt_number = retry_stats.statistics.get('attempt_number', 1)
+            retry_stats = getattr(_llm_call_sync, "retry", None)
+            if retry_stats and hasattr(retry_stats, "statistics"):
+                attempt_number = retry_stats.statistics.get("attempt_number", 1)
             else:
                 attempt_number = 1
 
-            logger.info(
-                f"LLM call succeeded: {operation_name} "
-                f"(took {elapsed:.2f}s, attempt: {attempt_number})"
-            )
+            logger.info(f"LLM call succeeded: {operation_name} " f"(took {elapsed:.2f}s, attempt: {attempt_number})")
 
             # Cache successful results
             if cache_key:

@@ -166,9 +166,7 @@ class NodeType:
         }
 
     @classmethod
-    def type_input(
-        cls, node_type: str, input_data: dict, ignore_require_check: bool = False
-    ) -> BaseInput:
+    def type_input(cls, node_type: str, input_data: dict, ignore_require_check: bool = False) -> BaseInput:
         """
         Create an input instance for the given node type.
 

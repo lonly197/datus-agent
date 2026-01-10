@@ -17,7 +17,7 @@ from datus.cli.generation_hooks import GenerationHooks
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.semantic_agentic_node_models import SemanticNodeInput, SemanticNodeResult
-from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool import DBFuncTool
 from datus.tools.func_tool.filesystem_tool import FilesystemFuncTool
 from datus.tools.func_tool.generation_tools import GenerationTools
@@ -149,7 +149,7 @@ class SemanticAgenticNode(AgenticNode):
     def _setup_db_tools(self):
         """Setup database tools."""
         try:
-            db_manager = db_manager_instance(self.agent_config.namespaces)
+            db_manager = get_db_manager(self.agent_config.namespaces)
             conn = db_manager.get_conn(self.agent_config.current_namespace, self.agent_config.current_database)
             # Don't pass sub_agent_name to use default storage path
             self.db_func_tool = DBFuncTool(

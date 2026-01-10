@@ -13,29 +13,28 @@ Tests for:
 5. Context update thread safety
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
-from datus.utils.error_handler import (
-    NodeStatus,
-    NodeExecutionResult,
-    RetryStrategy,
-    check_reflect_node_reachable,
-    LLMTimeoutError,
-    LLMRateLimitError,
-)
-from datus.utils.context_lock import (
-    ContextUpdateLock,
-    safe_context_update,
-    atomic_context_merge,
-    ContextSnapshot,
-)
+import pytest
+
 from datus.configuration.business_term_config import (
+    SCHEMA_VALIDATION_CONFIG,
     get_business_term_mapping,
     get_schema_term_mapping,
     get_table_keyword_pattern,
-    SCHEMA_VALIDATION_CONFIG,
-    TABLE_KEYWORD_PATTERNS,
+)
+from datus.utils.context_lock import (
+    ContextSnapshot,
+    ContextUpdateLock,
+    atomic_context_merge,
+    safe_context_update,
+)
+from datus.utils.error_handler import (
+    LLMRateLimitError,
+    LLMTimeoutError,
+    NodeExecutionResult,
+    RetryStrategy,
+    check_reflect_node_reachable,
 )
 
 
@@ -217,7 +216,7 @@ class TestContextUpdateLock:
 class TestLLMRetryMechanism:
     """Test LLM retry mechanism (integration test)."""
 
-    @patch('datus.utils.error_handler.logger')
+    @patch("datus.utils.error_handler.logger")
     def test_llm_timeout_classification(self, mock_logger):
         """Test that timeout errors are properly classified."""
         # The error handler should classify asyncio.TimeoutError as LLMTimeoutError

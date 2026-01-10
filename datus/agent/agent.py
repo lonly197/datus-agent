@@ -30,7 +30,7 @@ from datus.storage.schema_metadata.benchmark_init_bird import init_dev_schema
 from datus.storage.schema_metadata.local_init import init_local_schema
 from datus.storage.sub_agent_kb_bootstrap import SUPPORTED_COMPONENTS as SUB_AGENT_COMPONENTS
 from datus.storage.sub_agent_kb_bootstrap import SubAgentBootstrapper
-from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
+from datus.tools.db_tools.db_manager import DBManager, get_db_manager
 from datus.utils.async_utils import ensure_not_cancelled
 from datus.utils.benchmark_utils import load_benchmark_tasks
 from datus.utils.constants import SYS_SUB_AGENTS
@@ -67,7 +67,7 @@ class Agent:
         if db_manager:
             self.db_manager = db_manager
         else:
-            self.db_manager = db_manager_instance(self.global_config.namespaces)
+            self.db_manager = get_db_manager(self.global_config.namespaces)
 
         self.tools = {}
         self.storage_modules = {}
@@ -132,9 +132,7 @@ class Agent:
         project_root = os.path.abspath(self.global_config.rag_storage_path())
 
         if not abs_path.startswith(project_root):
-            raise ValueError(
-                f"Refusing to delete directory outside project root: {abs_path}"
-            )
+            raise ValueError(f"Refusing to delete directory outside project root: {abs_path}")
 
         if not os.path.exists(abs_path):
             logger.debug(f"Directory does not exist, skipping deletion: {abs_path}")
@@ -314,14 +312,11 @@ class Agent:
         selected_components = self.args.components
 
         # Validate component names
-        valid_components = {
-            "metadata", "metrics", "document", "ext_knowledge", "reference_sql"
-        }
+        valid_components = {"metadata", "metrics", "document", "ext_knowledge", "reference_sql"}
         invalid = set(selected_components) - valid_components
         if invalid:
             raise ValueError(
-                f"Invalid bootstrap components: {invalid}. "
-                f"Valid components: {sorted(valid_components)}"
+                f"Invalid bootstrap components: {invalid}. " f"Valid components: {sorted(valid_components)}"
             )
 
         kb_update_strategy = self.args.kb_update_strategy
@@ -545,7 +540,7 @@ class Agent:
     def do_benchmark(
         self, benchmark_platform: str, target_task_ids: Optional[Set[str]] = None, run_id: Optional[str] = None
     ):
-        _, conn = db_manager_instance(self.global_config.namespaces).first_conn_with_name(
+        _, conn = get_db_manager(self.global_config.namespaces).first_conn_with_name(
             self.global_config.current_namespace
         )
         self.check_db()
@@ -706,9 +701,7 @@ class Agent:
             namespace_abs = os.path.abspath(namespace_dir)
             output_abs = os.path.abspath(output_dir)
             if not namespace_abs.startswith(output_abs):
-                raise ValueError(
-                    f"Namespace directory outside output root: {namespace_dir}"
-                )
+                raise ValueError(f"Namespace directory outside output root: {namespace_dir}")
 
             logger.info(f"Cleaning up namespace directory: {namespace_dir}")
             try:
@@ -723,9 +716,7 @@ class Agent:
             gold_abs = os.path.abspath(gold_path)
             benchmark_abs = os.path.abspath(benchmark_path)
             if not gold_abs.startswith(benchmark_abs):
-                raise ValueError(
-                    f"Gold directory outside benchmark path: {gold_path}"
-                )
+                raise ValueError(f"Gold directory outside benchmark path: {gold_path}")
 
             logger.info(f"Cleaning up gold directory: {gold_path}")
             try:

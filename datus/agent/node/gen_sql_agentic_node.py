@@ -19,7 +19,7 @@ from datus.schemas.action_history import ActionHistory, ActionHistoryManager, Ac
 from datus.schemas.agent_models import SubAgentConfig
 from datus.schemas.gen_sql_agentic_node_models import GenSQLNodeInput, GenSQLNodeResult
 from datus.schemas.node_models import Metric, ReferenceSql, TableSchema
-from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool import ContextSearchTools, DBFuncTool, FilesystemFuncTool
 from datus.tools.func_tool.date_parsing_tools import DateParsingTools
 from datus.utils.async_utils import ensure_not_cancelled
@@ -179,7 +179,7 @@ class GenSQLAgenticNode(AgenticNode):
         Args:
             database_name: The name of the database to connect to
         """
-        db_manager = db_manager_instance(self.agent_config.namespaces)
+        db_manager = get_db_manager(self.agent_config.namespaces)
         conn = db_manager.get_conn(self.agent_config.current_namespace, database_name)
         self.db_func_tool = DBFuncTool(
             conn,
@@ -219,7 +219,7 @@ class GenSQLAgenticNode(AgenticNode):
     def _setup_db_tools(self):
         """Setup database tools."""
         try:
-            db_manager = db_manager_instance(self.agent_config.namespaces)
+            db_manager = get_db_manager(self.agent_config.namespaces)
             conn = db_manager.get_conn(self.agent_config.current_namespace, self.agent_config.current_database)
             self.db_func_tool = DBFuncTool(
                 conn,
@@ -305,7 +305,7 @@ class GenSQLAgenticNode(AgenticNode):
                 tool_instance = self.context_search_tools
             elif tool_type == "db_tools":
                 if not self.db_func_tool:
-                    db_manager = db_manager_instance(self.agent_config.namespaces)
+                    db_manager = get_db_manager(self.agent_config.namespaces)
                     conn = db_manager.get_conn(self.agent_config.current_namespace, self.agent_config.current_database)
                     self.db_func_tool = DBFuncTool(
                         conn,

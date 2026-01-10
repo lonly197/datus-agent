@@ -12,16 +12,14 @@ from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.business_term_config import (
-    TABLE_DISCOVERY_STAGES,
     LLM_TABLE_DISCOVERY_CONFIG,
     get_business_term_mapping,
-    get_table_keyword_pattern,
 )
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseResult
-from datus.schemas.node_models import BaseInput
+from datus.schemas.node_models import BaseInput, TableSchema
 from datus.storage.schema_metadata import SchemaWithValueRAG
-from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool.context_search import ContextSearchTools
 from datus.utils.context_lock import safe_context_update
 from datus.utils.error_handler import LLMMixin, NodeExecutionResult
@@ -104,7 +102,6 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             # Safely access intent from workflow metadata with comprehensive validation
             intent = "text2sql"  # Default fallback
-            intent_confidence = 0.0
 
             if hasattr(self.workflow, "metadata") and self.workflow.metadata:
                 detected_intent = self.workflow.metadata.get("detected_intent")
@@ -112,7 +109,6 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
                 if detected_intent and isinstance(detected_intent, str) and confidence > 0.3:
                     intent = detected_intent
-                    intent_confidence = confidence
                     logger.debug(f"Using detected intent from workflow metadata: {intent} (confidence: {confidence})")
                 else:
                     logger.warning(
@@ -212,9 +208,11 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 f"Schema discovery execution failed: {str(e)}",
                 "schema_discovery",
                 {
-                    "task_id": getattr(self.workflow.task, "id", "unknown")
-                    if self.workflow and self.workflow.task
-                    else "unknown"
+                    "task_id": (
+                        getattr(self.workflow.task, "id", "unknown")
+                        if self.workflow and self.workflow.task
+                        else "unknown"
+                    )
                 },
             )
             yield ActionHistory(
@@ -332,7 +330,33 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
         return found_tables
 
-    async def _semantic_table_discovery(self, query: str) -> List[str]:
+    async def _update_context(self, schemas: List[TableSchema], task) -> None:
+        """
+        Update the workflow context with discovered schemas.
+        """
+        if not schemas:
+            return
+
+        # Add to schemas list
+        context_schemas = task.schemas or []
+
+        # Merge new schemas, avoiding duplicates
+        existing_tables = {s.table_name for s in context_schemas}
+        new_schemas = [s for s in schemas if s.table_name not in existing_tables]
+
+        if new_schemas:
+            context_schemas.extend(new_schemas)
+            task.schemas = context_schemas
+
+            # Also update tables list for simple access
+            current_tables = task.tables or []
+            new_table_names = [s.table_name for s in new_schemas]
+            current_tables.extend(new_table_names)
+            task.tables = list(set(current_tables))
+
+            logger.info(f"Updated context with {len(new_schemas)} new schemas")
+
+    async def _semantic_table_discovery(self, task_text: str) -> List[str]:
         """
         Discover tables using semantic vector search.
 
@@ -376,9 +400,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
     def _keyword_table_discovery(self, task_text: str) -> List[str]:
         """
-        Discover tables using keyword matching.
-
-        ✅ Fixed: Uses centralized configuration from business_term_config.py
+        Discover tables using keyword matching and External Knowledge.
 
         Args:
             task_text: Lowercase user query text
@@ -388,23 +410,43 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         """
         candidate_tables = []
 
-        # ✅ Use configured keyword patterns from business_term_config.py
+        # 1. Check hardcoded configuration
         from datus.configuration.business_term_config import TABLE_KEYWORD_PATTERNS
 
-        # Check configured keyword patterns
         for keyword, table_name in TABLE_KEYWORD_PATTERNS.items():
             if keyword in task_text:
                 candidate_tables.append(table_name)
-                # Also add singular/plural variations
                 if table_name.endswith("s"):
                     candidate_tables.append(table_name[:-1])
                 else:
                     candidate_tables.append(table_name + "s")
 
-                # ✅ Also check business term mappings for additional tables
                 business_mappings = get_business_term_mapping(keyword)
                 if business_mappings:
                     candidate_tables.extend(business_mappings)
+
+        # 2. Check External Knowledge Store
+        try:
+            from datus.storage.cache import get_storage_cache_instance
+
+            storage_cache = get_storage_cache_instance(self.agent_config)
+            ext_knowledge = storage_cache.ext_knowledge_storage()
+
+            # Search for relevant terms in the knowledge base
+            results = ext_knowledge.search_knowledge(query_text=task_text, top_n=5)
+
+            if results:
+                for item in results:
+                    explanation = item.get("explanation", "")
+                    potential_tables = self._extract_potential_tables_from_text(explanation)
+                    candidate_tables.extend(potential_tables)
+
+        except (ConnectionError, TimeoutError) as e:
+            logger.warning(f"External knowledge search failed (network): {e}")
+            # Continue with hardcoded mappings as fallback
+        except Exception as e:
+            logger.warning(f"External knowledge search failed: {e}")
+            # Continue with hardcoded mappings as fallback
 
         # Remove duplicates while preserving order
         seen = set()
@@ -415,6 +457,13 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 unique_tables.append(table)
 
         return unique_tables
+
+    def _extract_potential_tables_from_text(self, text: str) -> List[str]:
+        """Helper to extract potential table names (snake_case words) from text."""
+        import re
+
+        # Simple regex for potential table names (snake_case, at least one underscore)
+        return re.findall(r"\b[a-z]+_[a-z0-9_]+\b", text)
 
     async def _llm_based_table_discovery(self, query: str) -> List[str]:
         """
@@ -490,6 +539,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
     async def _load_table_schemas(self, task, candidate_tables: List[str]) -> None:
         """
         Load schemas for candidate tables and update workflow context.
+        Includes automatic metadata repair if definitions are missing.
 
         ✅ Fixed: Uses thread-safe context update to prevent race conditions.
 
@@ -501,6 +551,29 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             return
 
         try:
+            # --- Repair Logic Start ---
+            if self.agent_config:
+                try:
+                    from datus.storage.cache import get_storage_cache_instance
+
+                    storage_cache = get_storage_cache_instance(self.agent_config)
+                    schema_storage = storage_cache.schema_storage()
+
+                    # Check for missing definitions
+                    current_schemas = schema_storage.get_table_schemas(candidate_tables)
+                    missing_tables = []
+                    for i, schema in enumerate(current_schemas):
+                        if not schema or not schema.definition or not schema.definition.strip():
+                            missing_tables.append(candidate_tables[i])
+
+                    if missing_tables:
+                        logger.info(f"Found {len(missing_tables)} tables with missing metadata. Attempting repair...")
+                        await self._repair_metadata(missing_tables, schema_storage, task)
+
+                except Exception as e:
+                    logger.warning(f"Metadata repair pre-check failed: {e}")
+            # --- Repair Logic End ---
+
             # Use existing SchemaWithValueRAG to load table schemas
             if self.agent_config:
                 rag = SchemaWithValueRAG(agent_config=self.agent_config)
@@ -535,6 +608,40 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         except Exception as e:
             logger.warning(f"Failed to load table schemas: {e}")
             # Don't fail the entire node for schema loading issues
+
+    async def _repair_metadata(self, table_names: List[str], schema_storage, task) -> int:
+        """
+        Attempt to repair missing metadata by fetching DDL directly from the database.
+        """
+        repaired_count = 0
+        try:
+            db_manager = get_db_manager()
+            # Use the configured connection for the current task
+            connector = db_manager.get_conn(self.agent_config.current_namespace, task.database_name)
+
+            if not connector:
+                return 0
+
+            for table in table_names:
+                try:
+                    # Try to fetch DDL using connector
+                    ddl = None
+                    if hasattr(connector, "get_table_ddl"):
+                        ddl = connector.get_table_ddl(table)
+                    elif hasattr(connector, "get_ddl"):
+                        ddl = connector.get_ddl(table)
+
+                    if ddl:
+                        schema_storage.update_table_schema(table, ddl)
+                        repaired_count += 1
+                        logger.info(f"Repaired metadata for table: {table}")
+                except Exception as e:
+                    logger.debug(f"Failed to repair metadata for table {table}: {e}")
+
+        except Exception as e:
+            logger.error(f"Metadata repair process failed: {e}")
+
+        return repaired_count
 
     def execute(self) -> BaseResult:
         """
@@ -588,6 +695,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
                 # ✅ Thread-safe metadata update
                 if "candidate_tables" in output:
+
                     def update_metadata():
                         # Store discovered tables in workflow metadata for downstream nodes
                         if not hasattr(workflow, "metadata"):

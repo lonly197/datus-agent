@@ -19,13 +19,14 @@ from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.business_term_config import (
-    SCHEMA_VALIDATION_CONFIG,
     LLM_TERM_EXTRACTION_CONFIG,
+    SCHEMA_VALIDATION_CONFIG,
     get_schema_term_mapping,
 )
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseInput, BaseResult
 from datus.schemas.node_models import TableSchema
+from datus.storage.cache import get_storage_cache_instance
 from datus.utils.error_handler import LLMMixin, NodeExecutionResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
@@ -222,9 +223,11 @@ class SchemaValidationNode(Node, LLMMixin):
                 f"Schema validation execution failed: {str(e)}",
                 "schema_validation",
                 {
-                    "task_id": getattr(self.workflow.task, "id", "unknown")
-                    if self.workflow and self.workflow.task
-                    else "unknown"
+                    "task_id": (
+                        getattr(self.workflow.task, "id", "unknown")
+                        if self.workflow and self.workflow.task
+                        else "unknown"
+                    )
                 },
             )
             yield ActionHistory(
@@ -309,6 +312,7 @@ class SchemaValidationNode(Node, LLMMixin):
         Check how well the schemas cover the query terms.
 
         ✅ Fixed: Uses centralized business term mapping from config for semantic matching.
+        Also uses External Knowledge for terminology lookup.
 
         Uses semantic matching via business term mapping to enable Chinese-to-English
         schema matching. This allows queries with Chinese business terminology to
@@ -319,6 +323,15 @@ class SchemaValidationNode(Node, LLMMixin):
             return {"coverage_score": 1.0, "covered_terms": [], "uncovered_terms": []}
 
         logger.debug(f"Checking schema coverage for {len(query_terms)} query terms: {query_terms}")
+
+        # Initialize ExtKnowledgeStore if available
+        ext_knowledge = None
+        if self.agent_config:
+            try:
+                storage_cache = get_storage_cache_instance(self.agent_config)
+                ext_knowledge = storage_cache.ext_knowledge_storage()
+            except Exception:
+                pass
 
         covered = []
         uncovered = []
@@ -355,6 +368,32 @@ class SchemaValidationNode(Node, LLMMixin):
                     continue
                 else:
                     logger.debug(f"Term '{term}' has mapping {english_terms} but no match found in schema")
+
+            # External Knowledge Store Match
+            is_covered_by_kb = False
+            if ext_knowledge:
+                try:
+                    # Search for the term in knowledge base
+                    results = ext_knowledge.search_knowledge(query_text=term, top_n=3)
+                    for item in results:
+                        if item.get("terminology", "").lower() == term.lower():
+                            explanation = item.get("explanation", "").lower()
+                            # Check if explanation contains any table names present in schemas
+                            for schema in schemas:
+                                if schema and schema.table_name.lower() in explanation:
+                                    covered.append(term)
+                                    is_covered_by_kb = True
+                                    logger.info(
+                                        f"Term '{term}' covered by ExtKnowledge mapping to table '{schema.table_name}'"
+                                    )
+                                    break
+                        if is_covered_by_kb:
+                            break
+                except Exception as e:
+                    logger.warning(f"ExtKnowledge check failed for term '{term}': {e}")
+
+            if is_covered_by_kb:
+                continue
 
             # Partial match for compound terms (e.g., "首次试驾" contains "试驾")
             if SCHEMA_VALIDATION_CONFIG.get("enable_partial_matching", True):

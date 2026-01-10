@@ -65,18 +65,14 @@ def evaluate_result(node: Node, workflow: Workflow) -> Dict:
 
             # Determine if this is a critical failure
             if "critical" in error_msg.lower() or "required" in error_msg.lower():
-                logger.error(
-                    f"Critical context update failure at node {node.id}: {error_msg}"
-                )
+                logger.error(f"Critical context update failure at node {node.id}: {error_msg}")
                 return {
                     "success": False,
                     "message": f"Critical context update failed: {error_msg}",
                 }
             else:
                 # Non-critical issue, log and continue
-                logger.warning(
-                    f"Non-critical context update issue at node {node.id}: {error_msg}"
-                )
+                logger.warning(f"Non-critical context update issue at node {node.id}: {error_msg}")
 
         # Note: With dedicated chat_agentic_plan workflow, plan mode no longer has execute_sql node
         # The workflow naturally progresses from chat → output

@@ -116,27 +116,32 @@ class ExtKnowledgeStore(BaseSubjectEmbeddingStore):
 
     def search_knowledge(
         self,
-        query_text: Optional[str] = None,
+        query_text: str,
         subject_path: Optional[List[str]] = None,
-        top_n: Optional[int] = 5,
+        top_n: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Search for similar knowledge entries.
+        """
+        Search for relevant knowledge entries.
 
         Args:
-            query_text: Query text to search for
-            subject_path: Filter by subject path (e.g., ['Finance', 'Revenue']) (optional)
+            query_text: The search query
+            subject_path: Optional subject path filter
             top_n: Number of results to return
 
         Returns:
             List of matching knowledge entries
         """
-        # Use base class method with knowledge-specific field selection
-        return self.search_with_subject_filter(
-            query_text=query_text,
-            subject_path=subject_path,
-            top_n=top_n,
-            name_field="terminology",
-        )
+        try:
+            # Use base class method with knowledge-specific field selection
+            return self.search_with_subject_filter(
+                query_text=query_text,
+                subject_path=subject_path,
+                top_n=top_n,
+                name_field="terminology",
+            )
+        except Exception as e:
+            logger.warning(f"Knowledge search failed: {e}")
+            return []
 
     def search_all_knowledge(
         self,

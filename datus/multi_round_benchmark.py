@@ -15,7 +15,7 @@ import pandas as pd
 from datus.agent.agent import Agent
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.agent_config_loader import load_agent_config
-from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.db_tools.db_manager import get_db_manager
 from datus.utils.benchmark_utils import load_benchmark_tasks
 from datus.utils.time_utils import format_duration_human
 
@@ -161,7 +161,7 @@ def run_single_round(
     override_round_paths(agent_config, round_dir)
 
     agent_args = build_agent_args(cli_args, target_task_ids, round_dir, round_idx)
-    db_manager = db_manager_instance(agent_config.namespaces)
+    db_manager = get_db_manager(agent_config.namespaces)
     agent = Agent(args=agent_args, agent_config=agent_config, db_manager=db_manager)
 
     print(f"[Round {round_idx}] Starting benchmark -> {round_dir}")

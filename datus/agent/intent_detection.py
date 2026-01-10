@@ -132,7 +132,7 @@ class IntentDetector:
 
     def _clear_cache(self):
         """Clear the keyword detection cache."""
-        if hasattr(self, 'detect_sql_intent_by_keyword'):
+        if hasattr(self, "detect_sql_intent_by_keyword"):
             self.detect_sql_intent_by_keyword.cache_clear()
 
     @lru_cache(maxsize=256)
@@ -214,9 +214,7 @@ User request: {text}
 
                 # Validate confidence range
                 if not 0.0 <= confidence <= 1.0:
-                    logger.warning(
-                        f"Invalid confidence {confidence}, clamping to [0, 1]"
-                    )
+                    logger.warning(f"Invalid confidence {confidence}, clamping to [0, 1]")
                     confidence = max(0.0, min(1.0, confidence))
 
                 return intent, confidence

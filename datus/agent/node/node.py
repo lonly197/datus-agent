@@ -35,7 +35,7 @@ from datus.schemas.node_models import (
 from datus.schemas.reason_sql_node_models import ReasoningResult
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput, SchemaLinkingResult
 from datus.tools.db_tools.base import BaseSqlConnector
-from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.db_tools.db_manager import get_db_manager
 from datus.utils.error_handling import NodeErrorResult as UtilsNodeErrorResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
@@ -70,13 +70,13 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
 
     # Determine timeout from agent config or use default
     timeout = 60  # Default timeout
-    if hasattr(node, 'agent_config') and node.agent_config:
-        timeout = getattr(node.agent_config, 'async_stream_timeout_seconds', 60)
+    if hasattr(node, "agent_config") and node.agent_config:
+        timeout = getattr(node.agent_config, "async_stream_timeout_seconds", 60)
 
     # Determine max_workers from agent config or use default
     max_workers = 1  # Default to single thread for async stream execution
-    if hasattr(node, 'agent_config') and node.agent_config:
-        max_workers = getattr(node.agent_config, 'parallel_min_workers', 1)
+    if hasattr(node, "agent_config") and node.agent_config:
+        max_workers = getattr(node.agent_config, "parallel_min_workers", 1)
 
     def _run_async_in_thread():
         """Run the async operation in a separate thread to avoid event loop conflicts."""
@@ -410,9 +410,7 @@ class Node(ErrorHandlerMixin, ABC):
             self.fail(str(e))
             # Convert to error result if needed
             if not isinstance(self.result, (UtilsNodeErrorResult, AgentNodeErrorResult)):
-                self.result = self.create_error_result(
-                    e.code, str(e), "node_execution", error_details=e.message_args
-                )
+                self.result = self.create_error_result(e.code, str(e), "node_execution", error_details=e.message_args)
             return self.result
         except Exception as e:
             # Generic exception - use unified error handling
@@ -539,7 +537,7 @@ class Node(ErrorHandlerMixin, ABC):
             self.dependencies.append(node_id)
 
     def _sql_connector(self, database_name: str = "") -> BaseSqlConnector:
-        return db_manager_instance(self.agent_config.namespaces).get_conn(
+        return get_db_manager().get_conn(
             self.agent_config.current_namespace,
             database_name,
         )

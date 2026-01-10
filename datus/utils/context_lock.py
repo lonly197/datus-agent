@@ -10,7 +10,7 @@ from multiple nodes without race conditions.
 """
 
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 from datus.utils.loggings import get_logger
 
@@ -168,12 +168,13 @@ class ContextSnapshot:
             self._snapshot = {}
             # Capture all public attributes
             for attr in dir(self.context):
-                if not attr.startswith('_'):
+                if not attr.startswith("_"):
                     try:
                         value = getattr(self.context, attr)
                         if not callable(value):
                             # Deep copy for mutable types
                             import copy
+
                             self._snapshot[attr] = copy.deepcopy(value)
                     except Exception:
                         # Skip attributes that can't be copied

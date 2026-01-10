@@ -17,21 +17,17 @@ BUSINESS_TERM_TO_TABLE_MAPPING = {
     "试驾": ["dwd_assign_dlr_clue_fact_di", "test_drive", "trial_drive", "testdrive"],
     "首次": ["first", "initial", "first_time"],
     "线索": ["dwd_assign_dlr_clue_fact_di", "clue", "clue_id", "lead", "lead_id"],
-
     # Order related
     "下定": ["order", "order_date", "booking", "book"],
     "订单": ["order", "order_id", "orders"],
     "转化": ["conversion", "convert", "transform", "conversions"],
-
     # Time related
     "周期": ["cycle", "period", "duration"],
     "天数": ["days", "date_diff", "day_count"],
     "月份": ["month", "monthly", "mth"],
-
     # Statistics
     "统计": ["count", "sum", "avg", "calculate", "compute"],
     "平均": ["avg", "average", "mean"],
-
     # Common business tables (default mappings)
     "用户": ["users", "user"],
     "客户": ["customers", "customer"],
@@ -49,17 +45,14 @@ BUSINESS_TERM_TO_SCHEMA_MAPPING = {
     "试驾": ["test_drive", "test_drive_date", "trial_drive", "testdrive"],
     "首次": ["first", "initial", "first_time"],
     "线索": ["clue", "clue_id", "lead", "lead_id"],
-
     # Order related
     "下定": ["order", "order_date", "booking", "book"],
     "订单": ["order", "order_id", "orders"],
     "转化": ["conversion", "convert", "transform"],
-
     # Time related
     "周期": ["cycle", "period", "duration"],
     "天数": ["days", "date_diff", "day_count"],
     "月份": ["month", "monthly", "mth"],
-
     # Statistics
     "统计": ["count", "sum", "avg", "calculate", "compute"],
     "平均": ["avg", "average", "mean"],

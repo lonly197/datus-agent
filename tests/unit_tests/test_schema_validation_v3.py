@@ -1,8 +1,10 @@
+from unittest.mock import MagicMock
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+
 from datus.agent.node.schema_validation_node import SchemaValidationNode
 from datus.schemas.node_models import BaseInput
+
 
 class TestSchemaValidationNodeV3:
     @pytest.fixture
@@ -27,18 +29,18 @@ class TestSchemaValidationNodeV3:
         validation_node.model.generate_with_json_output.return_value = {
             "terms": ["统计", "每个月", "首次", "试驾", "平均", "转化", "周期"]
         }
-        
+
         terms = validation_node._extract_query_terms(query)
-        
+
         # Verify prompt content
         args, _ = validation_node.model.generate_with_json_output.call_args
         prompt = args[0]
-        
+
         assert "Break down compound business terms into atomic concepts" in prompt
         assert 'e.g., "首次试驾" -> "首次", "试驾"' in prompt
         assert "Examples:" in prompt
         assert query in prompt
-        
+
         # Verify output
         assert "首次" in terms
         assert "试驾" in terms

@@ -156,9 +156,11 @@ class ResultValidationNode(Node):
                 f"Result validation execution failed: {str(e)}",
                 "result_validation",
                 {
-                    "task_id": getattr(self.workflow.task, "id", "unknown")
-                    if self.workflow and self.workflow.task
-                    else "unknown"
+                    "task_id": (
+                        getattr(self.workflow.task, "id", "unknown")
+                        if self.workflow and self.workflow.task
+                        else "unknown"
+                    )
                 },
             )
             yield ActionHistory(

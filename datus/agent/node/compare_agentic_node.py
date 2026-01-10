@@ -7,7 +7,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.prompts.prompt_manager import prompt_manager
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.compare_node_models import CompareInput, CompareResult
-from datus.tools.db_tools.db_manager import db_manager_instance
+from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool import DBFuncTool
 from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
@@ -86,7 +86,7 @@ class CompareAgenticNode(AgenticNode):
         try:
             namespace = self.agent_config.current_namespace
 
-            db_manager = db_manager_instance(self.agent_config.namespaces)
+            db_manager = get_db_manager(self.agent_config.namespaces)
             database = getattr(self.agent_config, "current_database", "")
             try:
                 connector = db_manager.get_conn(namespace, database)
