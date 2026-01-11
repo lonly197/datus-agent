@@ -1369,6 +1369,15 @@ class ChatAgenticNode(GenSQLAgenticNode):
         if not action_history_manager:
             action_history_manager = ActionHistoryManager()
 
+        # Debug logging: Track method entry and workflow state
+        logger.info(f"ChatAgenticNode.execute_stream() called for node: {self.node_id}")
+        logger.info(f"self.workflow: {self.workflow}")
+        if self.workflow:
+            logger.info(f"self.workflow.metadata: {self.workflow.metadata}")
+            logger.info(f"required_tool_sequence: {self.workflow.metadata.get('required_tool_sequence') if self.workflow.metadata else None}")
+        else:
+            logger.warning("self.workflow is None in ChatAgenticNode.execute_stream()")
+
         # Store action_history_manager for access in update_context
         self.action_history_manager = action_history_manager
 
@@ -1427,6 +1436,39 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     auto_injected_knowledge=auto_injected_knowledge,
                 )
                 logger.info(f"Plan mode activated (auto_mode={auto_mode})")
+
+            # Check for required tool sequence (Preflight Tools) - v2.4 Enhancement
+            # This ensures preflight tools are executed before the main chat loop
+            has_workflow = bool(self.workflow)
+            has_metadata = bool(self.workflow and self.workflow.metadata)
+            has_required_tools = bool(self.workflow and self.workflow.metadata.get("required_tool_sequence"))
+
+            logger.info(f"Preflight check: has_workflow={has_workflow}, has_metadata={has_metadata}, has_required_tools={has_required_tools}")
+
+            if has_required_tools:
+                logger.info("Executing required preflight tool sequence...")
+                logger.info(f"Tool sequence: {self.workflow.metadata.get('required_tool_sequence')}")
+                
+                # Initialize plan hooks for caching if not already done (even if not in plan mode)
+                if not self.plan_hooks:
+                    from datus.cli.plan_hooks import PlanModeHooks
+                    from rich.console import Console
+                    
+                    # Create minimal hooks for caching support
+                    self.plan_hooks = PlanModeHooks(
+                        console=Console(),
+                        session=session,
+                        auto_mode=False,
+                        action_history_manager=action_history_manager,
+                        agent_config=self.agent_config,
+                        model=self.model
+                    )
+                
+                # Execute preflight tools using the unified orchestrator
+                async for preflight_action in self._run_original_preflight_tools(
+                    self.workflow, action_history_manager
+                ):
+                    yield preflight_action
 
             system_instruction = self._get_system_prompt(conversation_summary, user_input.prompt_version)
 
