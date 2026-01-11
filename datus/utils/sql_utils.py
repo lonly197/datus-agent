@@ -836,3 +836,224 @@ def format_sql_to_pretty(sql: str, dialect: str) -> str:
     except Exception as exc:
         logger.debug(f"Failed to format SQL for download: {exc}")
     return sql
+
+
+def validate_and_suggest_sql_fixes(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, Any]:
+    """
+    Validate SQL and generate fix suggestions for common errors.
+    
+    This function detects common SQL syntax errors and provides fix suggestions
+    without automatically modifying the SQL. It's designed to be called before
+    tool execution to catch parsing errors early.
+    
+    Args:
+        sql: The SQL query to validate
+        dialect: SQL dialect for parsing (default: SNOWFLAKE)
+        
+    Returns:
+        Dict with validation results:
+        {
+            "is_valid": bool,
+            "errors": List[str],  # Parsing errors
+            "warnings": List[str],  # Potential issues
+            "fix_suggestions": List[Dict],  # Suggested fixes
+            "can_parse": bool,  # Whether sqlglot can parse the SQL
+            "original_sql": str,  # Original SQL for reference
+        }
+    """
+    import re
+    
+    result = {
+        "is_valid": True,
+        "errors": [],
+        "warnings": [],
+        "fix_suggestions": [],
+        "can_parse": False,
+        "original_sql": sql,
+    }
+    
+    if not sql or not sql.strip():
+        result["is_valid"] = False
+        result["errors"].append("SQL query is empty")
+        return result
+    
+    try:
+        # Try to parse the SQL
+        parsed_dialect = parse_read_dialect(dialect)
+        parsed = sqlglot.parse_one(sql, read=parsed_dialect, error_level=sqlglot.ErrorLevel.IGNORE)
+        
+        if parsed is None:
+            result["can_parse"] = False
+            result["is_valid"] = False
+            result["errors"].append("SQL parsing failed: sqlglot could not parse the query")
+            
+            # Try to identify common issues
+            _detect_common_sql_issues(sql, result)
+            return result
+        
+        result["can_parse"] = True
+        
+        # Check for common issues even if parsing succeeded
+        _detect_common_sql_issues(sql, result)
+        
+        # Validate specific patterns
+        _validate_sql_patterns(sql, result)
+        
+        # If there are critical issues, mark as invalid
+        if any(sug.get("severity") == "critical" for sug in result["fix_suggestions"]):
+            result["is_valid"] = False
+            
+    except sqlglot.errors.ParseError as e:
+        result["can_parse"] = False
+        result["is_valid"] = False
+        result["errors"].append(f"SQL parsing error: {str(e)}")
+        
+        # Try to provide helpful suggestions
+        _detect_common_sql_issues(sql, result)
+        
+    except Exception as e:
+        result["errors"].append(f"Unexpected validation error: {str(e)}")
+        result["is_valid"] = False
+    
+    return result
+
+
+def _detect_common_sql_issues(sql: str, result: Dict[str, Any]) -> None:
+    """
+    Detect common SQL syntax issues and add fix suggestions.
+    
+    Issues detected:
+    1. Missing quotes in LIKE patterns (LIKE %text% should be LIKE '%text%')
+    2. Missing quotes in string comparisons (date = 2025-12-24 should be date = '2025-12-24')
+    3. Unquoted keywords used as column names
+    4. Missing parentheses in function calls
+    """
+    import re
+    
+    sql_upper = sql.upper()
+    
+    # Issue 1: LIKE patterns without quotes
+    # Pattern: LIKE %text% or LIKE '%text' or LIKE 'text%'
+    # This regex looks for LIKE followed by unquoted patterns with % wildcards
+    like_pattern = r'\bLIKE\s+([\'"]?%[^\'"\s]*%[\'"]?)'
+    for match in re.finditer(like_pattern, sql_upper):
+        like_value = match.group(1)
+        if not (like_value.startswith("'") or like_value.startswith('"')):
+            # Found unquoted LIKE pattern
+            original = sql[match.start(1):match.end(1)]
+            result["warnings"].append(f"LIKE pattern may be missing quotes: {original}")
+            result["fix_suggestions"].append({
+                "issue_type": "unquoted_like_pattern",
+                "severity": "error",
+                "line": sql[:match.start()].count('\n') + 1,
+                "column": match.start() - sql.rfind('\n', 0, match.start()),
+                "description": f"LIKE pattern '{original}' should be quoted",
+                "suggestion": f"LIKE '{original}'",
+                "example": f"Replace LIKE {original} with LIKE '{original}'"
+            })
+    
+    # Issue 2: Date/Time values without quotes in comparisons
+    # Pattern: = 2025-12-24 or > 2025-01-01
+    # This looks for comparison operators followed by unquoted date values
+    date_pattern = r'(?:=|!=|<>|<|>)\s*(\d{4}-\d{2}-\d{2})(?!\s*\')'
+    for match in re.finditer(date_pattern, sql):
+        date_value = match.group(1)
+        result["warnings"].append(f"Date literal may need quotes: {date_value}")
+        result["fix_suggestions"].append({
+            "issue_type": "unquoted_date_literal",
+            "severity": "warning",
+            "line": sql[:match.start()].count('\n') + 1,
+            "column": match.start() - sql.rfind('\n', 0, match.start()),
+            "description": f"Date literal '{date_value}' should be quoted for string comparison",
+            "suggestion": f"'{date_value}'",
+            "example": f"Replace = {date_value} with = '{date_value}'"
+        })
+    
+    # Issue 3: String values in Chinese/Unicode without quotes
+    # Pattern: LIKE %中文% or = 中文内容
+    chinese_pattern = r'(?:LIKE|=)\s*([\'"]?[\u4e00-\u9fff]+[\'"]?)'
+    for match in re.finditer(chinese_pattern, sql):
+        chinese_value = match.group(1)
+        if not (chinese_value.startswith("'") or chinese_value.startswith('"')):
+            result["warnings"].append(f"Chinese text may need quotes: {chinese_value}")
+            result["fix_suggestions"].append({
+                "issue_type": "unquoted_chinese_text",
+                "severity": "warning",
+                "description": f"Chinese text '{chinese_value}' should be quoted",
+                "suggestion": f"'{chinese_value}'"
+            })
+    
+    # Issue 4: Missing commas in SELECT lists
+    # Pattern: column1 column2 FROM (missing comma between columns)
+    missing_comma_pattern = r'\b(\w+)\s+(\w+)\s+FROM\b'
+    if re.search(missing_comma_pattern, sql_upper):
+        result["warnings"].append("Possible missing comma in SELECT list")
+        result["fix_suggestions"].append({
+            "issue_type": "missing_comma",
+            "severity": "info",
+            "description": "Columns in SELECT list should be separated by commas"
+        })
+
+
+def _validate_sql_patterns(sql: str, result: Dict[str, Any]) -> None:
+    """
+    Validate specific SQL patterns for potential issues.
+    """
+    import re
+    
+    sql_upper = sql.upper()
+    
+    # Check for SELECT * usage
+    if re.search(r'SELECT\s+\*\s+FROM', sql_upper):
+        result["warnings"].append("SELECT * can retrieve unnecessary columns")
+        result["fix_suggestions"].append({
+            "issue_type": "select_star",
+            "severity": "info",
+            "description": "SELECT * retrieves all columns. Consider specifying only needed columns for better performance.",
+            "recommendation": "Replace SELECT * with explicit column list"
+        })
+    
+    # Check for missing WHERE clause in DELETE/UPDATE
+    if re.search(r'\b(DELETE|UPDATE)\b', sql_upper) and not re.search(r'\bWHERE\b', sql_upper):
+        result["warnings"].append("DELETE or UPDATE without WHERE clause")
+        result["fix_suggestions"].append({
+            "issue_type": "dangerous_operation",
+            "severity": "critical",
+            "description": "DELETE or UPDATE without WHERE clause affects all rows",
+            "recommendation": "Add WHERE clause to limit scope"
+        })
+    
+    # Check for functions on indexed columns in WHERE
+    # Pattern: WHERE UPPER(col) = ... or WHERE DATE(col) = ...
+    func_patterns = re.findall(r'WHERE\s+\w+\((\w+)\)', sql_upper)
+    if func_patterns:
+        result["warnings"].append(f"Functions on columns may prevent index usage: {', '.join(func_patterns)}")
+        result["fix_suggestions"].append({
+            "issue_type": "function_on_column",
+            "severity": "warning",
+            "description": f"Functions on columns {func_patterns} prevent index usage",
+            "recommendation": "Consider functional indexes or restructuring query"
+        })
+    
+    # Check for JOIN without ON clause
+    join_count = len(re.findall(r'\bJOIN\b', sql_upper))
+    if join_count > 0:
+        # Check if there's an ON clause after JOIN
+        if not re.search(r'\bJOIN\b.+\bON\b', sql_upper, re.DOTALL):
+            result["warnings"].append("JOIN without ON clause detected")
+            result["fix_suggestions"].append({
+                "issue_type": "join_without_on",
+                "severity": "critical",
+                "description": "JOIN without ON clause creates a Cartesian product (cross join)",
+                "recommendation": "Add ON clause to specify join condition"
+            })
+    
+    # Check for ORDER BY without LIMIT
+    if re.search(r'\bORDER\s+BY\b', sql_upper) and not re.search(r'\bLIMIT\b', sql_upper):
+        result["warnings"].append("ORDER BY without LIMIT may return many rows")
+        result["fix_suggestions"].append({
+            "issue_type": "order_by_without_limit",
+            "severity": "info",
+            "description": "ORDER BY without LIMIT can consume significant memory for large result sets",
+            "recommendation": "Consider adding LIMIT clause"
+        })

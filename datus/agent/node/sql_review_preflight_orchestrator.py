@@ -55,6 +55,10 @@ class SQLReviewPreflightOrchestrator:
         self.legacy_tools = {"describe_table", "search_external_knowledge", "read_query", "get_table_ddl"}
         self.enhanced_tools_set = {"analyze_query_plan", "check_table_conflicts", "validate_partitioning"}
 
+        # Critical tools must succeed for review to continue; auxiliary tools are optional
+        self.critical_tools = {"describe_table", "search_external_knowledge"}
+        self.auxiliary_tools = {"read_query", "get_table_ddl", "analyze_query_plan", "check_table_conflicts", "validate_partitioning"}
+
         # Tool execution order (mandatory sequence)
         self.required_tool_sequence = [
             "describe_table",  # 1. Table structure analysis
@@ -100,7 +104,32 @@ class SQLReviewPreflightOrchestrator:
         database = workflow.task.database_name or ""
         schema = workflow.task.schema_name or ""
 
-        # Initialize execution tracking
+        # ========== SQL Pre-Validation ==========
+        # Validate SQL before executing tools to catch parsing errors early
+        from datus.utils.sql_utils import validate_and_suggest_sql_fixes
+
+        logger.info(f"Validating SQL query before preflight tool execution")
+        sql_validation = validate_and_suggest_sql_fixes(
+            sql_query,
+            dialect=workflow.task.database_type or "starrocks"
+        )
+
+        # Inject validation results into context
+        if not hasattr(workflow.context, "preflight_results") or workflow.context.preflight_results is None:
+            workflow.context.preflight_results = {}
+        workflow.context.preflight_results["sql_validation"] = sql_validation
+
+        # Log validation results
+        if not sql_validation["is_valid"] or not sql_validation["can_parse"]:
+            logger.warning(
+                f"SQL validation failed - can_parse={sql_validation['can_parse']}, "
+                f"is_valid={sql_validation['is_valid']}. "
+                f"Errors: {sql_validation['errors']}, "
+                f"Warnings: {len(sql_validation['warnings'])}, "
+                f"Fix suggestions: {len(sql_validation['fix_suggestions'])}"
+            )
+
+        # Update execution status with validation results
         execution_status = {
             "execution_id": execution_id,
             "tools_executed": [],
@@ -108,7 +137,18 @@ class SQLReviewPreflightOrchestrator:
             "start_time": time.time(),
             "cache_hits": 0,
             "total_execution_time": 0.0,
+            "sql_validation_passed": sql_validation["is_valid"] and sql_validation["can_parse"],
+            "sql_errors": sql_validation["errors"],
+            "sql_warnings_count": len(sql_validation["warnings"]),
+            "sql_fix_suggestions_count": len(sql_validation["fix_suggestions"]),
         }
+
+        # Send SQL validation event if there are issues
+        if sql_validation["fix_suggestions"]:
+            logger.info(f"Generated {len(sql_validation['fix_suggestions'])} SQL fix suggestions")
+            # TODO: Create and send SQL validation event here if needed
+
+        # Initialize execution tracking (continued)
 
         # Execute tools in sequence
         for tool_name in required_tools:
@@ -170,18 +210,41 @@ class SQLReviewPreflightOrchestrator:
                 execution_time = time.time() - tool_start_time
                 logger.error(f"Preflight tool '{tool_name}' failed: {e}")
 
+                # Check if this is a critical tool failure
+                is_critical = tool_name in self.critical_tools
+
                 execution_status["tools_failed"].append(
-                    {"tool_name": tool_name, "error": str(e), "execution_time": execution_time}
+                    {
+                        "tool_name": tool_name,
+                        "error": str(e),
+                        "execution_time": execution_time,
+                        "is_critical": is_critical
+                    }
                 )
 
                 # Send error event
                 await self._send_tool_error_event(tool_name, str(e), execution_id, tool_call_id)
+
+                # For critical tools, mark execution as degraded
+                if is_critical:
+                    execution_status["critical_failure"] = True
+                    execution_status["critical_failure_reason"] = f"{tool_name}: {str(e)}"
+                    logger.error(f"Critical tool {tool_name} failed, this will impact review quality")
 
                 # Yield error action
                 error_result = PreflightToolResult(
                     tool_name=tool_name, success=False, error=str(e), execution_time=execution_time
                 )
                 yield self._create_tool_action(tool_name, error_result, execution_time, tool_call_id)
+
+                # Critical tool failure - stop execution
+                if is_critical:
+                    logger.error(f"Critical tool {tool_name} failed, stopping remaining preflight tools")
+                    break
+
+                # Auxiliary tool failure - continue with remaining tools
+                logger.warning(f"Auxiliary tool {tool_name} failed, continuing with remaining tools")
+                continue
 
         # Log execution summary
         total_time = time.time() - execution_status["start_time"]

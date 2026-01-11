@@ -511,6 +511,7 @@ class Context(BaseModel):
         default=None, description="The last selected result from selection node"
     )
     selection_metadata: Optional[Dict[str, Any]] = Field(default=None, description="Metadata about selection process")
+    preflight_results: Optional[Dict[str, Any]] = Field(default=None, description="Results from preflight tool execution")
 
     def update_schema_and_values(self, table_schemas: List[TableSchema], table_values: List[TableValue]):
         """

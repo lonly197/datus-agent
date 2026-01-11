@@ -155,8 +155,9 @@ class EnhancedPreflightTools:
             )
 
         except Exception as e:
-            logger.error(f"Query plan analysis failed: {e}")
-            return FuncToolResult(success=0, error=str(e))
+            logger.warning(f"Query plan analysis failed: {e}, using fallback rule-based analysis")
+            # Fallback: Use rule-based analysis when EXPLAIN fails
+            return self._fallback_query_analysis(sql, str(e))
 
     def _analyze_plan_text(self, plan_text: str, db_type: str) -> Dict[str, Any]:
         """Analyze execution plan text and extract insights."""
@@ -229,6 +230,118 @@ class EnhancedPreflightTools:
         analysis["index_usage"] = index_usage
 
         return analysis
+
+    def _fallback_query_analysis(self, sql: str, error: str) -> FuncToolResult:
+        """
+        Fallback analysis when EXPLAIN execution fails.
+
+        Uses static analysis rules to identify potential issues without executing EXPLAIN.
+        This provides useful insights even when the database connection fails or SQL has syntax errors.
+
+        Args:
+            sql: SQL query to analyze
+            error: Original error message from EXPLAIN attempt
+
+        Returns:
+            FuncToolResult with rule-based analysis
+        """
+        import re
+
+        hotspots = []
+        warnings = [f"EXPLAIN execution failed: {error}"]
+        index_usage = {"indexes_used": [], "missing_indexes": [], "index_effectiveness": "unknown"}
+
+        sql_upper = sql.upper()
+
+        # Rule 1: Detect SELECT * (full table scan risk)
+        if re.search(r'SELECT\s+\*\s+FROM', sql_upper):
+            hotspots.append({
+                "reason": "select_star",
+                "node": "SELECT *",
+                "severity": "medium",
+                "recommendation": "Specify only needed columns instead of SELECT * to reduce data transfer"
+            })
+            index_usage["index_effectiveness"] = "poor"
+
+        # Rule 2: Detect LIKE '%...%' (leading wildcard prevents index usage)
+        like_patterns = re.findall(r'LIKE\s+[\'"]?%\w+%[\'"]?', sql_upper)
+        if like_patterns:
+            hotspots.append({
+                "reason": "leading_wildcard_like",
+                "node": f"LIKE '%...%' pattern",
+                "severity": "medium",
+                "recommendation": "Leading wildcards in LIKE prevent index usage. Consider full-text search or removing leading %"
+            })
+            index_usage["missing_indexes"].append("fulltext_index")
+            index_usage["index_effectiveness"] = "poor"
+
+        # Rule 3: Detect functions on indexed columns in WHERE
+        # Pattern: WHERE UPPER(col) = ... or WHERE DATE(col) = ...
+        func_patterns = re.findall(r'WHERE\s+\w+\((\w+)\)', sql_upper)
+        if func_patterns:
+            hotspots.append({
+                "reason": "function_on_indexed_column",
+                "node": f"Function on {func_patterns[0]}",
+                "severity": "low",
+                "recommendation": f"Functions on columns prevent index usage. Consider functional indexes or restructuring query"
+            })
+            if index_usage["index_effectiveness"] == "unknown":
+                index_usage["index_effectiveness"] = "reduced"
+
+        # Rule 4: Check for JOIN without join conditions
+        join_count = len(re.findall(r'\bJOIN\b', sql_upper))
+        if join_count > 0:
+            join_analysis = {"join_count": join_count, "join_types": [], "join_order_issues": []}
+
+            # Check for missing ON clause
+            if not re.search(r'\bJOIN\b.+\bON\b', sql_upper, re.DOTALL):
+                hotspots.append({
+                    "reason": "cross_join",
+                    "node": "JOIN without ON",
+                    "severity": "high",
+                    "recommendation": "Missing join condition. This creates a Cartesian product which can be very expensive"
+                })
+                join_analysis["join_order_issues"].append("Missing join condition - potential cross join")
+        else:
+            join_analysis = {"join_count": 0, "join_detected": False}
+
+        # Rule 5: Detect ORDER BY without LIMIT (could return many rows)
+        if re.search(r'\bORDER\s+BY\b', sql_upper) and not re.search(r'\bLIMIT\b', sql_upper):
+            warnings.append("ORDER BY without LIMIT may return many rows and consume memory")
+
+        # Rule 6: Detect DISTINCT (can be expensive)
+        if re.search(r'\bDISTINCT\b', sql_upper):
+            hotspots.append({
+                "reason": "distinct_operation",
+                "node": "DISTINCT",
+                "severity": "low",
+                "recommendation": "DISTINCT operations can be expensive. Consider GROUP BY or redesign if possible"
+            })
+
+        # Rule 7: Detect subqueries
+        if re.search(r'\bSELECT\b.*\bFROM\b.*\bWHERE\b.*\bSELECT\b', sql_upper, re.DOTALL):
+            hotspots.append({
+                "reason": "subquery",
+                "node": "Subquery detected",
+                "severity": "low",
+                "recommendation": "Subqueries can impact performance. Consider JOINs or CTEs for better optimization"
+            })
+
+        return FuncToolResult(
+            success=1,  # Mark as success because we provided fallback analysis
+            result={
+                "plan_text": f"[Fallback Analysis - EXPLAIN failed: {error}]",
+                "estimated_cost": 0,
+                "estimated_rows": 0,
+                "hotspots": hotspots,
+                "join_analysis": join_analysis,
+                "index_usage": index_usage,
+                "warnings": warnings,
+                "fallback_used": True,  # Flag to indicate this is fallback analysis
+                "fallback_reason": error,
+                "recommendations": [h["recommendation"] for h in hotspots],
+            },
+        )
 
     async def check_table_conflicts(
         self, table_name: str, catalog: str = "default_catalog", database: str = "", schema: str = "", **kwargs

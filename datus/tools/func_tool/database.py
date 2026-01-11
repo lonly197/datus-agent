@@ -18,6 +18,9 @@ from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.compress_utils import DataCompressor
 from datus.utils.constants import SUPPORT_DATABASE_DIALECTS, SUPPORT_SCHEMA_DIALECTS, DBType
+from datus.utils.loggings import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
