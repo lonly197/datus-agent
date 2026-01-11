@@ -1370,7 +1370,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             action_history_manager = ActionHistoryManager()
 
         # Debug logging: Track method entry and workflow state
-        logger.info(f"ChatAgenticNode.execute_stream() called for node: {self.node_id}")
+        logger.info(f"ChatAgenticNode.execute_stream() called for node: {self.id}")
         logger.info(f"self.workflow: {self.workflow}")
         if self.workflow:
             logger.info(f"self.workflow.metadata: {self.workflow.metadata}")
