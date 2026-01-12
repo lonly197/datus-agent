@@ -27,8 +27,8 @@ COPY datus/ ./datus/
 COPY datus/conf/ ./datus/conf/
 
 RUN python -m pip install --upgrade pip \
-    && pip install --no-cache-dir . \
-    && pip install --no-cache-dir datus-mysql datus-starrocks
+    && pip install --no-cache-dir --index-url http://mirrors.aliyun.com/pypi/simple . \
+    && pip install --no-cache-dir --index-url http://mirrors.aliyun.com/pypi/simple datus-mysql datus-starrocks
 
 # Expose service port
 EXPOSE 8080
