@@ -17,7 +17,7 @@ from datus.configuration.business_term_config import (
 )
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseResult
-from datus.schemas.node_models import BaseInput, TableSchema
+from datus.schemas.node_models import BaseInput, Metric, ReferenceSql, TableSchema
 from datus.storage.schema_metadata import SchemaWithValueRAG
 from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool.context_search import ContextSearchTools
@@ -301,6 +301,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
     async def _context_based_discovery(self, query: str) -> List[str]:
         """
         Stage 2: Discover tables via Metrics and Reference SQL.
+
+        This method systematically searches for metrics and reference SQL,
+        then updates the workflow context with discovered knowledge.
         """
         found_tables = []
         try:
@@ -309,21 +312,73 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             context_search = ContextSearchTools(self.agent_config)
 
-            # 1. Search Metrics
-            if context_search.has_metrics:
-                metric_result = context_search.search_metrics(query_text=query, top_n=3)
+            # 1. Search Metrics - Systematic search (no conditional check)
+            try:
+                metric_result = context_search.search_metrics(query_text=query, top_n=5)
                 if metric_result.success and metric_result.result:
-                    # In a real impl, we would extract table names from metric definitions
-                    # For now, we assume metric definitions might contain table references or hints
-                    # This is a placeholder for extraction logic
-                    pass
+                    # Convert results to Metric objects and update context
+                    metrics = []
+                    for item in metric_result.result:
+                        if isinstance(item, dict):
+                            metric = Metric(
+                                name=item.get("name", ""), llm_text=item.get("llm_text", item.get("description", ""))
+                            )
+                            metrics.append(metric)
 
-            # 2. Search Reference SQL
-            # Reference SQL often contains valid table names
-            ref_sql_result = context_search.search_reference_sql(query_text=query, top_n=3)
-            if ref_sql_result.success and ref_sql_result.result:
-                # Placeholder: Extract tables from SQL (would need sqlglot here)
-                pass
+                    if metrics and self.workflow:
+
+                        def update_metrics():
+                            self.workflow.context.update_metrics(metrics)
+                            return {"metrics_count": len(metrics)}
+
+                        result = safe_context_update(
+                            self.workflow.context,
+                            update_metrics,
+                            operation_name="update_metrics",
+                        )
+
+                        if result["success"]:
+                            logger.info(f"Updated context with {len(metrics)} metrics")
+                        else:
+                            logger.warning(f"Metrics update failed: {result.get('error')}")
+            except Exception as e:
+                logger.warning(f"Metrics search failed: {e}")
+
+            # 2. Search Reference SQL - Systematic search (always execute)
+            try:
+                ref_sql_result = context_search.search_reference_sql(query_text=query, top_n=5)
+                if ref_sql_result.success and ref_sql_result.result:
+                    # Convert results to ReferenceSql objects and update context
+                    reference_sqls = []
+                    for item in ref_sql_result.result:
+                        if isinstance(item, dict):
+                            ref_sql = ReferenceSql(
+                                name=item.get("name", item.get("summary", ""))[:100],
+                                sql=item.get("sql", ""),
+                                comment=item.get("comment", ""),
+                                summary=item.get("summary", ""),
+                                tags=item.get("tags", ""),
+                            )
+                            reference_sqls.append(ref_sql)
+
+                    if reference_sqls and self.workflow:
+
+                        def update_reference_sqls():
+                            self.workflow.context.update_reference_sqls(reference_sqls)
+                            return {"ref_sql_count": len(reference_sqls)}
+
+                        result = safe_context_update(
+                            self.workflow.context,
+                            update_reference_sqls,
+                            operation_name="update_reference_sqls",
+                        )
+
+                        if result["success"]:
+                            logger.info(f"Updated context with {len(reference_sqls)} reference SQLs")
+                        else:
+                            logger.warning(f"Reference SQLs update failed: {result.get('error')}")
+            except Exception as e:
+                logger.warning(f"Reference SQL search failed: {e}")
 
         except Exception as e:
             logger.warning(f"Context-based discovery failed: {e}")

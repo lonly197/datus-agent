@@ -504,6 +504,7 @@ class Context(BaseModel):
     table_schemas: List[TableSchema] = Field(default_factory=list, description="The table schemas")
     table_values: List[TableValue] = Field(default_factory=list, description="The table values")
     metrics: List[Metric] = Field(default_factory=list, description="The metrics")
+    reference_sqls: List[ReferenceSql] = Field(default_factory=list, description="The reference SQL queries")
     doc_search_keywords: List[str] = Field(default_factory=list, description="The document search keywords")
     document_result: Optional[DocSearchResult] = Field(default=None, description="The document result")
     parallel_results: Optional[Dict[str, Any]] = Field(default=None, description="Results from parallel node execution")
@@ -511,7 +512,9 @@ class Context(BaseModel):
         default=None, description="The last selected result from selection node"
     )
     selection_metadata: Optional[Dict[str, Any]] = Field(default=None, description="Metadata about selection process")
-    preflight_results: Optional[Dict[str, Any]] = Field(default=None, description="Results from preflight tool execution")
+    preflight_results: Optional[Dict[str, Any]] = Field(
+        default=None, description="Results from preflight tool execution"
+    )
 
     def update_schema_and_values(self, table_schemas: List[TableSchema], table_values: List[TableValue]):
         """
@@ -528,6 +531,9 @@ class Context(BaseModel):
 
     def update_metrics(self, metrics: List[Metric]):
         self.metrics = metrics
+
+    def update_reference_sqls(self, reference_sqls: List[ReferenceSql]):
+        self.reference_sqls = reference_sqls
 
     def update_document_result(self, document_result: DocSearchResult):
         self.document_result = document_result
@@ -565,6 +571,7 @@ class Context(BaseModel):
             f"Table Values: {table_values_names}\n"
             f"SQL Contexts: {sql_contexts}\n"
             f"Metrics Count: {len(self.metrics)}\n"
+            f"Reference SQLs Count: {len(self.reference_sqls)}\n"
             f"{parallel_info}\n"
             f"{selection_info}"
         )
