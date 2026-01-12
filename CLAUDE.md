@@ -37,7 +37,7 @@ The system automatically builds a living semantic map of company data, combining
 ### Code Quality and Formatting
 - **Format code**: `./formatter.sh` (runs autoflake, black, isort, flake8)
 - **Black formatting**: `black --line-length=120 --extend-exclude="/(mcp)/" datus/ tests/`
-- **Flake8 linting**: `flake8 --max-line-length=120 --extend-ignore=E203,W503 datus/ tests/`
+- **Flake8 linting**: `flake8 --max-line-length=120 --extend-ignore=E203,W503,B036 datus/ tests/` (excludes `mcp/`)
 - **Import sorting**: `isort --profile=black --line-length=120 datus/ tests/`
 - **Pre-commit hooks**: Install with `pre-commit install`, run with `pre-commit run --all-files`
 
@@ -62,7 +62,11 @@ The system automatically builds a living semantic map of company data, combining
 
 ### Key Architectural Patterns
 1. **Workflow-based execution**: Tasks flow through configurable nodes (schema linking, SQL generation, execution)
+   - Workflows defined in `datus/agent/workflow.yml` include: `reflection`, `fixed`, `dynamic`, `metric_to_sql`, `chat_agentic`, `gensql_agentic`, and `text2sql`
+   - Each node type (schema_linking, generate_sql, execute_sql, reflect, output, etc.) has specialized behavior
 2. **Semantic knowledge base**: LanceDB stores metadata, metrics, and reference SQL for context-aware queries
+   - Storage components in `datus/storage/` handle schema metadata, metrics, reference SQL, external knowledge, subject trees, and feedback
+   - Uses vector embeddings (fastembed/OpenAI) and full-text search (tantivy) for semantic retrieval
 3. **Model Context Protocol (MCP)**: Extensible tool integration via MCP servers (see `mcp/mcp-metricflow-server/`)
 4. **Subagent system**: Domain-specific chatbots with scoped context and tools
 5. **Feedback loop**: User corrections and success stories improve model accuracy over time
@@ -77,13 +81,27 @@ The system automatically builds a living semantic map of company data, combining
 - Connection management via `DBManager` in `datus.tools.db_tools.db_manager`
 - Schema linking supports tables, views, and materialized views
 
+### Workflow Execution Flow
+The `WorkflowRunner` class orchestrates task execution through workflow nodes:
+
+1. **Task Initialization**: `SqlTask` objects contain the query, metadata, and execution context
+2. **Workflow Selection**: Based on task type and configuration (reflection, fixed, text2sql, etc.)
+3. **Node Execution**: Each node processes inputs, produces `BaseResult` objects, and passes data to next node
+4. **Action History**: All actions are tracked in `ActionHistory` for observability and debugging
+5. **Result Output**: Final results formatted and returned via the `output` node
+
+Key node types are registered in `datus/configuration/node_type.py` and implemented across `datus/agent/`.
+
 ## Configuration
 
 Agent configuration is loaded from `agent.yml` (default locations: `./conf/agent.yml` → `~/.datus/conf/agent.yml`). Key sections:
 
-- **`models`**: LLM provider configurations (OpenAI, Anthropic, Google, etc.)
+- **`models`**: LLM provider configurations (OpenAI, Anthropic, Google, DeepSeek, Qwen)
 - **`databases`**: Database connections (Snowflake, StarRocks, SQLite, DuckDB, etc.)
-- **`workflows`**: Custom execution plans and node configurations
+- **`workflows`**: Custom execution plans and node configurations (see `datus/agent/workflow.yml`)
+- **`plan_executor`**: Controls plan-mode tool matching and execution behavior
+  - `keyword_tool_map`: Custom mapping of keywords to tools
+  - `enable_fallback`: Fallback tool execution when no keyword matches
 - **`default_query_timeout_seconds`**: SQL execution timeout (default: 60s)
 
 Namespaces allow multiple database environments within a single configuration.
@@ -98,9 +116,10 @@ Namespaces allow multiple database environments within a single configuration.
 
 ## Notes for Contributors
 
-- Python ≥3.12 required (see `pyproject.toml`)
+- Python ≥3.12 required (see `pyproject.toml`; actually allows >=3.11)
 - Uses **uv** for package management with Aliyun mirror default
 - Follow existing patterns for new tools, schemas, and storage components
 - MCP servers should be placed in `mcp/` directory
 - Reference SQL files go in `sample_data/california_schools/reference_sql/` for demos
 - SQL history and feedback are stored in LanceDB tables in `{agent.home}/data/`
+- When adding new node types, update `datus/agent/workflow.yml` and register in `datus/configuration/node_type.py`
