@@ -1441,7 +1441,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             # This ensures preflight tools are executed before the main chat loop
             has_workflow = bool(self.workflow)
             has_metadata = bool(self.workflow and self.workflow.metadata)
-            has_required_tools = bool(self.workflow and self.workflow.metadata.get("required_tool_sequence"))
+            has_required_tools = bool(has_metadata and self.workflow.metadata.get("required_tool_sequence"))
 
             logger.info(f"Preflight check: has_workflow={has_workflow}, has_metadata={has_metadata}, has_required_tools={has_required_tools}")
 
