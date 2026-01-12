@@ -78,6 +78,23 @@ datus-agent init
 
 For detailed installation instructions, see the [Quickstart Guide](https://docs.datus.ai/getting_started/Quickstart/).
 
+## 🐳 Docker
+
+Build and run Datus Agent using Docker:
+
+```bash
+# Build the image
+docker build -t datus-agent:latest .
+
+# Run with mounted config file
+docker run -p 8080:8080 -v /path/to/agent.yml:/root/.datus/conf/agent.yml datus-agent:latest
+
+# Or run with environment variables for configuration
+docker run -p 8080:8080 -e DATUS_CONFIG=/root/.datus/conf/agent.yml datus-agent:latest
+```
+
+The container exposes port 8080 and runs the datus-agent HTTP server with the default configuration. Mount your `agent.yml` configuration file to `/root/.datus/conf/agent.yml` or pass environment variables to customize the runtime behavior.
+
 ## ⚙️ Configuration
 
 Datus Agent is configured via `agent.yml`. Key configurations include:
