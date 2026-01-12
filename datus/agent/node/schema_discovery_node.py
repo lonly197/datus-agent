@@ -25,6 +25,7 @@ from datus.utils.context_lock import safe_context_update
 from datus.utils.error_handler import LLMMixin, NodeExecutionResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
+from datus.utils.sql_utils import extract_table_names
 
 logger = get_logger(__name__)
 
@@ -375,6 +376,14 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
                         if result["success"]:
                             logger.info(f"Updated context with {len(reference_sqls)} reference SQLs")
+                            # Extract table names from reference SQLs and populate found_tables
+                            for ref_sql in reference_sqls:
+                                if ref_sql.sql:
+                                    try:
+                                        tables = extract_table_names(ref_sql.sql)
+                                        found_tables.extend(tables)
+                                    except Exception as e:
+                                        logger.debug(f"Failed to extract tables from SQL: {e}")
                         else:
                             logger.warning(f"Reference SQLs update failed: {result.get('error')}")
             except Exception as e:
