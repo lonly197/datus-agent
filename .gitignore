@@ -2,6 +2,11 @@
 /.env
 /.venv
 /.cache
+# HuggingFace locks (temporary files)
+/docker/huggingface/**/.locks/
+
+# HuggingFace models directory (large files, should not be committed)
+/docker/huggingface/
 /.idea
 /.vscode
 /.cursor
@@ -37,3 +42,6 @@ before_reflection_*.yaml
 /benchmark/semantic_layer/semantic_models
 /dist
 *.egg-info
+
+# Model download script (generated locally)
+/download_model.sh

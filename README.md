@@ -82,8 +82,36 @@ For detailed installation instructions, see the [Quickstart Guide](https://docs.
 
 Build and run Datus Agent using Docker:
 
+### Prerequisites
+
+Before building the Docker image, you need to download the required HuggingFace model to avoid download timeouts during initialization:
+
+**Option 1: Use the automated script (recommended)**
+
 ```bash
-# Build the image
+./download_model.sh
+```
+
+**Option 2: Manual download**
+
+```bash
+# Install download tools
+pip install huggingface_hub hf_transfer
+
+# Enable high-speed transfer
+export HF_HUB_ENABLE_HF_TRANSFER=1
+
+# Download model to the expected Docker build directory
+mkdir -p docker/huggingface/fastembed
+hf download --resume-download qdrant/all-MiniLM-L6-v2-onnx \
+  --local-dir docker/huggingface/fastembed/qdrant--all-MiniLM-L6-v2-onnx \
+  --local-dir-use-symlinks False
+```
+
+### Build and Run
+
+```bash
+# Build the image (after downloading the model)
 docker build -t datus-agent:latest .
 
 # Run with mounted config file
@@ -94,6 +122,8 @@ docker run -p 8080:8080 -e DATUS_CONFIG=/root/.datus/conf/agent.yml datus-agent:
 ```
 
 The container exposes port 8080 and runs the datus-agent HTTP server with the default configuration. Mount your `agent.yml` configuration file to `/root/.datus/conf/agent.yml` or pass environment variables to customize the runtime behavior.
+
+**Note**: The model files are not included in the Git repository to avoid large file storage issues. You must download them locally before building the Docker image.
 
 ## ⚙️ Configuration
 

@@ -28,7 +28,12 @@ COPY datus/conf/ ./datus/conf/
 
 RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir --index-url http://mirrors.aliyun.com/pypi/simple . \
-    && pip install --no-cache-dir --index-url http://mirrors.aliyun.com/pypi/simple datus-mysql datus-starrocks
+    && pip install --no-cache-dir --index-url http://mirrors.aliyun.com/pypi/simple datus-mysql datus-starrocks \
+    && pip install --no-cache-dir --index-url http://mirrors.aliyun.com/pypi/simple huggingface_hub hf_transfer
+
+# Copy pre-downloaded HuggingFace model for FastEmbed to avoid download timeouts during init
+RUN mkdir -p /root/.cache/huggingface/fastembed
+COPY docker/huggingface/fastembed/qdrant--all-MiniLM-L6-v2-onnx/ /root/.cache/huggingface/fastembed/qdrant--all-MiniLM-L6-v2-onnx/
 
 # Expose service port
 EXPOSE 8080
