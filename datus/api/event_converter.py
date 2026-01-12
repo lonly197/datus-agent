@@ -12,7 +12,7 @@ import json
 import time
 import uuid
 from collections import deque
-from typing import Any, AsyncGenerator, Dict, List, Optional, cast
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
@@ -112,6 +112,51 @@ class DeepResearchEventConverter:
             return hashlib.sha1(s.strip().encode("utf-8")).hexdigest()
         except Exception:
             return ""
+
+    def _generate_sql_summary(self, sql: str, result: str, row_count: int) -> str:
+        """Generate a markdown summary report for SQL execution results.
+
+        Args:
+            sql: The SQL query that was executed
+            result: The CSV result string from SQL execution
+            row_count: Number of rows returned
+
+        Returns:
+            Markdown formatted summary report
+        """
+        lines = []
+
+        # Header
+        lines.append("## 📊 SQL执行结果摘要\n")
+
+        # SQL overview
+        lines.append("### SQL查询")
+        lines.append(f"- **行数**: {row_count}")
+        lines.append("- **状态**: ✅ 执行成功\n")
+
+        # Result preview (first 5 rows if available)
+        if result and result.strip():
+            lines.append("### 结果预览")
+            try:
+                import pandas as pd
+                from io import StringIO
+
+                df = pd.read_csv(StringIO(result))
+                preview = df.head(5).to_markdown(index=False)
+                lines.append(preview)
+
+                if len(df) > 5:
+                    lines.append(f"\n*...还有 {len(df) - 5} 行数据*\n")
+            except Exception:
+                # If parsing fails, show raw result preview
+                result_lines = result.strip().split("\n")[:6]
+                lines.append("```")
+                lines.extend(result_lines)
+                lines.append("```")
+                if len(result.strip().split("\n")) > 6:
+                    lines.append("*...更多数据*\n")
+
+        return "\n".join(lines)
 
     def _extract_plan_from_output(self, output: Any) -> Dict[str, Any]:
         """
@@ -775,11 +820,11 @@ class DeepResearchEventConverter:
             if self.virtual_plan_emitted:
                 final_todos = []
                 for step in self.VIRTUAL_STEPS:
-                    final_todos.append(TodoItem(id=str(step["id"]), content=str(step["content"]), status=TodoStatus.COMPLETED))
-                events.append(
-                    PlanUpdateEvent(
-                        id=f"{event_id}_plan_final", planId=None, timestamp=timestamp, todos=final_todos
+                    final_todos.append(
+                        TodoItem(id=str(step["id"]), content=str(step["content"]), status=TodoStatus.COMPLETED)
                     )
+                events.append(
+                    PlanUpdateEvent(id=f"{event_id}_plan_final", planId=None, timestamp=timestamp, todos=final_todos)
                 )
 
             events.append(
@@ -866,9 +911,47 @@ class DeepResearchEventConverter:
 
             events.append(ErrorEvent(id=event_id, planId=error_plan_id, timestamp=timestamp, error=error_msg))
 
-        # 9. Handle report generation
+        # 9. Handle report generation and SQL output
         elif action.action_type == "output_generation" and action.output:
             if isinstance(action.output, dict):
+                # First, handle SQL output via ChatEvent (for text2sql workflow)
+                sql_query = action.output.get("sql_query", "")
+                sql_result = action.output.get("sql_result", "")
+                sql_query_final = action.output.get("sql_query_final", "")
+                sql_result_final = action.output.get("sql_result_final", "")
+                row_count = action.output.get("row_count", 0)
+                success = action.output.get("success", True)
+
+                # Use final SQL if available, otherwise use generated SQL
+                final_sql = sql_query_final if sql_query_final else sql_query
+
+                # If SQL exists, send ChatEvent with SQL and summary
+                if final_sql:
+                    # First ChatEvent: The SQL code block
+                    sql_content = f"```sql\n{final_sql}\n```"
+                    events.append(
+                        ChatEvent(
+                            id=f"{event_id}_sql",
+                            planId=todo_id if todo_id else None,
+                            timestamp=timestamp,
+                            content=sql_content,
+                        )
+                    )
+
+                    # Second ChatEvent: Summary report (if execution succeeded)
+                    if success and (sql_result or sql_result_final):
+                        final_result = sql_result_final if sql_result_final else sql_result
+                        summary = self._generate_sql_summary(final_sql, final_result, row_count)
+                        events.append(
+                            ChatEvent(
+                                id=f"{event_id}_summary",
+                                planId=todo_id if todo_id else None,
+                                timestamp=timestamp,
+                                content=summary,
+                            )
+                        )
+
+                # Original ReportEvent handling (for HTML reports)
                 report_url = action.output.get("report_url", "")
                 report_data = action.output.get("html_content", "")
                 # Create ReportEvent if we have either url or data
