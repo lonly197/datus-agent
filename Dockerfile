@@ -28,7 +28,7 @@ COPY datus/conf/ ./datus/conf/
 
 RUN python -m pip install --upgrade pip \
     && pip install --no-cache-dir --index-url http://mirrors.aliyun.com/pypi/simple . \
-    && pip install --no-cache-dir --index-url http://mirrors.aliyun.com/pypi/simple datus-mysql datus-starrocks \
+    && pip install --no-cache-dir --index-url http://mirrors.aliyun.com/pypi/simple datus-mysql datus-starrocks datus-metricflow \
     && pip install --no-cache-dir --index-url http://mirrors.aliyun.com/pypi/simple huggingface_hub hf_transfer
 
 # Copy pre-downloaded HuggingFace model for FastEmbed to avoid download timeouts during init
