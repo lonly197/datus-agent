@@ -10,6 +10,7 @@ designed for chat interactions with database and filesystem tool support.
 """
 import re
 import time
+import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 try:
@@ -20,6 +21,7 @@ except ImportError:
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
+from datus.api.models import TodoItem, TodoStatus
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.chat_agentic_node_models import ChatNodeInput
 from datus.schemas.node_models import SQLContext
@@ -125,6 +127,9 @@ class PreflightOrchestrator:
         start_time = time.time()
         tool_call_id = f"preflight_{tool_name}_{start_time}"
 
+        # Issue 2: Get plan_id once at the start (moved from try block)
+        plan_id = getattr(self.chat_node, '_preflight_plan_id', None)
+
         try:
             # Send tool call start event
             await self._send_tool_call_event(
@@ -138,6 +143,7 @@ class PreflightOrchestrator:
                     "schema": schema,
                 },
                 execution_id,
+                plan_id,
             )
 
             # Create and yield action for tool start
@@ -152,6 +158,7 @@ class PreflightOrchestrator:
                     "catalog": catalog,
                     "database": database,
                     "schema": schema,
+                    "plan_id": plan_id,  # Include plan_id for event converter
                 },
                 status=ActionStatus.PROCESSING,
             )
@@ -219,13 +226,17 @@ class PreflightOrchestrator:
 
             execution_time = time.time() - start_time
 
+            # Issue 2: plan_id already retrieved at start of method, no duplicate call needed
+
             # Send tool result event
             await self._send_tool_call_result_event(
+                tool_name=tool_name,  # Issue 3: Add tool_name parameter
                 tool_call_id=tool_call_id,
                 result=result,
                 execution_time=execution_time,
                 cache_hit=cache_hit,
                 execution_id=execution_id,
+                plan_id=plan_id,
             )
 
             # Update action with results
@@ -405,24 +416,37 @@ class PreflightOrchestrator:
             )
 
     async def _send_tool_call_event(
-        self, tool_name: str, tool_call_id: str, input_data: Dict[str, Any], execution_id: Optional[str] = None
+        self,
+        tool_name: str,
+        tool_call_id: str,
+        input_data: Dict[str, Any],
+        execution_id: Optional[str] = None,
+        plan_id: Optional[str] = None,
     ) -> None:
         """Send tool call start event."""
         if self.execution_event_manager and execution_id:
-            await self.execution_event_manager.record_tool_execution(execution_id, tool_name, tool_call_id, input_data)
+            # Add plan_id to input_data for extraction
+            input_data_with_plan = input_data.copy()
+            if plan_id:
+                input_data_with_plan["plan_id"] = plan_id
+            await self.execution_event_manager.record_tool_execution(execution_id, tool_name, tool_call_id, input_data_with_plan)
 
     async def _send_tool_call_result_event(
         self,
+        tool_name: str,  # Issue 3: Add tool_name parameter
         tool_call_id: str,
         result: Dict[str, Any],
         execution_time: float,
         cache_hit: bool,
         execution_id: Optional[str] = None,
+        plan_id: Optional[str] = None,
     ) -> None:
         """Send tool call result event."""
         if self.execution_event_manager and execution_id:
+            # Add plan_id to input_data for extraction
+            input_data_with_plan = {"plan_id": plan_id} if plan_id else {}
             await self.execution_event_manager.record_tool_execution(
-                execution_id, tool_call_id, tool_call_id, {}, result, None, execution_time
+                execution_id, tool_name, tool_call_id, input_data_with_plan, result, None, execution_time
             )
 
     async def _send_diagnostic_info_event(
@@ -1448,12 +1472,39 @@ class ChatAgenticNode(GenSQLAgenticNode):
             if has_required_tools:
                 logger.info("Executing required preflight tool sequence...")
                 logger.info(f"Tool sequence: {self.workflow.metadata.get('required_tool_sequence')}")
-                
+
+                # Phase 1: Create Plan Structure for Preflight Tools
+                # Generate plan_id for this execution
+                plan_id = str(uuid.uuid4())
+                required_tools = self.workflow.metadata.get('required_tool_sequence', [])
+
+                # Create TodoItems for each preflight tool
+                todos = []
+                for idx, tool_name in enumerate(required_tools):
+                    todo = TodoItem(
+                        id=f"{plan_id}_todo_{idx}",
+                        content=f"Execute {tool_name}",
+                        status=TodoStatus.PENDING
+                    )
+                    todos.append(todo)
+
+                # Send PlanUpdateEvent with initial plan
+                plan_action = ActionHistory.create_action(
+                    role=ActionRole.ASSISTANT,
+                    action_type="plan_update",
+                    messages="SQL Review Preflight Plan",
+                    input_data={"plan_id": plan_id},  # Issue 4: Only plan_id in input_data
+                    output_data={"todos": [t.model_dump() for t in todos]},  # Issue 4: Todos in output_data
+                    status=ActionStatus.SUCCESS
+                )
+                action_history_manager.add_action(plan_action)
+                yield plan_action
+
                 # Initialize plan hooks for caching if not already done (even if not in plan mode)
                 if not self.plan_hooks:
                     from datus.cli.plan_hooks import PlanModeHooks
                     from rich.console import Console
-                    
+
                     # Create minimal hooks for caching support
                     self.plan_hooks = PlanModeHooks(
                         console=Console(),
@@ -1463,7 +1514,11 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         agent_config=self.agent_config,
                         model=self.model
                     )
-                
+
+                # Store plan_id for tool events (will be used by PreflightOrchestrator)
+                self._preflight_plan_id = plan_id
+                # Issue 7: Removed unused _preflight_todos attribute
+
                 # Execute preflight tools using the unified orchestrator
                 async for preflight_action in self._run_original_preflight_tools(
                     self.workflow, action_history_manager
@@ -1554,6 +1609,29 @@ class ChatAgenticNode(GenSQLAgenticNode):
             if not sql_content and response_content:
                 sql_content = self._extract_sql_from_response(response_content)
 
+            # Phase 3: Handle SQL Review Report Output as ChatEvent
+            # Check if this is an SQL review task and send the report as ChatEvent
+            # Issue 8: Use startswith() for more flexible SQL review detection
+            is_sql_review = (
+                self.workflow and
+                self.workflow.metadata and
+                self.workflow.metadata.get('system_prompt', '').startswith('sql_review')
+            )
+
+            if is_sql_review and response_content:
+                # Send ChatEvent with the SQL review report (markdown content)
+                # Note: action_type="chat_response" triggers ChatEvent in event_converter.py
+                chat_action = ActionHistory.create_action(
+                    role=ActionRole.ASSISTANT,
+                    action_type="chat_response",
+                    messages="SQL Review Report",
+                    input_data={},
+                    output_data={"content": response_content},
+                    status=ActionStatus.SUCCESS
+                )
+                action_history_manager.add_action(chat_action)
+                yield chat_action
+
             # Create result object for compatibility
             from datus.schemas.base import BaseResult
 
@@ -1595,6 +1673,11 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     logger.warning(f"Plan mode cleanup failed: {e}")
                 self.plan_mode_active = False
                 self.plan_hooks = None
+
+            # Always cleanup preflight state (not just in plan mode) - Issue 1 fix
+            if hasattr(self, '_preflight_plan_id'):
+                delattr(self, '_preflight_plan_id')
+            # Note: _preflight_todos removed in Issue 7
 
     def _determine_execution_scenario(self, user_input) -> str:
         """

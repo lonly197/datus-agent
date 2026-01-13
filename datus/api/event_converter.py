@@ -297,14 +297,27 @@ class DeepResearchEventConverter:
         """
         # Try to extract from input arguments first
         if action.input and isinstance(action.input, dict):
+            # Check for 'plan_id' directly in input (for preflight tools created by PreflightOrchestrator)
+            if action.input.get("plan_id"):
+                return action.input["plan_id"]
             # Check for 'todo_id' directly in input
             if action.input.get("todo_id"):
                 return action.input["todo_id"]
-            # Check for 'arguments' field which might be a JSON string containing 'todo_id'
+            # Check for 'plan_id' in nested "input" field (for execution_event_manager records)
+            if "input" in action.input and isinstance(action.input["input"], dict):
+                nested_input = action.input["input"]
+                if nested_input.get("plan_id"):
+                    return nested_input["plan_id"]
+                if nested_input.get("todo_id"):
+                    return nested_input["todo_id"]
+            # Check for 'arguments' field which might be a JSON string containing 'todo_id' or 'plan_id'
             if "arguments" in action.input and isinstance(action.input["arguments"], str):
                 parsed_args = self._try_parse_json_like(action.input["arguments"])
-                if isinstance(parsed_args, dict) and parsed_args.get("todo_id"):
-                    return parsed_args["todo_id"]
+                if isinstance(parsed_args, dict):
+                    if parsed_args.get("plan_id"):
+                        return parsed_args["plan_id"]
+                    if parsed_args.get("todo_id"):
+                        return parsed_args["todo_id"]
 
         # For plan_update actions, try to extract from output's 'updated_item' or 'todo_list'
         if action.action_type == "plan_update" and action.output:
@@ -625,6 +638,53 @@ class DeepResearchEventConverter:
                     error=action.status == ActionStatus.FAILED,
                 )
             )
+
+        # Handle Preflight Tool Execution
+        elif action.action_type.startswith("preflight_"):
+            # Extract tool name from action_type (e.g., "preflight_describe_table" -> "describe_table")
+            tool_name = action.action_type.replace("preflight_", "", 1)
+
+            # Extract tool_call_id from input or generate a new one
+            tool_call_id = None
+            if action.input and isinstance(action.input, dict):
+                # Try to find tool_call_id in the input
+                for key, value in action.input.items():
+                    if "tool_call" in str(key).lower() or isinstance(value, str) and "preflight_" in value:
+                        tool_call_id = value
+                        break
+
+            if not tool_call_id:
+                tool_call_id = str(uuid.uuid4())
+
+            # Create ToolCallEvent for processing status
+            if action.status == ActionStatus.PROCESSING:
+                tool_input = {}
+                if action.input and isinstance(action.input, dict):
+                    tool_input = action.input
+
+                events.append(
+                    ToolCallEvent(
+                        id=f"{event_id}_call",
+                        planId=todo_id,  # Use plan_id from _extract_todo_id_from_action
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        toolName=tool_name,
+                        input=tool_input,
+                    )
+                )
+
+            # Create ToolCallResultEvent for completed/failed status
+            if action.status in [ActionStatus.SUCCESS, ActionStatus.FAILED]:
+                events.append(
+                    ToolCallResultEvent(
+                        id=f"{event_id}_result",
+                        planId=todo_id,  # Use plan_id from _extract_todo_id_from_action
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        data=action.output,
+                        error=action.status == ActionStatus.FAILED,
+                    )
+                )
 
         # Handle Reflection Analysis
         elif action.action_type == "reflection_analysis" and action.status == ActionStatus.SUCCESS:
