@@ -84,7 +84,7 @@ class PreflightOrchestrator:
         await self._send_preflight_plan_update(workflow, required_tools, execution_id)
 
         # Execute tools
-        for tool_name in required_tools:
+        for idx, tool_name in enumerate(required_tools):
             # Dynamic check if tool is supported
             if not self._is_tool_supported(tool_name):
                 logger.warning(f"Tool {tool_name} is not supported by PreflightOrchestrator")
@@ -100,6 +100,7 @@ class PreflightOrchestrator:
                 workflow,
                 action_history_manager,
                 execution_id,
+                idx,
             ):
                 yield action
 
@@ -122,13 +123,15 @@ class PreflightOrchestrator:
         workflow,
         action_history_manager: ActionHistoryManager,
         execution_id: str = None,
+        tool_index: int = None,
     ) -> AsyncGenerator[ActionHistory, None]:
         """Execute a single preflight tool with full orchestration."""
         start_time = time.time()
         tool_call_id = f"preflight_{tool_name}_{start_time}"
 
-        # Issue 2: Get plan_id once at the start (moved from try block)
+        # Get plan_id and build todo_item_id for binding to TodoItem.id
         plan_id = getattr(self.chat_node, '_preflight_plan_id', None)
+        todo_item_id = f"{plan_id}_todo_{tool_index}" if (plan_id and tool_index is not None) else plan_id
 
         try:
             # Send tool call start event
@@ -143,7 +146,7 @@ class PreflightOrchestrator:
                     "schema": schema,
                 },
                 execution_id,
-                plan_id,
+                todo_item_id,
             )
 
             # Create and yield action for tool start
@@ -158,7 +161,7 @@ class PreflightOrchestrator:
                     "catalog": catalog,
                     "database": database,
                     "schema": schema,
-                    "plan_id": plan_id,  # Include plan_id for event converter
+                    "plan_id": todo_item_id,  # Include todo_item_id for event converter binding
                 },
                 status=ActionStatus.PROCESSING,
             )
@@ -236,7 +239,7 @@ class PreflightOrchestrator:
                 execution_time=execution_time,
                 cache_hit=cache_hit,
                 execution_id=execution_id,
-                plan_id=plan_id,
+                plan_id=todo_item_id,
             )
 
             # Update action with results
