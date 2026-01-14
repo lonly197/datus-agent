@@ -460,11 +460,7 @@ class WorkflowRunner:
 
                 while self.workflow and not self.workflow.is_complete() and step_count < max_steps:
                     # Check for cancellation at loop start
-                    try:
-                        ensure_not_cancelled()
-                    except asyncio.CancelledError:
-                        logger.info("Workflow execution was cancelled")
-                        break
+                    ensure_not_cancelled()
 
                     current_node = self.workflow.get_current_node()
                     if not current_node:
@@ -515,12 +511,8 @@ class WorkflowRunner:
                             },
                         )
 
-                    except asyncio.CancelledError:
-                        # 重新抛出取消异常
-                        self._update_action_status(node_start_action, success=False, error="Node execution was cancelled")
-                        logger.info(f"Node execution cancelled: {current_node.description}")
-                        raise
                     except Exception as e:
+                        # Regular exception (CancelledError will propagate naturally)
                         self._update_action_status(node_start_action, success=False, error=str(e))
                         logger.error(f"Node execution error: {e}")
                         break
@@ -554,15 +546,12 @@ class WorkflowRunner:
                 metadata = self._finalize_workflow(step_count)
                 workflow_succeeded = True
 
-            except asyncio.CancelledError:
-                logger.info("Workflow stream execution was cancelled")
-                workflow_error = "Workflow execution was cancelled"
-                raise
-            except Exception as e:
-                logger.error(f"Workflow execution failed: {e}")
-                workflow_error = str(e)
-                # Yield error action for error event conversion
-                error_action = self._create_action_history(
+        except Exception as e:
+            # Regular exception (CancelledError will propagate naturally)
+            logger.error(f"Workflow execution failed: {e}")
+            workflow_error = str(e)
+            # Yield error action for error event conversion
+            error_action = self._create_action_history(
                 action_id="workflow_error",
                 messages=f"Workflow execution failed: {str(e)}",
                 action_type="error",
@@ -571,6 +560,8 @@ class WorkflowRunner:
             error_action.status = ActionStatus.FAILED
             yield error_action
             raise
+        # Note: CancelledError (Python 3.8+) or CancelledError from concurrent.futures (Python 3.7)
+        # will propagate naturally and finally block will execute
         finally:
             # ALWAYS emit a completion action, regardless of how the workflow terminated
             # This ensures the frontend receives a CompleteEvent for all workflows
