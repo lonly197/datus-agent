@@ -20,7 +20,12 @@ from fastapi.responses import StreamingResponse
 
 from datus.agent.agent import Agent
 from datus.configuration.agent_config_loader import load_agent_config
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import (
+    ActionHistory,
+    ActionHistoryManager,
+    ActionRole,
+    ActionStatus,
+)
 from datus.schemas.node_models import SqlTask
 from datus.storage.task import TaskStore
 from datus.utils.loggings import get_logger
@@ -1361,18 +1366,27 @@ async def lifespan(app: FastAPI):
     await service.initialize()
     logger.info("Datus API Service started")
     yield
+
     # Shutdown - wait for running tasks to cancel with timeout
-    logger.info("Datus API Service shutting down")
+    logger.info("=" * 60)
+    logger.info("Datus API Service shutting down...")
+    logger.info("=" * 60)
 
     # Cancel all running tasks with bounded wait
     if service:
         shutdown_timeout = getattr(args, "shutdown_timeout_seconds", 5.0)
+        logger.info(f"Initiating task cancellation (timeout={shutdown_timeout}s)...")
+
         try:
             # Pass shutdown_timeout to allow full wait duration
             await service.cancel_all_running_tasks(wait_timeout=shutdown_timeout)
-            logger.info("Shutdown cancellation sequence completed")
+            logger.info("✓ Shutdown cancellation sequence completed successfully")
         except Exception as e:
-            logger.warning(f"Error during shutdown task cancellation: {e}")
+            logger.warning(f"✗ Error during shutdown task cancellation: {e}")
+
+        logger.info("=" * 60)
+        logger.info("Datus API Service shutdown complete")
+        logger.info("=" * 60)
 
 
 def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:

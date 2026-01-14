@@ -165,11 +165,17 @@ def _build_agent_args(args: argparse.Namespace) -> argparse.Namespace:
     )
 
 
-def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> None:
+async def _run_server_async(args: argparse.Namespace, agent_args: argparse.Namespace) -> None:
+    """Run the server with custom signal handling for graceful shutdown."""
+    import asyncio
+
     from datus.api.service import create_app
 
+    # Create the app
     app = create_app(agent_args, root_path=args.root_path)
-    uvicorn.run(
+
+    # Create a Server instance instead of using uvicorn.run()
+    config = uvicorn.Config(
         app,
         host=args.host,
         port=args.port,
@@ -178,6 +184,60 @@ def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> Non
         log_level="debug" if args.debug else "info",
         access_log=True,
     )
+    server = uvicorn.Server(config)
+
+    # Setup signal handlers for graceful shutdown
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    # Handler for SIGINT (Ctrl+C) and SIGTERM
+    def handle_signal(sig, frame):
+        """Handle shutdown signals gracefully."""
+        signal_name = signal.Signals(sig).name
+        logger.info(f"Received {signal_name}, initiating graceful shutdown (timeout={args.shutdown_timeout}s)...")
+        shutdown_event.set()
+
+        # Trigger server shutdown
+        if server.should_exit:
+            return
+        server.should_exit = True
+
+    # Register signal handlers
+    try:
+        loop.add_signal_handler(signal.SIGINT, handle_signal, signal.SIGINT, None)
+        loop.add_signal_handler(signal.SIGTERM, handle_signal, signal.SIGTERM, None)
+        logger.info("Signal handlers registered for graceful shutdown (SIGINT, SIGTERM)")
+    except NotImplementedError:
+        # add_signal_handler not available on this platform
+        # Fall back to standard signal handling (will use uvicorn's default)
+        logger.warning("asyncio signal handlers not supported on this platform, using default uvicorn signal handling")
+
+    # Serve with graceful shutdown
+    try:
+        await server.serve()
+    except KeyboardInterrupt:
+        # Fallback: if KeyboardInterrupt still gets through, handle gracefully
+        logger.info("KeyboardInterrupt caught, initiating graceful shutdown...")
+        if server.should_exit:
+            return
+        server.should_exit = True
+        await server.shutdown()
+
+
+def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> None:
+    """Run the server with proper signal handling for foreground mode."""
+    import asyncio
+
+    # Use asyncio.run to properly handle the async server
+    try:
+        asyncio.run(_run_server_async(args, agent_args))
+    except KeyboardInterrupt:
+        # This should not normally happen due to our signal handlers,
+        # but keep it as a safety net
+        logger.info("Server stopped by user")
+    except Exception as e:
+        logger.error(f"Server error: {e}")
+        raise
 
 
 def main():
