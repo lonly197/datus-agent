@@ -669,6 +669,11 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 else:
                     logger.warning(f"No schemas found for candidate tables: {candidate_tables}")
 
+                    # DDL Fallback: If storage is empty, retrieve DDL from database and populate storage
+                    if candidate_tables:
+                        logger.info("Schema storage empty, attempting DDL retrieval fallback...")
+                        await self._ddl_fallback_and_retry(candidate_tables, task)
+
         except Exception as e:
             logger.warning(f"Failed to load table schemas: {e}")
             # Don't fail the entire node for schema loading issues
@@ -706,6 +711,130 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             logger.error(f"Metadata repair process failed: {e}")
 
         return repaired_count
+
+    async def _ddl_fallback_and_retry(self, candidate_tables: List[str], task) -> None:
+        """
+        Fallback to retrieve DDL from database and populate storage when SchemaStorage is empty.
+
+        This method:
+        1. Connects to the database using the configured connector
+        2. Retrieves DDL for all tables (or candidate tables)
+        3. Populates SchemaStorage with the retrieved DDL
+        4. Retries schema search with populated storage
+
+        Args:
+            candidate_tables: List of table names to search for
+            task: The current task with database connection info
+        """
+        try:
+            # SchemaWithValueRAG is already imported at module level
+            # Using local import here for clarity in this async context
+            db_manager = get_db_manager()
+
+            # Get the database connector for the current task
+            connector = db_manager.get_conn(self.agent_config.current_namespace, task.database_name)
+
+            if not connector:
+                logger.warning(f"Could not get database connector for {task.database_name}")
+                return
+
+            # Initialize RAG for storage operations
+            rag = SchemaWithValueRAG(agent_config=self.agent_config)
+            schemas_to_store = []
+            retrieved_tables = set()
+
+            # Try to get DDL for tables using available connector methods
+            if hasattr(connector, "get_tables_with_ddl"):
+                # Best case: connector can get all tables with DDL at once
+                logger.info("Using get_tables_with_ddl to retrieve all table DDLs...")
+                tables_with_ddl = connector.get_tables_with_ddl()
+
+                for tbl_info in tables_with_ddl:
+                    table_name = tbl_info.get("name", "")
+                    if table_name:
+                        schemas_to_store.append({
+                            "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
+                            "catalog_name": task.catalog_name or "",
+                            "database_name": task.database_name or "",
+                            "schema_name": task.schema_name or "",
+                            "table_name": table_name,
+                            "table_type": "table",
+                            "definition": tbl_info.get("ddl", ""),
+                        })
+                        retrieved_tables.add(table_name)
+
+                logger.info(f"Retrieved DDL for {len(schemas_to_store)} tables from database")
+
+            elif hasattr(connector, "get_table_ddl") or hasattr(connector, "get_ddl"):
+                # Fallback: get DDL for each candidate table individually
+                logger.info(f"Retrieving DDL for {len(candidate_tables)} candidate tables individually...")
+
+                for table_name in candidate_tables:
+                    try:
+                        ddl = None
+                        if hasattr(connector, "get_table_ddl"):
+                            ddl = connector.get_table_ddl(table_name)
+                        elif hasattr(connector, "get_ddl"):
+                            ddl = connector.get_ddl(table_name)
+
+                        if ddl:
+                            schemas_to_store.append({
+                                "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
+                                "catalog_name": task.catalog_name or "",
+                                "database_name": task.database_name or "",
+                                "schema_name": task.schema_name or "",
+                                "table_name": table_name,
+                                "table_type": "table",
+                                "definition": ddl,
+                            })
+                            retrieved_tables.add(table_name)
+                    except Exception as e:
+                        logger.debug(f"Failed to get DDL for table {table_name}: {e}")
+
+                logger.info(f"Retrieved DDL for {len(schemas_to_store)} candidate tables")
+
+            else:
+                logger.warning("Connector does not support DDL retrieval methods")
+                return
+
+            # Store retrieved schemas in storage
+            if schemas_to_store:
+                logger.info(f"Populating SchemaStorage with {len(schemas_to_store)} schemas...")
+                rag.store_batch(schemas_to_store, [])
+
+                # Retry schema search with populated storage
+                schemas, values = rag.search_tables(
+                    tables=candidate_tables,
+                    catalog_name=task.catalog_name or "",
+                    database_name=task.database_name or "",
+                    schema_name=task.schema_name or "",
+                    dialect=task.database_type if hasattr(task, "database_type") else None,
+                )
+
+                if schemas:
+                    # Update workflow context with retrieved schemas
+                    def update_schemas():
+                        self.workflow.context.update_schema_and_values(schemas, values)
+                        return {"loaded_count": len(schemas)}
+
+                    from datus.utils.context_utils import safe_context_update
+                    result = safe_context_update(
+                        self.workflow.context,
+                        update_schemas,
+                        operation_name="ddl_fallback_load_schemas",
+                    )
+
+                    if result["success"]:
+                        logger.info(f"✅ Successfully loaded {len(schemas)} schemas via DDL fallback")
+                    else:
+                        logger.warning(f"Context update failed after DDL fallback: {result.get('error')}")
+                else:
+                    logger.warning(f"DDL fallback retrieved schemas but still no match for candidates: {candidate_tables}")
+            else:
+                logger.warning("No schemas retrieved from database for fallback")
+
+        except Exception as e:
+            logger.warning(f"DDL fallback failed: {e}")
 
     def execute(self) -> BaseResult:
         """

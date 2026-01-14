@@ -684,6 +684,101 @@ class DBFuncTool:
         except Exception as e:
             return FuncToolResult(success=0, error=str(e))
 
+    def search_tables_by_comment(
+        self,
+        keyword: str,
+        catalog: Optional[str] = "",
+        database: Optional[str] = "",
+        schema_name: Optional[str] = "",
+    ) -> FuncToolResult:
+        """
+        Search for tables based on table/column comments in DDL.
+
+        This is a fallback tool when SchemaStorage is not populated.
+        It retrieves all DDLs from the database and searches for keyword in comments.
+
+        Args:
+            keyword: Search keyword to find in COMMENT statements
+            catalog: Optional catalog filter
+            database: Optional database filter
+            schema_name: Optional schema filter
+
+        Returns:
+            FuncToolResult with result containing:
+            - keyword: The search keyword
+            - matching_tables: List of tables with matching comments
+            - count: Number of matching tables
+            Each matching table includes: table_name, comments, ddl_preview
+        """
+        try:
+            import re
+
+            # Build table coordinate for scope checking
+            coordinate = self._build_table_coordinate(
+                raw_name="*",  # Wildcard for all tables
+                catalog=catalog,
+                database=database,
+                schema=schema_name,
+            )
+
+            # Get all tables with DDL from database
+            tables_with_ddl = self.connector.get_tables_with_ddl(
+                catalog_name=catalog, database_name=database, schema_name=schema_name
+            )
+
+            if not tables_with_ddl:
+                return FuncToolResult(
+                    result={
+                        "keyword": keyword,
+                        "matching_tables": [],
+                        "count": 0,
+                        "message": "No tables found in database or no DDL available",
+                    }
+                )
+
+            matching_tables = []
+            keyword_lower = keyword.lower()
+
+            for table_info in tables_with_ddl:
+                ddl = table_info.get("ddl", "")
+                table_name = table_info.get("name", "")
+
+                # Extract COMMENT statements from DDL
+                # Matches: COMMENT 'text' or COMMENT "text"
+                comments = re.findall(r"COMMENT\s+['\"](.+?)['\"]", ddl, re.IGNORECASE)
+
+                # Check if keyword matches any comment
+                matched_comments = []
+                for comment in comments:
+                    if keyword_lower in comment.lower():
+                        matched_comments.append(comment)
+
+                if matched_comments:
+                    matching_tables.append(
+                    {
+                        "table_name": table_name,
+                        "catalog": table_info.get("catalog", catalog),
+                        "database": table_info.get("database", database),
+                        "schema": table_info.get("schema", schema_name),
+                        "comments": matched_comments,
+                        "ddl_preview": ddl[:500] if len(ddl) > 500 else ddl,
+                    }
+                )
+
+            return FuncToolResult(
+                result={
+                    "keyword": keyword,
+                    "matching_tables": matching_tables,
+                    "count": len(matching_tables),
+                }
+            )
+
+        except Exception as e:
+            return FuncToolResult(
+                success=0,
+                error=f"Failed to search tables by comment: {str(e)}",
+            )
+
     def validate_sql_syntax(self, sql: str) -> FuncToolResult:
         """
         Validate SQL syntax without executing the query.

@@ -219,6 +219,70 @@ class SchemaStorage(BaseMetadataStorage):
             .to_arrow()
         )
 
+    def get_table_schemas(
+        self,
+        table_names: List[str],
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+    ) -> pa.Table:
+        """
+        Get schemas for multiple table names.
+
+        Args:
+            table_names: List of table names to retrieve
+            catalog_name: Optional catalog filter
+            database_name: Optional database filter
+            schema_name: Optional schema filter
+
+        Returns:
+            Arrow table containing schema definitions with columns:
+            identifier, catalog_name, database_name, schema_name, table_name, table_type, definition
+        """
+        self._ensure_table_ready()
+
+        # Build OR condition for all tables
+        table_conditions = [eq("table_name", tbl) for tbl in table_names]
+
+        # Add additional filters for catalog, database, schema
+        base_conditions = []
+        if catalog_name:
+            base_conditions.append(eq("catalog_name", catalog_name))
+        if database_name:
+            base_conditions.append(eq("database_name", database_name))
+        if schema_name:
+            base_conditions.append(eq("schema_name", schema_name))
+
+        # Combine: (table1 OR table2 OR ...) AND catalog AND database AND schema
+        if len(table_conditions) == 1:
+            table_where = table_conditions[0]
+        else:
+            table_where = or_(*table_conditions)
+
+        if base_conditions:
+            where = and_(table_where, *base_conditions)
+        else:
+            where = table_where
+
+        where_clause = build_where(where)
+
+        return (
+            self.table.search()
+            .where(where_clause)
+            .select(
+                [
+                    "identifier",
+                    "catalog_name",
+                    "database_name",
+                    "schema_name",
+                    "table_name",
+                    "table_type",
+                    "definition",
+                ]
+            )
+            .to_arrow()
+        )
+
 
 class SchemaValueStorage(BaseMetadataStorage):
     def __init__(self, db_path: str, embedding_model: EmbeddingModel):
