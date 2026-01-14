@@ -344,6 +344,13 @@ Message 4: Write "file.js"
 
 Remember: **Claude Flow coordinates, Claude Code creates!**
 
+# Datus-Specific Learnings
+
+## Schema Storage
+
+- SchemaStorage has get_schema() for single table, search_similar() for semantic search, search_all() for all schemas - get_table_schemas() does not exist
+- When SchemaStorage is empty, implement DDL fallback to retrieve schemas from database connector
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
