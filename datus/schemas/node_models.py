@@ -396,6 +396,19 @@ class ExecuteSQLInput(BaseInput):
     )
 
 
+class SQLValidateInput(BaseInput):
+    """
+    Input model for SQL validation node.
+    Validates the input parameters for SQL query validation.
+    """
+
+    sql_query: str = Field(..., description="The SQL query to validate")
+    dialect: Optional[str] = Field(None, description="Database dialect for SQL validation")
+    check_table_existence: bool = Field(default=True, description="Check if tables exist in schema")
+    check_column_existence: bool = Field(default=True, description="Check if columns exist in schema")
+    check_dangerous_operations: bool = Field(default=True, description="Check for dangerous SQL operations")
+
+
 class ExecuteSQLResult(BaseResult):
     """
     Result model for SQL execution node.

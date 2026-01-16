@@ -19,7 +19,7 @@ from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseInput, BaseResult
-from datus.schemas.node_models import SQLContext, TableSchema
+from datus.schemas.node_models import SQLContext, SQLValidateInput, TableSchema
 from datus.utils.constants import DBType
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
@@ -61,15 +61,25 @@ class SQLValidateNode(Node):
 
     def setup_input(self, workflow: Workflow) -> Dict[str, Any]:
         """Setup SQL validation input from workflow context."""
-        if not self.input:
-            self.input = BaseInput()
-
         # Extract SQL query from latest SQL context
+        sql_query = ""
         if workflow and workflow.context and workflow.context.sql_contexts:
             latest_sql_context = workflow.context.sql_contexts[-1]
-            self.input.sql_query = latest_sql_context.sql_query
-        else:
-            self.input.sql_query = ""
+            sql_query = latest_sql_context.sql_query
+
+        # Get database dialect from agent config
+        dialect = None
+        if self.agent_config and hasattr(self.agent_config, "db_type"):
+            dialect = self.agent_config.db_type
+
+        # Create proper input object with all fields
+        self.input = SQLValidateInput(
+            sql_query=sql_query or "",
+            dialect=dialect,
+            check_table_existence=True,
+            check_column_existence=True,
+            check_dangerous_operations=True,
+        )
 
         return {"success": True, "message": "SQL validation input setup complete"}
 

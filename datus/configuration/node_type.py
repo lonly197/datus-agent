@@ -12,7 +12,7 @@ from datus.schemas.date_parser_node_models import DateParserInput
 from datus.schemas.doc_search_node_models import DocSearchInput
 from datus.schemas.fix_node_models import FixInput
 from datus.schemas.gen_sql_agentic_node_models import GenSQLNodeInput
-from datus.schemas.node_models import BaseInput, ExecuteSQLInput, GenerateSQLInput, OutputInput, ReflectionInput
+from datus.schemas.node_models import BaseInput, ExecuteSQLInput, GenerateSQLInput, OutputInput, ReflectionInput, SQLValidateInput
 from datus.schemas.parallel_node_models import ParallelInput, SelectionInput
 from datus.schemas.reason_sql_node_models import ReasoningInput
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput
@@ -168,7 +168,7 @@ class NodeType:
             cls.TYPE_INTENT_CLARIFICATION: BaseInput,
             cls.TYPE_SCHEMA_DISCOVERY: BaseInput,
             cls.TYPE_SCHEMA_VALIDATION: BaseInput,
-            cls.TYPE_SQL_VALIDATE: BaseInput,
+            cls.TYPE_SQL_VALIDATE: SQLValidateInput,
             cls.TYPE_RESULT_VALIDATION: BaseInput,
             cls.TYPE_KNOWLEDGE_ENHANCEMENT: BaseInput,
             cls.TYPE_CHAT: ChatNodeInput,
