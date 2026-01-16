@@ -9,6 +9,8 @@ This node validates that the SQL execution results are acceptable:
 - SQL executed without errors
 - Result is not empty (unless expected, e.g., DDL/DML queries)
 - Result makes semantic sense for the query
+
+Enhanced with HTML preview capability for SQL execution results.
 """
 
 from typing import Any, AsyncGenerator, Dict, Optional
@@ -19,6 +21,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseInput, BaseResult
 from datus.schemas.node_models import SQLContext
+from datus.utils.env import get_env_int
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 
@@ -128,6 +131,23 @@ class ResultValidationNode(Node):
                     status=ActionStatus.SUCCESS,
                     output=validation_result,
                 )
+
+                # Generate HTML preview for SELECT query results
+                html_preview = self._generate_html_preview(latest_sql_context)
+                if html_preview:
+                    yield ActionHistory(
+                        action_id=f"{self.id}_preview",
+                        role=ActionRole.TOOL,
+                        messages="SQL Result Preview",
+                        action_type="result_preview",
+                        input={
+                            "task": task.task[:50] if task else "",
+                            "row_count": validation_result.get("row_count", 0),
+                        },
+                        status=ActionStatus.SUCCESS,
+                        output={"html_preview": html_preview},
+                    )
+
                 self.result = BaseResult(success=True, data=validation_result)
             else:
                 yield ActionHistory(
@@ -235,6 +255,206 @@ class ResultValidationNode(Node):
                 return True
 
         return False
+
+    def _generate_html_preview(
+        self, sql_context: SQLContext, max_rows: Optional[int] = None
+    ) -> str:
+        """
+        Generate HTML table preview of SQL execution results.
+
+        Args:
+            sql_context: The SQL context containing execution results
+            max_rows: Maximum number of rows to display (default from env or 10)
+
+        Returns:
+            HTML string containing a formatted table with the results
+        """
+        if max_rows is None:
+            max_rows = get_env_int("SQL_PREVIEW_MAX_ROWS", 10)
+
+        # Check if there are results to preview
+        if not sql_context.sql_return:
+            return ""
+
+        # Handle DataFrame with to_csv() method (PyArrow/pandas)
+        if hasattr(sql_context.sql_return, "to_csv"):
+            try:
+                # Check if DataFrame is empty
+                if hasattr(sql_context.sql_return, "empty") and sql_context.sql_return.empty:
+                    return "<div class='sql-preview-info'>Result set is empty</div>"
+
+                # Try to get row count
+                total_rows = len(sql_context.sql_return) if hasattr(sql_context.sql_return, "__len__") else 0
+
+                # Get preview data
+                if hasattr(sql_context.sql_return, "head"):
+                    preview_df = sql_context.sql_return.head(max_rows)
+                elif hasattr(sql_context.sql_return, "slice"):
+                    preview_df = sql_context.sql_return.slice(0, min(max_rows, total_rows))
+                else:
+                    preview_df = sql_context.sql_return
+
+                # Generate HTML
+                html_parts = ["<div class='sql-preview-container'>"]
+
+                # Get column names
+                if hasattr(preview_df, "columns"):
+                    columns = list(preview_df.columns)
+                elif hasattr(preview_df, "schema"):
+                    columns = [field.name for field in preview_df.schema]
+                else:
+                    columns = []
+
+                # Build HTML table
+                html_parts.append("<table class='sql-preview-table' border='1' style='border-collapse: collapse; width: 100%; font-size: 12px;'>")
+
+                # Header row
+                html_parts.append("<thead><tr style='background-color: #f5f5f5;'>")
+                for col in columns:
+                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{col}</th>")
+                html_parts.append("</tr></thead>")
+
+                # Data rows
+                html_parts.append("<tbody>")
+                for i in range(min(len(preview_df), max_rows)):
+                    html_parts.append("<tr>")
+                    # Get row data
+                    if hasattr(preview_df, "iloc"):
+                        row = preview_df.iloc[i]
+                        row_values = [row[col] for col in columns]
+                    elif hasattr(preview_df, "take"):
+                        row_data = preview_df.take([i])
+                        row_values = [row_data[col][0].as_py() if hasattr(row_data[col][0], "as_py") else row_data[col][0] for col in columns]
+                    else:
+                        row_values = []
+
+                    # Style alternating rows
+                    row_style = "background-color: #fafafa;" if i % 2 == 0 else ""
+                    for val in row_values:
+                        val_str = str(val) if val is not None else ""
+                        # Truncate long values
+                        if len(val_str) > 100:
+                            val_str = val_str[:97] + "..."
+                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{val_str}</td>")
+                    html_parts.append("</tr>")
+                html_parts.append("</tbody>")
+                html_parts.append("</table>")
+
+                # Add row count indicator
+                if total_rows > max_rows:
+                    html_parts.append(f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>")
+                    html_parts.append(f"<em>Showing {max_rows} of {total_rows} rows</em>")
+                    html_parts.append("</div>")
+                else:
+                    html_parts.append(f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>")
+                    html_parts.append(f"<em>Total: {total_rows} row{'s' if total_rows != 1 else ''}</em>")
+                    html_parts.append("</div>")
+
+                html_parts.append("</div>")
+                return "".join(html_parts)
+
+            except Exception as e:
+                logger.warning(f"Failed to generate HTML preview from DataFrame: {e}")
+                return ""
+
+        # Handle list of dicts
+        if isinstance(sql_context.sql_return, list):
+            try:
+                rows = sql_context.sql_return[:max_rows]
+                total_rows = len(sql_context.sql_return)
+
+                if not rows:
+                    return "<div class='sql-preview-info'>Result set is empty</div>"
+
+                # Get columns from first row
+                columns = list(rows[0].keys()) if rows else []
+
+                html_parts = ["<div class='sql-preview-container'>"]
+                html_parts.append("<table class='sql-preview-table' border='1' style='border-collapse: collapse; width: 100%; font-size: 12px;'>")
+
+                # Header row
+                html_parts.append("<thead><tr style='background-color: #f5f5f5;'>")
+                for col in columns:
+                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{col}</th>")
+                html_parts.append("</tr></thead>")
+
+                # Data rows
+                html_parts.append("<tbody>")
+                for i, row in enumerate(rows):
+                    html_parts.append("<tr>")
+                    row_style = "background-color: #fafafa;" if i % 2 == 0 else ""
+                    for col in columns:
+                        val = row.get(col, "")
+                        val_str = str(val) if val is not None else ""
+                        if len(val_str) > 100:
+                            val_str = val_str[:97] + "..."
+                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{val_str}</td>")
+                    html_parts.append("</tr>")
+                html_parts.append("</tbody>")
+                html_parts.append("</table>")
+
+                # Add row count indicator
+                if total_rows > max_rows:
+                    html_parts.append(f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>")
+                    html_parts.append(f"<em>Showing {max_rows} of {total_rows} rows</em>")
+                    html_parts.append("</div>")
+
+                html_parts.append("</div>")
+                return "".join(html_parts)
+
+            except Exception as e:
+                logger.warning(f"Failed to generate HTML preview from list: {e}")
+                return ""
+
+        # Handle string result (CSV format)
+        if isinstance(sql_context.sql_return, str):
+            try:
+                lines = sql_context.sql_return.strip().split("\n")
+                if len(lines) < 2:
+                    return ""
+
+                headers = lines[0].split(",")
+                data_lines = lines[1:max_rows + 1]
+                total_rows = len(lines) - 1
+
+                html_parts = ["<div class='sql-preview-container'>"]
+                html_parts.append("<table class='sql-preview-table' border='1' style='border-collapse: collapse; width: 100%; font-size: 12px;'>")
+
+                # Header row
+                html_parts.append("<thead><tr style='background-color: #f5f5f5;'>")
+                for header in headers:
+                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{header}</th>")
+                html_parts.append("</tr></thead>")
+
+                # Data rows
+                html_parts.append("<tbody>")
+                for i, line in enumerate(data_lines):
+                    values = line.split(",")
+                    html_parts.append("<tr>")
+                    row_style = "background-color: #fafafa;" if i % 2 == 0 else ""
+                    for val in values:
+                        val_str = val.strip()
+                        if len(val_str) > 100:
+                            val_str = val_str[:97] + "..."
+                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{val_str}</td>")
+                    html_parts.append("</tr>")
+                html_parts.append("</tbody>")
+                html_parts.append("</table>")
+
+                # Add row count indicator
+                if total_rows > max_rows:
+                    html_parts.append(f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>")
+                    html_parts.append(f"<em>Showing {max_rows} of {total_rows} rows</em>")
+                    html_parts.append("</div>")
+
+                html_parts.append("</div>")
+                return "".join(html_parts)
+
+            except Exception as e:
+                logger.warning(f"Failed to generate HTML preview from CSV string: {e}")
+                return ""
+
+        return ""
 
     def execute(self) -> BaseResult:
         """Execute result validation synchronously."""

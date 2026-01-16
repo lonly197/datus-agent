@@ -93,7 +93,7 @@ class ReflectNode(Node):
         workflow: Workflow,
     ) -> Dict:
         """
-        Execute the recommended optimization strategy.
+        Execute the recommended optimization strategy with active termination.
 
         Args:
             node: The reflection node
@@ -102,19 +102,41 @@ class ReflectNode(Node):
             details: Details about the error and original SQL
 
         Returns:
-            Result of the strategy execution
+            Result of the strategy execution with termination status
         """
         strategy = strategy.upper()
-        if strategy == StrategyType.SUCCESS:
-            return {"success": True, "message": "go on to output"}
 
+        # Check for max reflection rounds
         max_round = get_env_int("MAX_REFLECTION_ROUNDS", 3)
+        if workflow.reflection_round > max_round:
+            logger.info("Max reflection rounds exceeded, terminating workflow")
+
+            # Set termination status in workflow metadata
+            if not hasattr(workflow, "metadata") or workflow.metadata is None:
+                workflow.metadata = {}
+            from datus.agent.workflow_runner import WorkflowTerminationStatus
+            workflow.metadata["termination_status"] = WorkflowTerminationStatus.TERMINATE_WITH_ERROR
+            workflow.metadata["termination_reason"] = (
+                f"Max reflection rounds ({max_round}) exceeded"
+            )
+
+            return {
+                "success": False,
+                "message": "Max reflection rounds exceeded",
+                "terminated": True,
+                "termination_reason": "max_reflection_rounds",
+            }
+
+        if strategy == StrategyType.SUCCESS:
+            # Successful completion - return success without termination
+            return {"success": True, "message": "go on to output", "terminated": False}
+
         if workflow.reflection_round == max_round:
             logger.info("Max reflection rounds reached, execute reasoning")
+            # Continue with reasoning strategy, but don't terminate yet
             return self._execute_strategy(details, workflow, StrategyType.REASONING)
-        elif workflow.reflection_round > max_round:
-            logger.info("Max reflection rounds exceeded, exit")
-            return {"success": True, "message": "Max reflection rounds exceeded"}
+
+        # Handle recovery strategies
         if strategy in [
             StrategyType.DOC_SEARCH,
             StrategyType.SCHEMA_LINKING,
@@ -122,8 +144,21 @@ class ReflectNode(Node):
             StrategyType.REASONING,
         ]:
             return self._execute_strategy(details, workflow, strategy)
-        else:
-            return {"success": False, "message": f"Unknown strategy: {strategy}"}
+
+        # Unknown strategy - terminate with error
+        logger.error(f"Unknown reflection strategy: {strategy}")
+        if not hasattr(workflow, "metadata") or workflow.metadata is None:
+            workflow.metadata = {}
+        from datus.agent.workflow_runner import WorkflowTerminationStatus
+        workflow.metadata["termination_status"] = WorkflowTerminationStatus.TERMINATE_WITH_ERROR
+        workflow.metadata["termination_reason"] = f"Unknown strategy: {strategy}"
+
+        return {
+            "success": False,
+            "message": f"Unknown strategy: {strategy}",
+            "terminated": True,
+            "termination_reason": "unknown_strategy",
+        }
 
     def _execute_strategy(self, details: Dict, workflow: Workflow, strategy: str) -> Dict:
         """
@@ -216,6 +251,34 @@ class ReflectNode(Node):
 
             # Yield the updated action with final status
             yield reflection_action
+
+            # Emit PlanUpdateEvent when strategy modifies workflow
+            if result.success and result.strategy in [
+                StrategyType.DOC_SEARCH,
+                StrategyType.SCHEMA_LINKING,
+                StrategyType.SIMPLE_REGENERATE,
+                StrategyType.REASONING,
+            ]:
+                plan_update_action = ActionHistory(
+                    action_id="reflection_plan_update",
+                    role=ActionRole.WORKFLOW,
+                    messages=f"Adjusting execution strategy: {result.strategy}",
+                    action_type="plan_update",
+                    input={
+                        "strategy": result.strategy,
+                        "reflection_round": getattr(self.workflow, "reflection_round", 0) if self.workflow else 0,
+                    },
+                    status=ActionStatus.SUCCESS,
+                    output={
+                        "plan_adjustment": {
+                            "strategy": result.strategy,
+                            "explanation": result.details.get("explanation", ""),
+                            "nodes_added": result.details.get("nodes_added", []) if isinstance(result.details, dict) else [],
+                            "reflection_round": getattr(self.workflow, "reflection_round", 0) if self.workflow else 0,
+                        }
+                    },
+                )
+                yield plan_update_action
 
         except Exception as e:
             logger.error(f"Reflection streaming error: {str(e)}")

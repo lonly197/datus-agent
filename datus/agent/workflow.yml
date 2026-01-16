@@ -1,5 +1,4 @@
 workflow:
-
   # Reflection-based SQL generation workflow
   reflection:
     - schema_linking
@@ -53,12 +52,13 @@ workflow:
 
   # Text2SQL workflow with comprehensive validation and reflection
   text2sql:
-    - intent_analysis       # Analyze query intent
-    - schema_discovery      # Discover relevant schema
-    - schema_validation     # Validate schema sufficiency
-    - generate_sql          # Generate SQL query
-    - execute_sql           # Execute SQL query
-    - result_validation     # Validate result quality
-    - reflect               # Reflect and self-correct if needed
-    - output                # Return results
-
+    - intent_analysis # Analyze query intent (task type detection)
+    - intent_clarification # Clarify business intent (typos, ambiguities, entities)
+    - schema_discovery # Discover relevant schema using clarified intent
+    - schema_validation # Validate schema sufficiency
+    - generate_sql # Generate SQL query
+    - sql_validate # Validate SQL syntax and semantics
+    - execute_sql # Execute SQL query
+    - result_validation # Validate result quality
+    - reflect # Reflect and self-correct if needed
+    - output # Return results

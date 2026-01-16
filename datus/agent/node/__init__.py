@@ -26,6 +26,7 @@ __all__ = [
     "KnowledgeEnhancementNode",  # Knowledge unification and auto-retrieval
     "SchemaDiscoveryNode",  # Schema discovery and linking
     "SchemaValidationNode",  # Schema sufficiency validation
+    "SQLValidateNode",  # SQL syntax and semantics validation
     "ResultValidationNode",  # Result quality validation
     # Agentic conversation nodes
     "GenSQLAgenticNode",  # sql_chatbot - specialized SQL generation
@@ -67,6 +68,7 @@ from .result_validation_node import ResultValidationNode  # Result validation
 from .schema_discovery_node import SchemaDiscoveryNode  # text2sql workflow
 from .schema_linking_node import SchemaLinkingNode  # Database schema analysis
 from .schema_validation_node import SchemaValidationNode  # Schema validation
+from .sql_validate_node import SQLValidateNode  # SQL validation
 from .search_metrics_node import SearchMetricsNode
 from .selection_node import SelectionNode
 from .subworkflow_node import SubworkflowNode

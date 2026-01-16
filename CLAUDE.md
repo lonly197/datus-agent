@@ -348,8 +348,88 @@ Remember: **Claude Flow coordinates, Claude Code creates!**
 
 ## Schema Storage
 
-- SchemaStorage has get_schema() for single table, search_similar() for semantic search, search_all() for all schemas - get_table_schemas() does not exist
+- SchemaStorage has get_schema() for single table, search_similar() for semantic search, search_all() for all schemas, and get_table_schemas() for multiple tables
+- SchemaStorage.update_table_schema() is available for metadata repair (updates or inserts table definitions)
 - When SchemaStorage is empty, implement DDL fallback to retrieve schemas from database connector
+
+## Intent Analysis Architecture
+
+### Two-Stage Intent Processing
+
+The text2sql workflow uses a **two-stage intent analysis** approach:
+
+1. **IntentAnalysisNode** (`datus/agent/node/intent_analysis_node.py`):
+   - **Purpose**: Task type recognition (text2sql vs sql_review vs data_analysis)
+   - **Method**: Fast heuristic-based detection using SQL keywords and patterns
+   - **Output**: Sets `workflow.metadata["detected_intent"]`, `["intent_confidence"]`, `["intent_metadata"]`
+   - **Skip Logic**: Skips when `execution_mode` is pre-specified (e.g., "text2sql")
+   - **LLM Fallback**: Optional LLM classification when heuristic confidence < 0.7
+
+2. **IntentClarificationNode** (`datus/agent/node/intent_clarification_node.py`):
+   - **Purpose**: Business intent clarification (理清用户真实分析意图)
+   - **Method**: LLM-based clarification with structured JSON output
+   - **Capabilities**:
+     - Corrects typos (e.g., "华山" → "华南")
+     - Clarifies ambiguities (e.g., "最近的销售" → "最近30天的销售数据")
+     - Extracts entities (business_terms, time_range, dimensions, metrics)
+     - Normalizes queries for better schema discovery
+   - **Output**: Sets `workflow.metadata["clarified_task"]`, `["intent_clarification"]`, `["original_task"]`
+   - **LLM Caching**: Uses `llm_call_with_retry()` with 1-hour TTL cache
+
+### Workflow Integration
+
+**text2sql workflow** (`datus/agent/workflow.yml`):
+```yaml
+text2sql:
+  - intent_analysis       # Step 1: Confirm task type (fast, heuristic)
+  - intent_clarification  # Step 2: Clarify business intent (LLM-based)
+  - schema_discovery      # Step 3: Use clarified intent for schema discovery
+  - schema_validation
+  - generate_sql
+  - execute_sql
+  - result_validation
+  - reflect
+  - output
+```
+
+### Schema Discovery Enhancement
+
+**SchemaDiscoveryNode** uses the clarified intent:
+- Checks `workflow.metadata.get("clarified_task")` first
+- Falls back to `workflow.task.task` if no clarification
+- Logs clarification metadata (business_terms, typos_fixed) for debugging
+- Uses clarified task for semantic search, keyword matching, and LLM inference
+
+### Key Implementation Details
+
+**IntentAnalysisNode** should skip when execution_mode is set:
+```python
+def should_skip(self, workflow: Workflow) -> bool:
+    execution_mode = workflow.metadata.get("execution_mode")
+    return execution_mode is not None and execution_mode != ""
+```
+
+**IntentClarificationNode** stores results in workflow.metadata (not context.metadata):
+```python
+self.workflow.metadata["clarified_task"] = clarification_result["clarified_task"]
+self.workflow.metadata["intent_clarification"] = clarification_result
+self.workflow.metadata["original_task"] = original_task
+```
+
+**SchemaDiscoveryNode** uses clarified task:
+```python
+clarified_task = self.workflow.metadata.get("clarified_task")
+if clarified_task and clarified_task != task.task:
+    logger.info(f"Using clarified task: '{task.task[:50]}...' → '{clarified_task[:50]}...'")
+    task.task = clarified_task
+```
+
+### Performance Considerations
+
+- **IntentAnalysis**: Fast heuristic-based (no LLM call in most cases)
+- **IntentClarification**: LLM-based (cached with 1-hour TTL)
+- **Total Impact**: +1 LLM call per unique query (mitigated by caching)
+- **Benefit**: Improved schema discovery accuracy through clarified intent
 
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.

@@ -283,6 +283,92 @@ class SchemaStorage(BaseMetadataStorage):
             .to_arrow()
         )
 
+    def update_table_schema(
+        self,
+        table_name: str,
+        definition: str,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_type: TABLE_TYPE = "table",
+    ) -> bool:
+        """
+        Update or insert a table's schema definition.
+
+        This method is used for metadata repair when DDL is retrieved from the database.
+
+        Args:
+            table_name: Name of the table
+            definition: DDL or schema definition
+            catalog_name: Optional catalog name
+            database_name: Optional database name
+            schema_name: Optional schema name
+            table_type: Type of table (table, view, mv)
+
+        Returns:
+            True if update was successful, False otherwise
+        """
+        try:
+            self._ensure_table_ready()
+
+            # Build identifier
+            identifier_parts = [
+                catalog_name or "",
+                database_name or "",
+                schema_name or "",
+                table_name,
+                table_type,
+            ]
+            identifier = ".".join(identifier_parts)
+
+            # Check if record exists
+            existing = self.get_schema(
+                table_name=table_name,
+                catalog_name=catalog_name,
+                database_name=database_name,
+                schema_name=schema_name,
+            )
+
+            # Prepare data
+            data = {
+                "identifier": identifier,
+                "catalog_name": catalog_name or "",
+                "database_name": database_name or "",
+                "schema_name": schema_name or "",
+                "table_name": table_name,
+                "table_type": table_type,
+                "definition": definition,
+            }
+
+            # Generate embedding
+            embedded_data = self._embed_and_prepare(data)
+
+            if existing and len(existing) > 0:
+                # Update existing record
+                # LanceDB doesn't support direct updates, so we delete and re-insert
+                where_clause = build_where(
+                    _build_where_clause(
+                        catalog_name=catalog_name,
+                        database_name=database_name,
+                        schema_name=schema_name,
+                        table_name=table_name,
+                        table_type="full",
+                    )
+                )
+                self.table.delete(where_clause)
+                self.table.add([embedded_data])
+                logger.info(f"Updated schema for table: {table_name}")
+            else:
+                # Insert new record
+                self.table.add([embedded_data])
+                logger.info(f"Inserted schema for table: {table_name}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update table schema for {table_name}: {e}")
+            return False
+
 
 class SchemaValueStorage(BaseMetadataStorage):
     def __init__(self, db_path: str, embedding_model: EmbeddingModel):

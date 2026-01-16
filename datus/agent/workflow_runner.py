@@ -442,6 +442,24 @@ class WorkflowRunner:
                 elif termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
                     is_soft_failure = True
 
+            # Check for workflow metadata termination status (set by nodes like SQLValidateNode)
+            metadata_termination_status = self.workflow.metadata.get("termination_status") if self.workflow.metadata else None
+            if metadata_termination_status:
+                logger.info(f"Node requested termination via metadata: {metadata_termination_status}")
+                if metadata_termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
+                    is_soft_failure = True
+                elif metadata_termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
+                    self._terminate_workflow(
+                        termination_status=WorkflowTerminationStatus.TERMINATE_WITH_ERROR,
+                        error_message=f"Node {current_node.description} requested termination"
+                    )
+                    break
+                elif metadata_termination_status == WorkflowTerminationStatus.TERMINATE_SUCCESS:
+                    self._terminate_workflow(
+                        termination_status=WorkflowTerminationStatus.TERMINATE_SUCCESS
+                    )
+                    break
+
             evaluation = evaluate_result(current_node, self.workflow)
             logger.debug(f"Evaluation result for {current_node.type}: {evaluation}")
             if not evaluation["success"]:
@@ -580,6 +598,24 @@ class WorkflowRunner:
                                 break
                             elif termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
                                 is_soft_failure = True
+
+                        # Check for workflow metadata termination status (set by nodes like SQLValidateNode)
+                        metadata_termination_status = self.workflow.metadata.get("termination_status") if self.workflow.metadata else None
+                        if metadata_termination_status:
+                            logger.info(f"Node requested termination via metadata: {metadata_termination_status}")
+                            if metadata_termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
+                                is_soft_failure = True
+                            elif metadata_termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
+                                self._terminate_workflow(
+                                    termination_status=WorkflowTerminationStatus.TERMINATE_WITH_ERROR,
+                                    error_message=f"Node {current_node.description} requested termination"
+                                )
+                                break
+                            elif metadata_termination_status == WorkflowTerminationStatus.TERMINATE_SUCCESS:
+                                self._terminate_workflow(
+                                    termination_status=WorkflowTerminationStatus.TERMINATE_SUCCESS
+                                )
+                                break
 
                         self._update_action_status(
                             node_start_action,

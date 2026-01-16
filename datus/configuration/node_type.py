@@ -53,6 +53,7 @@ class NodeType:
     TYPE_INTENT_CLARIFICATION = "intent_clarification"  # For clarifying user analytical intent
     TYPE_SCHEMA_DISCOVERY = "schema_discovery"  # For discovering relevant schema
     TYPE_SCHEMA_VALIDATION = "schema_validation"  # For validating schema sufficiency
+    TYPE_SQL_VALIDATE = "sql_validate"  # For validating SQL syntax and semantics
     TYPE_RESULT_VALIDATION = "result_validation"  # For validating result quality
     TYPE_KNOWLEDGE_ENHANCEMENT = "knowledge_enhancement"  # For unifying and enriching knowledge
 
@@ -77,6 +78,7 @@ class NodeType:
         TYPE_INTENT_CLARIFICATION,
         TYPE_SCHEMA_DISCOVERY,
         TYPE_SCHEMA_VALIDATION,
+        TYPE_SQL_VALIDATE,
         TYPE_RESULT_VALIDATION,
         TYPE_KNOWLEDGE_ENHANCEMENT,
         TYPE_CHAT,
@@ -106,6 +108,7 @@ class NodeType:
         TYPE_INTENT_CLARIFICATION: "Clarify user's true analytical intent (typos, ambiguities, entity extraction)",
         TYPE_SCHEMA_DISCOVERY: "Discover relevant schema and tables for the query",
         TYPE_SCHEMA_VALIDATION: "Validate schema sufficiency for SQL generation",
+        TYPE_SQL_VALIDATE: "Validate SQL syntax, patterns, and table/column existence",
         TYPE_RESULT_VALIDATION: "Validate SQL execution result quality",
         TYPE_KNOWLEDGE_ENHANCEMENT: "Unify user knowledge and auto-retrieve vector knowledge (ext_knowledge, reference_sql, metrics)",
         TYPE_CHAT: "Conversational AI interactions with tool calling",
@@ -165,6 +168,7 @@ class NodeType:
             cls.TYPE_INTENT_CLARIFICATION: BaseInput,
             cls.TYPE_SCHEMA_DISCOVERY: BaseInput,
             cls.TYPE_SCHEMA_VALIDATION: BaseInput,
+            cls.TYPE_SQL_VALIDATE: BaseInput,
             cls.TYPE_RESULT_VALIDATION: BaseInput,
             cls.TYPE_KNOWLEDGE_ENHANCEMENT: BaseInput,
             cls.TYPE_CHAT: ChatNodeInput,

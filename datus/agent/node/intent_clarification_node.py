@@ -21,7 +21,12 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import (
+    ActionHistory,
+    ActionHistoryManager,
+    ActionRole,
+    ActionStatus,
+)
 from datus.schemas.base import BaseInput, BaseResult
 from datus.utils.error_handler import LLMMixin
 from datus.utils.exceptions import ErrorCode
@@ -105,18 +110,20 @@ class IntentClarificationNode(Node, LLMMixin):
                 ext_knowledge=getattr(task, "external_knowledge", None),
             )
 
-            # Step 2: Update workflow metadata with clarification results
-            if not hasattr(context, "metadata") or context.metadata is None:
-                context.metadata = {}
-            context.metadata["intent_clarification"] = clarification_result
+            # Step 2: Store in workflow.metadata (not context.metadata) for downstream nodes
+            if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
+                self.workflow.metadata = {}
 
-            # Step 3: Update task with clarified version (optional, for downstream nodes)
+            # Store clarification results
+            self.workflow.metadata["intent_clarification"] = clarification_result
+
+            # Step 3: Store clarified task for downstream nodes
             original_task = task.task
             clarified_task = clarification_result.get("clarified_task", original_task)
 
-            # Store both original and clarified tasks
-            context.metadata["original_task"] = original_task
-            context.metadata["clarified_task"] = clarified_task
+            # Store both original and clarified tasks in workflow.metadata
+            self.workflow.metadata["original_task"] = original_task
+            self.workflow.metadata["clarified_task"] = clarified_task
 
             # Emit success action
             yield ActionHistory(

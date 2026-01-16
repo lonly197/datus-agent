@@ -15,7 +15,12 @@ from datus.configuration.business_term_config import (
     LLM_TABLE_DISCOVERY_CONFIG,
     get_business_term_mapping,
 )
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import (
+    ActionHistory,
+    ActionHistoryManager,
+    ActionRole,
+    ActionStatus,
+)
 from datus.schemas.base import BaseResult
 from datus.schemas.node_models import BaseInput, Metric, ReferenceSql, TableSchema
 from datus.storage.schema_metadata import SchemaWithValueRAG
@@ -117,6 +122,32 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     )
             else:
                 logger.warning("Workflow metadata not available, using default intent 'text2sql'")
+
+            # ✅ Use clarified_task if available (from IntentClarificationNode)
+            # Check if intent clarification has occurred and use the clarified version
+            if hasattr(self.workflow, "metadata") and self.workflow.metadata:
+                clarified_task = self.workflow.metadata.get("clarified_task")
+                original_task = self.workflow.metadata.get("original_task")
+
+                if clarified_task and clarified_task != task.task:
+                    logger.info(
+                        f"Using clarified task for schema discovery: "
+                        f"'{task.task[:50]}...' → '{clarified_task[:50]}...'"
+                    )
+                    # Temporarily use clarified task for schema discovery
+                    original_task_text = task.task
+                    task.task = clarified_task
+
+                    # Store clarification metadata for logging
+                    clarification_result = self.workflow.metadata.get("intent_clarification", {})
+                    if clarification_result:
+                        entities = clarification_result.get("entities", {})
+                        corrections = clarification_result.get("corrections", {})
+                        logger.info(
+                            f"Intent clarification metadata: "
+                            f"business_terms={entities.get('business_terms', [])}, "
+                            f"typos_fixed={corrections.get('typos_fixed', [])}"
+                        )
 
             # Validate task has required attributes
             if not hasattr(task, "task") or not task.task:
