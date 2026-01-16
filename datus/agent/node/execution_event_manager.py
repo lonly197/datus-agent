@@ -15,7 +15,7 @@ from typing import Any, AsyncGenerator, Dict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from datus.schemas.action_history import ActionHistoryManager
+    from datus.schemas.action_history import ActionHistory, ActionHistoryManager
 
 try:
     from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
@@ -25,6 +25,7 @@ try:
 except ImportError:
     # For standalone testing
     logger = None
+    ActionHistory = Any  # Runtime fallback for type hints
     ActionHistoryManager = Any  # Fallback for type hints
 
 

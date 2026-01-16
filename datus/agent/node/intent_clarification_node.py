@@ -241,10 +241,25 @@ class IntentClarificationNode(Node, LLMMixin):
             # Parse LLM response
             response_text = response.get("text", "")
             # Extract JSON from response (handle potential markdown code blocks)
-            if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0].strip()
+            try:
+                if "```json" in response_text:
+                    parts = response_text.split("```json")
+                    if len(parts) > 1 and "```" in parts[1]:
+                        response_text = parts[1].split("```")[0].strip()
+                    else:
+                        logger.warning("Malformed markdown code block (```json without closing ```)")
+                elif "```" in response_text:
+                    parts = response_text.split("```")
+                    if len(parts) >= 3:
+                        # Use the content between the first pair of ```
+                        for i in range(len(parts) - 1):
+                            if parts[i].strip() and parts[i+1].strip():
+                                response_text = parts[i+1].strip()
+                                break
+                    else:
+                        logger.warning("Malformed markdown code block (unclosed ```)")
+            except Exception as e:
+                logger.warning(f"Error extracting JSON from markdown: {e}")
 
             clarification_result = json.loads(response_text)
 

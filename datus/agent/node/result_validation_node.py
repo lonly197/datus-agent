@@ -14,6 +14,7 @@ Enhanced with HTML preview capability for SQL execution results.
 """
 
 from typing import Any, AsyncGenerator, Dict, Optional
+import html
 
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
@@ -311,7 +312,8 @@ class ResultValidationNode(Node):
                 # Header row
                 html_parts.append("<thead><tr style='background-color: #f5f5f5;'>")
                 for col in columns:
-                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{col}</th>")
+                    escaped_col = html.escape(str(col))
+                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{escaped_col}</th>")
                 html_parts.append("</tr></thead>")
 
                 # Data rows
@@ -335,7 +337,8 @@ class ResultValidationNode(Node):
                         # Truncate long values
                         if len(val_str) > 100:
                             val_str = val_str[:97] + "..."
-                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{val_str}</td>")
+                        escaped_val = html.escape(val_str)
+                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{escaped_val}</td>")
                     html_parts.append("</tr>")
                 html_parts.append("</tbody>")
                 html_parts.append("</table>")
@@ -375,7 +378,8 @@ class ResultValidationNode(Node):
                 # Header row
                 html_parts.append("<thead><tr style='background-color: #f5f5f5;'>")
                 for col in columns:
-                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{col}</th>")
+                    escaped_col = html.escape(str(col))
+                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{escaped_col}</th>")
                 html_parts.append("</tr></thead>")
 
                 # Data rows
@@ -388,7 +392,8 @@ class ResultValidationNode(Node):
                         val_str = str(val) if val is not None else ""
                         if len(val_str) > 100:
                             val_str = val_str[:97] + "..."
-                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{val_str}</td>")
+                        escaped_val = html.escape(val_str)
+                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{escaped_val}</td>")
                     html_parts.append("</tr>")
                 html_parts.append("</tbody>")
                 html_parts.append("</table>")
@@ -423,7 +428,8 @@ class ResultValidationNode(Node):
                 # Header row
                 html_parts.append("<thead><tr style='background-color: #f5f5f5;'>")
                 for header in headers:
-                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{header}</th>")
+                    escaped_header = html.escape(header.strip())
+                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{escaped_header}</th>")
                 html_parts.append("</tr></thead>")
 
                 # Data rows
@@ -436,7 +442,8 @@ class ResultValidationNode(Node):
                         val_str = val.strip()
                         if len(val_str) > 100:
                             val_str = val_str[:97] + "..."
-                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{val_str}</td>")
+                        escaped_val = html.escape(val_str)
+                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{escaped_val}</td>")
                     html_parts.append("</tr>")
                 html_parts.append("</tbody>")
                 html_parts.append("</table>")

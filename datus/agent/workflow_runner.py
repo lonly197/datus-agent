@@ -349,11 +349,21 @@ class WorkflowRunner:
             return False
 
         # Search forward in node_order for the first reflect node
-        for i in range(current_idx + 1, len(self.workflow.node_order)):
+        # Limit search range to prevent excessive iteration
+        max_search_range = min(len(self.workflow.node_order), current_idx + 100)
+        nodes_checked = 0
+
+        for i in range(current_idx + 1, max_search_range):
             node_id = self.workflow.node_order[i]
             node = self.workflow.nodes.get(node_id)
 
-            if node and node.type == "reflect" and node.status not in ["completed", "skipped"]:
+            # Validate node_order and nodes are in sync
+            if not node:
+                logger.warning(f"Node {node_id} in node_order but not in nodes dict, skipping")
+                nodes_checked += 1
+                continue
+
+            if node.type == "reflect" and node.status not in ["completed", "skipped"]:
                 # Jump directly to this reflect node
                 self.workflow.current_node_index = i
                 logger.info(
@@ -361,7 +371,11 @@ class WorkflowRunner:
                 )
                 return True
 
-        logger.warning("No reflect node found in execution path for recovery")
+            nodes_checked += 1
+
+        logger.warning(
+            f"No reflect node found in execution path for recovery (checked {nodes_checked} nodes)"
+        )
         return False
 
     def _terminate_workflow(
@@ -396,7 +410,10 @@ class WorkflowRunner:
                     # Allow a brief moment for cancellation to take effect
                     if hasattr(asyncio, 'get_running_loop'):
                         loop = asyncio.get_running_loop()
-                        # Don't wait - just trigger cancellation
+                        # Small delay to allow cancellation processing
+                        # Note: We can't await in synchronous context, but we can log if task isn't cancelled
+                        if not self.workflow_task.cancelled():
+                            logger.warning("Task may not have been cancelled successfully immediately")
                 except Exception as e:
                     logger.warning(f"Error during workflow task cancellation: {e}")
 

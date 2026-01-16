@@ -886,7 +886,6 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         self.workflow.context.update_schema_and_values(schemas, values)
                         return {"loaded_count": len(schemas)}
 
-                    from datus.utils.context_utils import safe_context_update
                     result = safe_context_update(
                         self.workflow.context,
                         update_schemas,
