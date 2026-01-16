@@ -50,6 +50,15 @@ class OutputNode(Node):
             # For plan mode without SQL execution, the response is in action history
             logger.info("Plan mode without SQL execution - output will use chat response")
 
+        # Collect workflow metadata for comprehensive report generation
+        workflow_metadata = {
+            "sql_validation": workflow.metadata.get("sql_validation"),
+            "intent_clarification": workflow.metadata.get("intent_clarification"),
+            "clarified_task": workflow.metadata.get("clarified_task"),
+            "intent_analysis": workflow.metadata.get("intent_analysis"),
+            "reflection_count": workflow.metadata.get("reflection_count", 0),
+        }
+
         # normally last node of workflow
         next_input = OutputInput(
             finished=True,
@@ -64,6 +73,7 @@ class OutputNode(Node):
             metrics=workflow.context.metrics,
             external_knowledge=workflow.task.external_knowledge,
             error=error,
+            metadata=workflow_metadata,
         )
         self.input = next_input
         return {"success": True, "message": "Output appears valid", "suggestions": [next_input]}
@@ -107,6 +117,7 @@ class OutputNode(Node):
                 "success": getattr(result, "success", True) if result else True,
                 "sql_query": getattr(self.input, "gen_sql", "") if hasattr(self.input, "gen_sql") else "",
                 "sql_result": getattr(self.input, "sql_result", "") if hasattr(self.input, "sql_result") else "",
+                "metadata": getattr(self.input, "metadata", {}) if hasattr(self.input, "metadata") else {},
             }
 
             # Store result for later use

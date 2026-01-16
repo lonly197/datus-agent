@@ -36,19 +36,19 @@ class DeepResearchEventConverter:
 
     # Define virtual steps for non-agentic workflows (Text2SQL)
     VIRTUAL_STEPS = [
-        {"id": "step_intent", "content": "Analyze Query Intent", "node_types": ["intent_analysis"]},
+        {"id": "step_intent", "content": "分析查询意图", "node_types": ["intent_analysis"]},
         {
             "id": "step_schema",
-            "content": "Discover Database Schema",
+            "content": "发现数据库模式",
             "node_types": ["schema_discovery", "schema_linking", "schema_validation"],
         },
-        {"id": "step_sql", "content": "Generate SQL Query", "node_types": ["generate_sql"]},
+        {"id": "step_sql", "content": "生成SQL查询", "node_types": ["generate_sql"]},
         {
             "id": "step_exec",
-            "content": "Execute SQL & Verify",
-            "node_types": ["execute_sql", "result_validation"],
+            "content": "执行SQL并验证结果",
+            "node_types": ["execute_sql", "sql_validate", "result_validation"],
         },
-        {"id": "step_reflect", "content": "Self-Correction & Optimization", "node_types": ["reflect", "output"]},
+        {"id": "step_reflect", "content": "自我纠正与优化", "node_types": ["reflect", "output"]},
     ]
 
     def __init__(self):
@@ -155,6 +155,129 @@ class DeepResearchEventConverter:
                 lines.append("```")
                 if len(result.strip().split("\n")) > 6:
                     lines.append("*...更多数据*\n")
+
+        return "\n".join(lines)
+
+    def _generate_sql_generation_report(
+        self, sql_query: str, sql_result: str, row_count: int, metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Generate a comprehensive SQL generation report.
+
+        Args:
+            sql_query: The final SQL query that was generated
+            sql_result: The CSV result string from SQL execution
+            row_count: Number of rows returned
+            metadata: Workflow metadata containing validation, intent, and reflection results
+
+        Returns:
+            Markdown formatted comprehensive report
+        """
+        lines = []
+
+        # Header
+        lines.append("## 📋 SQL生成报告\n")
+
+        # Section 1: Final SQL
+        lines.append("### 1. 最终生成的SQL")
+        lines.append("```sql")
+        lines.append(sql_query)
+        lines.append("```\n")
+
+        # Section 2: SQL Validation Results
+        if metadata and metadata.get("sql_validation"):
+            lines.append("### 2. SQL验证结果")
+            validation = metadata["sql_validation"]
+            is_valid = validation.get("is_valid", False)
+            lines.append(f"- **语法验证**: {'✅ 通过' if validation.get('syntax_valid', is_valid) else '❌ 失败'}")
+            lines.append(f"- **表存在性**: {'✅ 通过' if validation.get('tables_exist', is_valid) else '❌ 失败'}")
+            lines.append(f"- **列存在性**: {'✅ 通过' if validation.get('columns_exist', is_valid) else '❌ 失败'}")
+            lines.append(f"- **危险操作**: {'⚠️ 检测到' if validation.get('has_dangerous_ops') else '✅ 无危险操作'}")
+            lines.append(f"- **错误数量**: {len(validation.get('errors', []))}")
+            lines.append(f"- **警告数量**: {len(validation.get('warnings', []))}")
+
+            # Show errors if any
+            errors = validation.get("errors", [])
+            if errors:
+                lines.append("\n**错误详情**:")
+                for error in errors[:3]:  # Show first 3 errors
+                    lines.append(f"- {error}")
+                if len(errors) > 3:
+                    lines.append(f"- ...还有 {len(errors) - 3} 个错误")
+
+            # Show warnings if any
+            warnings = validation.get("warnings", [])
+            if warnings:
+                lines.append("\n**警告详情**:")
+                for warning in warnings[:3]:  # Show first 3 warnings
+                    lines.append(f"- {warning}")
+                if len(warnings) > 3:
+                    lines.append(f"- ...还有 {len(warnings) - 3} 个警告")
+            lines.append("")
+
+        # Section 3: Intent Analysis Results
+        if metadata and (metadata.get("intent_analysis") or metadata.get("intent_clarification")):
+            lines.append("### 3. 意图分析结果")
+
+            # Show task type detection
+            if metadata.get("intent_analysis"):
+                intent_analysis = metadata["intent_analysis"]
+                task_type = intent_analysis.get("intent", "unknown")
+                confidence = intent_analysis.get("confidence", 0)
+                lines.append(f"- **检测到的任务类型**: {task_type}")
+                lines.append(f"- **置信度**: {confidence:.2f}")
+
+            # Show intent clarification if available
+            if metadata.get("intent_clarification"):
+                intent_clarification = metadata["intent_clarification"]
+                original_task = intent_clarification.get("original_task", "")
+                clarified_task = intent_clarification.get("clarified_task", "")
+                corrections = intent_clarification.get("corrections", {})
+
+                if original_task and clarified_task and original_task != clarified_task:
+                    lines.append(f"- **原始任务**: {original_task[:100]}{'...' if len(original_task) > 100 else ''}")
+                    lines.append(f"- **澄清后的任务**: {clarified_task[:100]}{'...' if len(clarified_task) > 100 else ''}")
+
+                if corrections:
+                    lines.append("- **修正的类型**: " + ", ".join(corrections.keys()))
+            lines.append("")
+
+        # Section 4: SQL Generation Process
+        lines.append("### 4. SQL生成过程")
+        reflection_count = metadata.get("reflection_count", 0) if metadata else 0
+        lines.append(f"- **反思次数**: {reflection_count}")
+        if reflection_count > 0:
+            lines.append(f"- **最终状态**: ✅ 经过 {reflection_count} 次反思后生成")
+        else:
+            lines.append("- **最终状态**: ✅ 一次生成成功")
+        lines.append("")
+
+        # Section 5: Execution Results
+        lines.append("### 5. 执行结果")
+        lines.append(f"- **行数**: {row_count}")
+        lines.append("- **状态**: ✅ 执行成功\n")
+
+        # Result preview (first 5 rows if available)
+        if sql_result and sql_result.strip():
+            lines.append("**结果预览**:")
+            try:
+                import pandas as pd
+                from io import StringIO
+
+                df = pd.read_csv(StringIO(sql_result))
+                preview = df.head(5).to_markdown(index=False)
+                lines.append(preview)
+
+                if len(df) > 5:
+                    lines.append(f"\n*...还有 {len(df) - 5} 行数据*")
+            except Exception:
+                # If parsing fails, show raw result preview
+                result_lines = sql_result.strip().split("\n")[:6]
+                lines.append("```")
+                lines.extend(result_lines)
+                lines.append("```")
+                if len(sql_result.strip().split("\n")) > 6:
+                    lines.append("*...更多数据*")
+            lines.append("")
 
         return "\n".join(lines)
 
@@ -536,6 +659,73 @@ class DeepResearchEventConverter:
                 ChatEvent(
                     id=event_id,
                     planId=todo_id,
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # Handle SQL Validation (convert to ChatEvent for visibility)
+        elif action.action_type == "sql_validation":
+            # Extract validation results from output
+            validation_result = {}
+            if action.output and isinstance(action.output, dict):
+                validation_result = action.output
+
+            is_valid = validation_result.get("is_valid", False)
+            syntax_valid = validation_result.get("syntax_valid", False)
+            tables_exist = validation_result.get("tables_exist", True)
+            columns_exist = validation_result.get("columns_exist", True)
+            has_dangerous_ops = validation_result.get("has_dangerous_ops", False)
+            errors = validation_result.get("errors", [])
+            warnings = validation_result.get("warnings", [])
+
+            # Build validation summary message
+            if is_valid:
+                content_lines = [
+                    "✅ **SQL验证通过**",
+                    f"- 语法验证: {'✅ 通过' if syntax_valid else '❌ 失败'}",
+                    f"- 表存在性: {'✅ 通过' if tables_exist else '❌ 失败'}",
+                    f"- 列存在性: {'✅ 通过' if columns_exist else '❌ 失败'}",
+                    f"- 危险操作: {'⚠️ 检测到' if has_dangerous_ops else '✅ 无危险操作'}",
+                ]
+
+                if warnings:
+                    content_lines.append(f"\n**警告** ({len(warnings)}):")
+                    for warning in warnings[:3]:
+                        content_lines.append(f"- {warning}")
+                    if len(warnings) > 3:
+                        content_lines.append(f"- ...还有 {len(warnings) - 3} 个警告")
+
+                content = "\n".join(content_lines)
+            else:
+                content_lines = [
+                    "❌ **SQL验证失败**",
+                    f"- 语法验证: {'✅ 通过' if syntax_valid else '❌ 失败'}",
+                    f"- 表存在性: {'✅ 通过' if tables_exist else '❌ 失败'}",
+                    f"- 列存在性: {'✅ 通过' if columns_exist else '❌ 失败'}",
+                    f"- 危险操作: {'⚠️ 检测到' if has_dangerous_ops else '✅ 无危险操作'}",
+                ]
+
+                if errors:
+                    content_lines.append(f"\n**错误** ({len(errors)}):")
+                    for error in errors[:3]:
+                        content_lines.append(f"- {error}")
+                    if len(errors) > 3:
+                        content_lines.append(f"- ...还有 {len(errors) - 3} 个错误")
+
+                if warnings:
+                    content_lines.append(f"\n**警告** ({len(warnings)}):")
+                    for warning in warnings[:3]:
+                        content_lines.append(f"- {warning}")
+                    if len(warnings) > 3:
+                        content_lines.append(f"- ...还有 {len(warnings) - 3} 个警告")
+
+                content = "\n".join(content_lines)
+
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=todo_id if todo_id else self.active_virtual_step_id,
                     timestamp=timestamp,
                     content=content,
                 )
@@ -981,35 +1171,37 @@ class DeepResearchEventConverter:
                 sql_result_final = action.output.get("sql_result_final", "")
                 row_count = action.output.get("row_count", 0)
                 success = action.output.get("success", True)
+                metadata = action.output.get("metadata", {})
 
                 # Use final SQL if available, otherwise use generated SQL
                 final_sql = sql_query_final if sql_query_final else sql_query
 
-                # If SQL exists, send ChatEvent with SQL and summary
+                # If SQL exists, send ChatEvent with comprehensive SQL generation report
                 if final_sql:
-                    # First ChatEvent: The SQL code block
-                    sql_content = f"```sql\n{final_sql}\n```"
+                    # Generate comprehensive report (includes SQL, validation, intent, etc.)
+                    final_result = sql_result_final if sql_result_final else sql_result
+
+                    # Use comprehensive report if metadata is available, otherwise fall back to simple summary
+                    if metadata and any(metadata.values()):
+                        report = self._generate_sql_generation_report(
+                            sql_query=final_sql,
+                            sql_result=final_result,
+                            row_count=row_count,
+                            metadata=metadata
+                        )
+                    else:
+                        # Fallback to simple summary for backward compatibility
+                        report = self._generate_sql_summary(final_sql, final_result, row_count)
+
+                    # Send the comprehensive report as ChatEvent
                     events.append(
                         ChatEvent(
-                            id=f"{event_id}_sql",
+                            id=f"{event_id}_report",
                             planId=todo_id if todo_id else None,
                             timestamp=timestamp,
-                            content=sql_content,
+                            content=report,
                         )
                     )
-
-                    # Second ChatEvent: Summary report (if execution succeeded)
-                    if success and (sql_result or sql_result_final):
-                        final_result = sql_result_final if sql_result_final else sql_result
-                        summary = self._generate_sql_summary(final_sql, final_result, row_count)
-                        events.append(
-                            ChatEvent(
-                                id=f"{event_id}_summary",
-                                planId=todo_id if todo_id else None,
-                                timestamp=timestamp,
-                                content=summary,
-                            )
-                        )
 
                 # Original ReportEvent handling (for HTML reports)
                 report_url = action.output.get("report_url", "")

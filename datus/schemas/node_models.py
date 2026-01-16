@@ -611,6 +611,7 @@ class OutputInput(BaseInput):
     prompt_version: str = Field(default="1.0", description="Version for prompt")
     check_result: bool = Field(default=False, description="Whether to check the result of the previous step")
     file_type: Literal["csv", "sql", "json", "all"] = Field(default="all", description="The output file type")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Workflow metadata for comprehensive report generation")
 
 
 class OutputResult(BaseResult):
