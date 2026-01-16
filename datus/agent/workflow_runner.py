@@ -3,6 +3,7 @@ import asyncio
 import os
 import time
 from datetime import datetime
+from enum import Enum
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
 from datus.agent.evaluate import evaluate_result, setup_node_input
@@ -20,6 +21,14 @@ from datus.utils.loggings import get_logger
 from datus.utils.traceable_utils import optional_traceable
 
 logger = get_logger(__name__)
+
+
+class WorkflowTerminationStatus(str, Enum):
+    """工作流终止状态"""
+    CONTINUE = "continue"  # 继续执行
+    SKIP_TO_REFLECT = "skip_to_reflect"  # 跳转到反思节点
+    TERMINATE_WITH_ERROR = "terminate_with_error"  # 终止并报错
+    TERMINATE_SUCCESS = "terminate_success"  # 成功终止
 
 
 class WorkflowRunner:
@@ -44,6 +53,8 @@ class WorkflowRunner:
         self.initial_metadata = metadata or {}
         # Performance optimization: track completed nodes incrementally
         self._completed_nodes_count = 0
+        # Track workflow task for cancellation (async mode only)
+        self.workflow_task: Optional[asyncio.Task] = None
 
     def initialize_workflow(self, sql_task: SqlTask):
         """Generate a new workflow plan."""
@@ -213,7 +224,7 @@ class WorkflowRunner:
 
     def _handle_node_failure(
         self, current_node: Node, node_start_action: Optional[ActionHistory] = None
-    ) -> tuple[bool, bool]:
+    ) -> WorkflowTerminationStatus:
         """
         Handle node failure with unified soft/hard failure logic.
 
@@ -222,17 +233,15 @@ class WorkflowRunner:
             node_start_action: Optional action history entry for streaming mode
 
         Returns:
-            tuple: (is_soft_failure: bool, should_continue: bool)
+            WorkflowTerminationStatus: Clear termination status for workflow execution
         """
-        is_soft_failure = False
-        should_continue = True
-
         # 1. Check ActionStatus first (SOFT_FAILED vs FAILED)
         if hasattr(current_node, "last_action_status"):
             last_status = current_node.last_action_status
             if last_status == ActionStatus.SOFT_FAILED:
-                is_soft_failure = True
                 logger.info(f"Node returned SOFT_FAILED status: {current_node.description}")
+                return WorkflowTerminationStatus.SKIP_TO_REFLECT
+
             elif last_status == ActionStatus.FAILED:
                 # Check if reflect node is reachable for recovery
                 has_reflect = check_reflect_node_reachable(self.workflow)
@@ -243,25 +252,30 @@ class WorkflowRunner:
                         f"Node failed but reflect node is reachable. "
                         f"Continuing as Soft Failure: {current_node.description}"
                     )
-                    is_soft_failure = True
+                    return WorkflowTerminationStatus.SKIP_TO_REFLECT
                 else:
-                    # Hard failure - terminate workflow
-                    logger.warning(
-                        f"Node failed with no reachable reflect node. " f"Hard Failure: {current_node.description}"
+                    # Hard failure - terminate workflow immediately
+                    logger.error(
+                        f"Node failed with no reachable reflect node. "
+                        f"Terminating workflow: {current_node.description}"
                     )
-                    should_continue = False
 
                     # Update action history if in streaming mode
                     if node_start_action:
                         self._update_action_status(
                             node_start_action,
                             success=False,
-                            error=(f"Node execution failed (no recovery path): " f"{current_node.description}"),
+                            error=f"Node execution failed (no recovery path): {current_node.description}",
                         )
+
+                    return WorkflowTerminationStatus.TERMINATE_WITH_ERROR
             else:
                 # Unknown status - default to checking for reflect
                 has_reflect = check_reflect_node_reachable(self.workflow)
-                is_soft_failure = has_reflect
+                if has_reflect:
+                    return WorkflowTerminationStatus.SKIP_TO_REFLECT
+                else:
+                    return WorkflowTerminationStatus.TERMINATE_WITH_ERROR
         else:
             # Fallback to old logic if last_action_status not available
             has_reflect = check_reflect_node_reachable(self.workflow)
@@ -270,11 +284,10 @@ class WorkflowRunner:
                     f"Node failed but workflow has reflection. "
                     f"Continuing as Soft Failure: {current_node.description}"
                 )
-                is_soft_failure = True
+                return WorkflowTerminationStatus.SKIP_TO_REFLECT
             else:
                 # Hard failure - terminate workflow
-                logger.warning(f"Node failed: {current_node.description}")
-                should_continue = False
+                logger.error(f"Node failed: {current_node.description}")
 
                 # Update action history if in streaming mode
                 if node_start_action:
@@ -284,16 +297,25 @@ class WorkflowRunner:
                         error=f"Node execution failed: {current_node.description}",
                     )
 
-        # 2. Handle parallel node special cases
-        if not is_soft_failure and current_node.type == NodeType.TYPE_PARALLEL:
-            has_any_success = self._check_parallel_node_success(current_node)
-            if has_any_success:
-                logger.warning("Parallel node partial failure, continuing to selection")
-            else:
-                logger.warning(f"Parallel node all failed: {current_node.description}")
-                should_continue = False
+                return WorkflowTerminationStatus.TERMINATE_WITH_ERROR
 
-        return is_soft_failure, should_continue
+    def _handle_node_failure_legacy(
+        self, current_node: Node, node_start_action: Optional[ActionHistory] = None
+    ) -> tuple[bool, bool]:
+        """
+        Legacy method for backward compatibility.
+
+        Returns:
+            tuple: (is_soft_failure: bool, should_continue: bool)
+        """
+        termination_status = self._handle_node_failure(current_node, node_start_action)
+
+        if termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
+            return True, True
+        elif termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
+            return False, False
+        else:
+            return True, True
 
     def _check_parallel_node_success(self, node: Node) -> bool:
         """Check if any child of parallel node succeeded."""
@@ -342,6 +364,45 @@ class WorkflowRunner:
         logger.warning("No reflect node found in execution path for recovery")
         return False
 
+    def _terminate_workflow(
+        self,
+        termination_status: WorkflowTerminationStatus,
+        error_message: str = None
+    ):
+        """
+        Terminate workflow with proper event sending and task cancellation.
+
+        This method ensures that:
+        1. ErrorEvent and CompletedEvent are both sent
+        2. Background workflow task is cancelled to prevent continued execution
+        3. Proper logging is performed
+
+        Args:
+            termination_status: The termination status (TERMINATE_WITH_ERROR or TERMINATE_SUCCESS)
+            error_message: Optional error message for failure termination
+        """
+        if termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
+            logger.error(f"Workflow terminated with error: {error_message}")
+
+            # Note: ErrorEvent and CompletedEvent will be sent by run_stream's finally block
+            # This method only ensures task cancellation
+
+            # CRITICAL: Cancel workflow task to prevent background execution
+            if self.workflow_task and not self.workflow_task.done():
+                logger.info("Cancelling workflow_task to prevent background execution")
+                self.workflow_task.cancel()
+                # Verify cancellation
+                try:
+                    # Allow a brief moment for cancellation to take effect
+                    if hasattr(asyncio, 'get_running_loop'):
+                        loop = asyncio.get_running_loop()
+                        # Don't wait - just trigger cancellation
+                except Exception as e:
+                    logger.warning(f"Error during workflow task cancellation: {e}")
+
+        elif termination_status == WorkflowTerminationStatus.TERMINATE_SUCCESS:
+            logger.info("Workflow completed successfully")
+
     @optional_traceable(name="agent")
     def run(self, sql_task: Optional[SqlTask] = None, check_storage: bool = False) -> Dict:
         """Execute the workflow synchronously."""
@@ -368,9 +429,18 @@ class WorkflowRunner:
 
             is_soft_failure = False
             if current_node.status == "failed":
-                is_soft_failure, should_continue = self._handle_node_failure(current_node)
-                if not should_continue:
+                # Use new termination status API
+                termination_status = self._handle_node_failure(current_node)
+
+                if termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
+                    # Terminate workflow immediately
+                    self._terminate_workflow(
+                        termination_status=termination_status,
+                        error_message=f"Node {current_node.description} failed with no recovery path"
+                    )
                     break
+                elif termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
+                    is_soft_failure = True
 
             evaluation = evaluate_result(current_node, self.workflow)
             logger.debug(f"Evaluation result for {current_node.type}: {evaluation}")
@@ -498,9 +568,18 @@ class WorkflowRunner:
 
                         is_soft_failure = False
                         if current_node.status == "failed":
-                            is_soft_failure, should_continue = self._handle_node_failure(current_node, node_start_action)
-                            if not should_continue:
+                            # Use new termination status API
+                            termination_status = self._handle_node_failure(current_node, node_start_action)
+
+                            if termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
+                                # Terminate workflow immediately
+                                self._terminate_workflow(
+                                    termination_status=termination_status,
+                                    error_message=f"Node {current_node.description} failed with no recovery path"
+                                )
                                 break
+                            elif termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
+                                is_soft_failure = True
 
                         self._update_action_status(
                             node_start_action,

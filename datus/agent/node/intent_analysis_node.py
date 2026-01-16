@@ -49,6 +49,34 @@ class IntentAnalysisNode(Node):
             tools=tools,
         )
 
+    def should_skip(self, workflow: Workflow) -> bool:
+        """
+        Determine if this node should be skipped based on execution_mode.
+
+        When execution_mode is explicitly specified (e.g., "text2sql"), the task type
+        is already known, so we skip intent classification. IntentClarificationNode will
+        handle query clarification instead (typos, ambiguities, entity extraction).
+
+        Args:
+            workflow: Workflow instance containing metadata
+
+        Returns:
+            True if execution_mode is specified, False otherwise
+        """
+        if not workflow or not hasattr(workflow, "metadata") or not workflow.metadata:
+            return False
+
+        execution_mode = workflow.metadata.get("execution_mode")
+        should_skip_node = execution_mode is not None and execution_mode != ""
+
+        if should_skip_node:
+            logger.info(
+                f"IntentAnalysisNode skipped: execution_mode='{execution_mode}' is specified. "
+                f"IntentClarificationNode will handle query clarification instead."
+            )
+
+        return should_skip_node
+
     def setup_input(self, workflow: Workflow) -> Dict[str, Any]:
         """
         Setup intent analysis input from workflow task.

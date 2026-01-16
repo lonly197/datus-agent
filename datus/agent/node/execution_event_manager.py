@@ -12,6 +12,11 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datus.schemas.action_history import ActionHistoryManager
+
 try:
     from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
     from datus.utils.loggings import get_logger
@@ -20,6 +25,7 @@ try:
 except ImportError:
     # For standalone testing
     logger = None
+    ActionHistoryManager = Any  # Fallback for type hints
 
 
 class ExecutionContext:

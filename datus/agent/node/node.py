@@ -181,6 +181,8 @@ class Node(ErrorHandlerMixin, ABC):
             GenSQLAgenticNode,
             HitlNode,
             IntentAnalysisNode,
+            IntentClarificationNode,
+            KnowledgeEnhancementNode,
             OutputNode,
             ParallelNode,
             ReasonSQLNode,
@@ -218,12 +220,16 @@ class Node(ErrorHandlerMixin, ABC):
             return SearchMetricsNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_INTENT_ANALYSIS:
             return IntentAnalysisNode(node_id, description, node_type, input_data, agent_config)
+        elif node_type == NodeType.TYPE_INTENT_CLARIFICATION:
+            return IntentClarificationNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_SCHEMA_DISCOVERY:
             return SchemaDiscoveryNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_SCHEMA_VALIDATION:
             return SchemaValidationNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_RESULT_VALIDATION:
             return ResultValidationNode(node_id, description, node_type, input_data, agent_config)
+        elif node_type == NodeType.TYPE_KNOWLEDGE_ENHANCEMENT:
+            return KnowledgeEnhancementNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_PARALLEL:
             return ParallelNode(node_id, description, node_type, input_data, agent_config, tools)
         elif node_type == NodeType.TYPE_SELECTION:

@@ -43,6 +43,7 @@ class SchemaValidationNode(Node, LLMMixin):
     provides actionable feedback for reflection strategies.
 
     ✅ Fixed: Uses LLMMixin for LLM retry and centralized business term config.
+    ✅ Enhanced: Sets last_action_status for workflow termination logic.
     """
 
     def __init__(
@@ -64,6 +65,7 @@ class SchemaValidationNode(Node, LLMMixin):
             tools=tools,
         )
         LLMMixin.__init__(self)
+        self.last_action_status = None  # Track last action status for workflow runner
 
     def setup_input(self, workflow: Workflow) -> Dict[str, Any]:
         """Setup schema validation input from workflow context."""
@@ -102,12 +104,16 @@ class SchemaValidationNode(Node, LLMMixin):
 
             # Step 1: Check if schemas were discovered
             if not context or not context.table_schemas:
+                # CRITICAL: No schemas available - this is a HARD failure
+                # Set last_action_status to FAILED (not SOFT_FAILED)
+                self.last_action_status = ActionStatus.FAILED
+
                 no_schemas_result = {
                     "is_sufficient": False,
                     "error": "No schemas discovered",
                     "missing_tables": ["all"],
                     "suggestions": ["Trigger schema_linking to discover tables"],
-                    "allow_reflection": True,  # Allow reflection to recover
+                    "allow_reflection": False,  # No reflection - this is unrecoverable
                 }
                 yield ActionHistory(
                     action_id=f"{self.id}_no_schemas",
@@ -115,7 +121,7 @@ class SchemaValidationNode(Node, LLMMixin):
                     messages="Schema validation failed: No schemas discovered",
                     action_type="schema_validation",
                     input={"task": task.task[:50] if task else ""},
-                    status=ActionStatus.SOFT_FAILED,  # Use SOFT_FAILED to allow reflection
+                    status=ActionStatus.FAILED,  # Use FAILED (not SOFT_FAILED)
                     output=no_schemas_result,
                 )
                 self.result = BaseResult(
@@ -195,6 +201,9 @@ class SchemaValidationNode(Node, LLMMixin):
                 )
                 self.result = BaseResult(success=True, data=validation_result)
             else:
+                # Insufficient but some schemas exist - SOFT failure with reflection
+                self.last_action_status = ActionStatus.SOFT_FAILED
+
                 yield ActionHistory(
                     action_id=f"{self.id}_validation",
                     role=ActionRole.TOOL,

@@ -21,7 +21,9 @@ __all__ = [
     "CompareNode",
     "DateParserNode",
     # Text2SQL workflow nodes
-    "IntentAnalysisNode",  # Query intent analysis
+    "IntentAnalysisNode",  # Query intent classification (task type detection)
+    "IntentClarificationNode",  # Query intent clarification (typos, ambiguities, entity extraction)
+    "KnowledgeEnhancementNode",  # Knowledge unification and auto-retrieval
     "SchemaDiscoveryNode",  # Schema discovery and linking
     "SchemaValidationNode",  # Schema sufficiency validation
     "ResultValidationNode",  # Result quality validation
@@ -55,6 +57,8 @@ from .hitl_node import HitlNode
 
 # Text2SQL workflow specific nodes
 from .intent_analysis_node import IntentAnalysisNode  # text2sql workflow
+from .intent_clarification_node import IntentClarificationNode  # text2sql workflow
+from .knowledge_enhancement_node import KnowledgeEnhancementNode  # text2sql workflow
 from .output_node import OutputNode
 from .parallel_node import ParallelNode
 from .reason_sql_node import ReasonSQLNode

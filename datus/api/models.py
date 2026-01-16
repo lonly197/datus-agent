@@ -41,7 +41,8 @@ class RunWorkflowRequest(BaseModel):
     schema_name: Optional[str] = Field(None, description="Schema name")
     current_date: Optional[str] = Field(None, description="Current date reference for relative time expressions")
     subject_path: Optional[List[str]] = Field(None, description="Subject path for the task")
-    ext_knowledge: Optional[str] = Field(None, description="External knowledge for the task")
+    ext_knowledge: Optional[str] = Field(None, description="External knowledge for the task (can use '|' as separator)")
+    ext_knowledges: Optional[List[str]] = Field(None, description="External knowledge array (alternative to ext_knowledge)")
     plan_mode: Optional[bool] = Field(False, description="Enable plan mode for structured execution")
 
 
@@ -110,7 +111,8 @@ class ChatResearchRequest(BaseModel):
     domain: Optional[str] = Field(None, description="Domain for the task")
     layer1: Optional[str] = Field(None, description="Layer1 for the task")
     layer2: Optional[str] = Field(None, description="Layer2 for the task")
-    ext_knowledge: Optional[str] = Field(None, description="External knowledge")
+    ext_knowledge: Optional[str] = Field(None, description="External knowledge (can use '|' as separator)")
+    ext_knowledges: Optional[List[str]] = Field(None, description="External knowledge array (alternative to ext_knowledge)")
     plan_mode: Optional[bool] = Field(False, description="Enable plan mode for structured execution")
     auto_execute_plan: Optional[bool] = Field(False, description="Auto execute plan without user confirmation")
     prompt: Optional[str] = Field(None, description="Role definition and task capability prompt to guide the AI agent")

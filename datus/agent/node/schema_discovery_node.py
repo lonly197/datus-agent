@@ -275,10 +275,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             candidate_tables = list(set(candidate_tables))
 
             # --- Stage 2: Deep Metadata Scan (Context Search) ---
-            # Relax condition: If recall is low (e.g. < 3 tables) or empty, try context search
-            # This ensures we don't miss tables just because Stage 1 found one irrelevant match
-            if len(candidate_tables) < 3:
-                logger.info(f"[Stage 2] Few tables found ({len(candidate_tables)}), initiating Context Search...")
+            # ✅ Optimized: More aggressive trigger condition (was <3, now <10)
+            # This ensures better recall by using context search more frequently
+            if len(candidate_tables) < 10:
+                logger.info(f"[Stage 2] Tables found ({len(candidate_tables)}) below threshold (10), initiating Context Search...")
                 context_tables = await self._context_based_discovery(task.task)
                 if context_tables:
                     candidate_tables.extend(context_tables)
@@ -424,6 +424,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         """
         Discover tables using semantic vector search.
 
+        ✅ Optimized: Added similarity threshold filtering to improve precision.
+
         Args:
             query: User query text
 
@@ -438,20 +440,56 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             # 1. Use SchemaWithValueRAG for direct table semantic search
             rag = SchemaWithValueRAG(agent_config=self.agent_config)
-            # Use search_similar to find tables based on vector similarity of their definitions
-            schema_results, _ = rag.search_similar(query_text=query, top_n=5)
+            # ✅ Optimized: Increase top_n to 20 and filter by similarity threshold
+            schema_results, _ = rag.search_similar(query_text=task_text, top_n=20)
 
             if schema_results and len(schema_results) > 0:
-                # Extract table names from arrow table
-                found_tables = schema_results.column("table_name").to_pylist()
-                if found_tables:
+                # ✅ Optimized: Filter by similarity threshold
+                # LanceDB vector search returns _distance column (lower = more similar)
+                # Convert distance to similarity: similarity = 1 / (1 + distance)
+                similarity_threshold = 0.5  # Configurable threshold
+
+                try:
+                    # Check if _distance column exists
+                    if "_distance" in schema_results.column_names:
+                        distances = schema_results.column("_distance").to_pylist()
+                        table_names = schema_results.column("table_name").to_pylist()
+
+                        # Filter tables by similarity threshold
+                        filtered_tables = []
+                        for table_name, distance in zip(table_names, distances):
+                            # Calculate similarity from distance (LanceDB uses Euclidean distance)
+                            similarity = 1.0 / (1.0 + distance)
+                            if similarity >= similarity_threshold:
+                                filtered_tables.append(table_name)
+
+                        if filtered_tables:
+                            tables.extend(filtered_tables)
+                            logger.info(
+                                f"Semantic search found {len(filtered_tables)}/{len(table_names)} tables "
+                                f"via metadata (threshold={similarity_threshold}): {filtered_tables}"
+                            )
+                        else:
+                            logger.warning(
+                                f"No tables passed similarity threshold ({similarity_threshold}). "
+                                f"Using all {len(table_names)} results as fallback."
+                            )
+                            tables.extend(table_names)
+                    else:
+                        # No _distance column, use all results
+                        found_tables = schema_results.column("table_name").to_pylist()
+                        tables.extend(found_tables)
+                        logger.info(f"Semantic search found tables via metadata (no distance filtering): {found_tables}")
+
+                except Exception as filter_error:
+                    logger.warning(f"Similarity filtering failed: {filter_error}. Using all results.")
+                    found_tables = schema_results.column("table_name").to_pylist()
                     tables.extend(found_tables)
-                    logger.info(f"Semantic search found tables via metadata: {found_tables}")
 
             # 2. Use ContextSearchTools for metrics/business logic search (complementary)
             context_search = ContextSearchTools(self.agent_config)
             if context_search.has_metrics:
-                result = context_search.search_metrics(query_text=query, top_n=5)
+                result = context_search.search_metrics(query_text=task_text, top_n=5)
                 if result.success and result.result:
                     # Logic to extract tables from metrics would go here
                     # For now, we rely primarily on SchemaWithValueRAG
