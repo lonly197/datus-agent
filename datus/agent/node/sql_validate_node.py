@@ -402,13 +402,17 @@ class SQLValidateNode(Node):
             if not self.result:
                 return {"success": False, "message": "SQL validation produced no result"}
 
+            # Safely get data, defaulting to empty dict if None
+            data = self.result.data if self.result.data else {}
+
             # Store validation result in workflow metadata
             if not hasattr(workflow, "metadata") or workflow.metadata is None:
                 workflow.metadata = {}
-            workflow.metadata["sql_validation"] = self.result.data
+            workflow.metadata["sql_validation"] = data
 
             # If validation failed, signal workflow to skip to reflect
-            if not self.result.data.get("is_valid", False):
+            is_valid = data.get("is_valid", False)
+            if not is_valid:
                 # Import here to avoid circular imports
                 from datus.agent.workflow_runner import WorkflowTerminationStatus
 
@@ -416,10 +420,9 @@ class SQLValidateNode(Node):
 
                 logger.info(
                     f"SQL validation failed, skipping to reflect: "
-                    f"errors={self.result.data.get('errors', [])}"
+                    f"errors={data.get('errors', [])}"
                 )
 
-            is_valid = self.result.data.get("is_valid", False)
             return {
                 "success": True,
                 "message": f"SQL validation context updated: is_valid={is_valid}",
