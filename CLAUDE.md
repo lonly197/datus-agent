@@ -431,6 +431,103 @@ if clarified_task and clarified_task != task.task:
 - **Total Impact**: +1 LLM call per unique query (mitigated by caching)
 - **Benefit**: Improved schema discovery accuracy through clarified intent
 
+## Code Quality & Security
+
+### TYPE_CHECKING Imports Pattern
+
+When using types from modules that may create circular imports or are only needed for type hints, use the `TYPE_CHECKING` pattern:
+
+```python
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datus.schemas.action_history import ActionHistory, ActionHistoryManager
+
+try:
+    from datus.schemas.action_history import ActionHistory, ActionHistoryManager
+except ImportError:
+    ActionHistory = Any  # Runtime fallback for type hints
+    ActionHistoryManager = Any
+```
+
+This separates type-time imports from runtime imports, preventing circular dependency issues while maintaining type safety.
+
+### Bounds & Validation for Loops
+
+Always add max iteration limits to prevent unbounded loops and validate dictionary lookups:
+
+```python
+# Bad: Unbounded loop
+for i in range(current_idx, len(self.workflow.node_order)):
+    node = self.workflow.nodes.get(node_id)
+    if node:
+        break
+
+# Good: Bounded loop with validation
+max_search_range = min(len(self.workflow.node_order), current_idx + 100)
+for i in range(current_idx, max_search_range):
+    node_id = self.workflow.node_order[i]
+    node = self.workflow.nodes.get(node_id)
+    if not node:
+        logger.warning(f"Node {node_id} in node_order but not in nodes dict, skipping")
+        continue
+    # Process node...
+```
+
+Additionally, validate `split()` results when parsing LLM responses:
+
+```python
+# Bad: Could fail with malformed markdown
+if "```json" in response_text:
+    response_text = response_text.split("```json")[1].split("```")[0].strip()
+
+# Good: Bounds checking with error handling
+if "```json" in response_text:
+    parts = response_text.split("```json")
+    if len(parts) > 1 and "```" in parts[1]:
+        response_text = parts[1].split("```")[0].strip()
+    else:
+        logger.warning("Malformed markdown code block")
+```
+
+### Node Factory Registration Pattern
+
+When adding new node types to the workflow, all five steps must be completed:
+
+1. **Define node type constant** in `datus/configuration/node_type.py`:
+   ```python
+   TYPE_NEW_NODE = "new_node"  # Add to ACTION_TYPES list
+   ```
+
+2. **Implement the node class** in `datus/agent/node/new_node.py`:
+   ```python
+   class NewNode(Node):
+       def execute(self) -> BaseResult: ...
+       async def execute_stream(...) -> AsyncGenerator[ActionHistory, None]: ...
+   ```
+
+3. **Export in `__init__.py`** (`datus/agent/node/__init__.py`):
+   ```python
+   from .new_node import NewNode
+   __all__ = [..., "NewNode"]
+   ```
+
+4. **Import in factory method** (`datus/agent/node/node.py`):
+   ```python
+   from datus.agent.node import (
+       ...,
+       NewNode,  # Add to imports
+   )
+   ```
+
+5. **Add handler case** in `Node.new_instance()`:
+   ```python
+   elif node_type == NodeType.TYPE_NEW_NODE:
+       return NewNode(node_id, description, node_type, input_data, agent_config)
+   ```
+
+**Common Error**: Skipping step 4 or 5 causes `ValueError: Invalid node type: new_node` when the workflow tries to instantiate the node.
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.

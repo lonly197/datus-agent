@@ -193,6 +193,7 @@ class Node(ErrorHandlerMixin, ABC):
             SchemaValidationNode,
             SearchMetricsNode,
             SelectionNode,
+            SQLValidateNode,
             SubworkflowNode,
         )
 
@@ -226,6 +227,8 @@ class Node(ErrorHandlerMixin, ABC):
             return SchemaDiscoveryNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_SCHEMA_VALIDATION:
             return SchemaValidationNode(node_id, description, node_type, input_data, agent_config)
+        elif node_type == NodeType.TYPE_SQL_VALIDATE:
+            return SQLValidateNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_RESULT_VALIDATION:
             return ResultValidationNode(node_id, description, node_type, input_data, agent_config)
         elif node_type == NodeType.TYPE_KNOWLEDGE_ENHANCEMENT:
