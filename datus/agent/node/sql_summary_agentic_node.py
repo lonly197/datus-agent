@@ -563,8 +563,6 @@ class SqlSummaryAgenticNode(AgenticNode):
             Tuple of (sql_summary_file, output_string) - both can be None if not found
         """
         try:
-            from datus.utils.json_utils import strip_json_str
-
             content = output.get("content", "")
             logger.info(f"extract_sql_summary_and_output_from_final_resp: {content} (type: {type(content)})")
 
@@ -580,23 +578,18 @@ class SqlSummaryAgenticNode(AgenticNode):
 
             # Case 2: content is a JSON string (possibly wrapped in markdown code blocks)
             elif isinstance(content, str) and content.strip():
-                # Use strip_json_str to handle markdown code blocks and extract JSON
-                cleaned_json = strip_json_str(content)
-                if cleaned_json:
-                    try:
-                        import json_repair
+                # Use llm_result2json for consistent JSON parsing
+                from datus.utils.json_utils import llm_result2json
 
-                        parsed = json_repair.loads(cleaned_json)
-                        if isinstance(parsed, dict):
-                            sql_summary_file = parsed.get("sql_summary_file")
-                            output_text = parsed.get("output")
-                            if sql_summary_file or output_text:
-                                logger.debug(f"Extracted from JSON string: sql_summary_file={sql_summary_file}")
-                                return sql_summary_file, output_text
-                            else:
-                                logger.warning(f"Parsed JSON but missing expected keys: {parsed.keys()}")
-                    except Exception as e:
-                        logger.warning(f"Failed to parse cleaned JSON: {e}. Cleaned content: {cleaned_json[:200]}")
+                parsed = llm_result2json(content, expected_type=dict)
+                if parsed:
+                    sql_summary_file = parsed.get("sql_summary_file")
+                    output_text = parsed.get("output")
+                    if sql_summary_file or output_text:
+                        logger.debug(f"Extracted from JSON string: sql_summary_file={sql_summary_file}")
+                        return sql_summary_file, output_text
+                    else:
+                        logger.warning(f"Parsed JSON but missing expected keys: {parsed.keys()}")
 
             logger.warning(f"Could not extract sql_summary_file from response. Content type: {type(content)}")
             return None, None

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Dict, Tuple
 
+from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -204,11 +205,13 @@ User request: {text}
             # Use the model's generate method
             response = await asyncio.to_thread(model.generate, prompt, max_tokens=100, temperature=0.1)
 
-            # Parse the response (assuming JSON format)
-            import json
-
+            # Parse the response using robust JSON utility
             try:
-                result = json.loads(response.strip())
+                result = llm_result2json(response, expected_type=dict)
+                if result is None:
+                    logger.warning(f"llm_result2json returned None, response: {response[:200]}")
+                    return "other", 0.0
+
                 intent = result.get("intent", "other")
                 confidence = float(result.get("confidence", 0.0))
 
@@ -218,8 +221,8 @@ User request: {text}
                     confidence = max(0.0, min(1.0, confidence))
 
                 return intent, confidence
-            except (json.JSONDecodeError, ValueError, KeyError) as e:
-                logger.warning(f"Failed to parse LLM response: {e}, response: {response}")
+            except Exception as e:
+                logger.warning(f"Failed to parse LLM response: {e}, response: {response[:200]}")
                 return "other", 0.0
 
         except Exception as e:

@@ -6,6 +6,8 @@ from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 from agents import Tool
 
+from datus.utils.json_utils import llm_result2json
+
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
@@ -267,21 +269,12 @@ def generate_sql(model: LLMBaseModel, input_data: GenerateSQLInput) -> GenerateS
         sql_query = model.generate_with_json_output(prompt)
         logger.debug(f"Generated SQL: {sql_query}")
 
-        # Clean and parse the response
+        # Parse the response using robust JSON utility
         if isinstance(sql_query, str):
-            # Remove markdown code blocks if present
-            sql_query = sql_query.strip().replace("```json\n", "").replace("\n```", "")
-            # Remove SQL comments
-            cleaned_lines = []
-            for line in sql_query.split("\n"):
-                line = line.strip()
-                if line and not line.startswith("--"):
-                    cleaned_lines.append(line)
-            cleaned_sql = " ".join(cleaned_lines)
-            try:
-                sql_query_dict = json.loads(cleaned_sql)
-            except json.JSONDecodeError:
-                logger.error(f"Failed to parse cleaned SQL: {cleaned_sql}")
+            # Use llm_result2json to handle markdown, truncated JSON, and common format errors
+            sql_query_dict = llm_result2json(sql_query, expected_type=dict)
+            if sql_query_dict is None:
+                logger.error(f"Failed to parse SQL query JSON: {sql_query[:200]}")
                 return GenerateSQLResult(success=False, error="Invalid JSON format", sql_query=sql_query)
         else:
             sql_query_dict = sql_query

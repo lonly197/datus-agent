@@ -19,6 +19,7 @@ import json
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from datus.agent.node.node import Node, execute_with_async_stream
+from datus.utils.json_utils import llm_result2json
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import (
@@ -238,30 +239,20 @@ class IntentClarificationNode(Node, LLMMixin):
                 max_retries=3,
             )
 
-            # Parse LLM response
+            # Parse LLM response using robust JSON utility
             response_text = response.get("text", "")
-            # Extract JSON from response (handle potential markdown code blocks)
-            try:
-                if "```json" in response_text:
-                    parts = response_text.split("```json")
-                    if len(parts) > 1 and "```" in parts[1]:
-                        response_text = parts[1].split("```")[0].strip()
-                    else:
-                        logger.warning("Malformed markdown code block (```json without closing ```)")
-                elif "```" in response_text:
-                    parts = response_text.split("```")
-                    if len(parts) >= 3:
-                        # Use the content between the first pair of ```
-                        for i in range(len(parts) - 1):
-                            if parts[i].strip() and parts[i+1].strip():
-                                response_text = parts[i+1].strip()
-                                break
-                    else:
-                        logger.warning("Malformed markdown code block (unclosed ```)")
-            except Exception as e:
-                logger.warning(f"Error extracting JSON from markdown: {e}")
+            # Use llm_result2json to handle markdown, truncated JSON, and common format errors
+            clarification_result = llm_result2json(response_text, expected_type=dict)
 
-            clarification_result = json.loads(response_text)
+            if clarification_result is None:
+                logger.warning("Failed to parse LLM response as JSON using llm_result2json. Using fallback.")
+                return {
+                    "clarified_task": task_text,
+                    "entities": {},
+                    "corrections": {},
+                    "confidence": 0.3,
+                    "error": "JSON parse error: llm_result2json returned None",
+                }
 
             # Validate required fields
             if "clarified_task" not in clarification_result:
@@ -284,16 +275,6 @@ class IntentClarificationNode(Node, LLMMixin):
 
             return clarification_result
 
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse LLM response as JSON: {e}. Using fallback.")
-            # Fallback: return minimal clarification result
-            return {
-                "clarified_task": task_text,
-                "entities": {},
-                "corrections": {},
-                "confidence": 0.3,
-                "error": f"JSON parse error: {str(e)}",
-            }
         except Exception as e:
             logger.error(f"Intent clarification LLM call failed: {e}")
             # Fallback: return minimal clarification result

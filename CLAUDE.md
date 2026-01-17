@@ -528,6 +528,40 @@ When adding new node types to the workflow, all five steps must be completed:
 
 **Common Error**: Skipping step 4 or 5 causes `ValueError: Invalid node type: new_node` when the workflow tries to instantiate the node.
 
+### LLM JSON Parsing Standardization
+
+When nodes parse JSON responses from LLMs, use the standardized `llm_result2json()` utility from `datus/utils/json_utils.py`:
+
+```python
+from datus.utils.json_utils import llm_result2json
+
+# Parse LLM JSON response (handles markdown, truncation, format errors)
+result = llm_result2json(response_text, expected_type=dict)
+if result is None:
+    # Fallback handling
+    return default_value
+```
+
+**DO NOT** use manual string replacement for markdown/JSON cleaning:
+```python
+# Bad: Fragile string replacement
+sql_query = sql_query.strip().replace("```json\n", "").replace("\n```", "")
+sql_query_dict = json.loads(cleaned_sql)
+
+# Bad: Manual markdown handling without bounds checking
+if "```json" in response_text:
+    response_text = response_text.split("```json")[1].split("```")[0].strip()
+```
+
+**Benefits** of `llm_result2json()`:
+- Handles markdown code blocks (```json, ```) automatically
+- Repairs truncated JSON (missing closing brackets)
+- Repairs malformed JSON (json-repair integration)
+- Validates expected types (dict/list)
+- Consistent error handling across all nodes
+
+**Nodes updated**: IntentClarificationNode, IntentDetection, GenerateSQLNode, SemanticAgenticNode, SQLSummaryAgenticNode
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
