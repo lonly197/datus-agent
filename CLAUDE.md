@@ -562,6 +562,21 @@ if "```json" in response_text:
 
 **Nodes updated**: IntentClarificationNode, IntentDetection, GenerateSQLNode, SemanticAgenticNode, SQLSummaryAgenticNode
 
+### Workflow Termination Pattern
+
+When designing workflows with reflection/retry mechanisms, ensure the output node always executes to generate final reports:
+
+- **PROCEED_TO_OUTPUT** status allows workflow to continue to output node when strategies exhausted
+- Output node acts as a "finally" block - always executes for report generation regardless of success/failure
+- Reflection nodes should use `PROCEED_TO_OUTPUT` instead of `TERMINATE_WITH_ERROR` when max iterations/rounds reached
+- This ensures users receive comprehensive reports with error details, SQL queries, and actionable suggestions
+
+**Termination Status Hierarchy** (`datus/agent/workflow_runner.py`):
+- `CONTINUE` - Normal execution flow
+- `SKIP_TO_REFLECT` - Soft failure, jump to reflection for recovery
+- `PROCEED_TO_OUTPUT` - Recovery exhausted, generate final report
+- `TERMINATE_WITH_ERROR` - Hard failure, no recovery possible
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
