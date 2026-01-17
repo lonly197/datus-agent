@@ -1158,18 +1158,24 @@ class DeepResearchEventConverter:
                            (for general messages like ChatEvent that don't require association)
 
         Returns:
-            planId priority: todo_id > virtual_plan_id > None
+            planId priority: todo_id > virtual_step_id > virtual_plan_id > None
         """
         # 1. Priority: Extract todo_id from action (most specific)
         todo_id = self._extract_todo_id_from_action(action)
         if todo_id:
             return todo_id
 
-        # 2. For events that require association, use virtual_plan_id (stable across workflow)
+        # 2. Map Text2SQL action_type to virtual step ID for Tool event binding
+        # This ensures ToolCallEvents bind to their corresponding TodoItems
+        virtual_step_id = self._get_virtual_step_id(action.action_type)
+        if virtual_step_id:
+            return virtual_step_id
+
+        # 3. For events that require association, use virtual_plan_id (stable across workflow)
         if force_associate:
             return self.virtual_plan_id
 
-        # 3. For events that don't require association, return None
+        # 4. For events that don't require association, return None
         return None
 
     def _find_tool_call_id(self, action: ActionHistory) -> Optional[str]:
