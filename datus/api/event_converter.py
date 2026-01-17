@@ -44,7 +44,11 @@ class DeepResearchEventConverter:
 
     # Define virtual steps for non-agentic workflows (Text2SQL)
     VIRTUAL_STEPS = [
-        {"id": "step_intent", "content": "分析查询意图", "node_types": ["intent_analysis"]},
+        {
+            "id": "step_intent",
+            "content": "分析查询意图",
+            "node_types": ["intent_analysis", "intent_clarification"],
+        },
         {
             "id": "step_schema",
             "content": "发现数据库模式",
@@ -54,7 +58,7 @@ class DeepResearchEventConverter:
         {
             "id": "step_exec",
             "content": "执行SQL并验证结果",
-            "node_types": ["execute_sql", "sql_validate", "result_validation"],
+            "node_types": ["execute_sql", "sql_execution", "sql_validate", "result_validation"],
         },
         {"id": "step_reflect", "content": "自我纠正与优化", "node_types": ["reflect", "output"]},
     ]
