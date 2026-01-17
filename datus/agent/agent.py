@@ -175,6 +175,7 @@ class Agent:
         sql_task: Optional[SqlTask] = None,
         check_storage: bool = False,
         action_history_manager: Optional[ActionHistoryManager] = None,
+        task_id: Optional[str] = None,
     ) -> AsyncGenerator[ActionHistory, None]:
         """Execute a workflow with streaming progress updates."""
         runner = self.create_workflow_runner()
@@ -182,6 +183,7 @@ class Agent:
             sql_task=sql_task,
             check_storage=check_storage,
             action_history_manager=action_history_manager,
+            task_id=task_id,
         ):
             yield action
 

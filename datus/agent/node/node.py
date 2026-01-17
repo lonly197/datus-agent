@@ -395,6 +395,10 @@ class Node(ErrorHandlerMixin, ABC):
             self._initialize()
             self.start()
 
+            # Check for cancellation before execution (if workflow is available)
+            if hasattr(self, "workflow") and self.workflow and hasattr(self.workflow, "ensure_not_cancelled"):
+                self.workflow.ensure_not_cancelled()
+
             # Execute the node's core logic
             result = self.execute()  # This sets self.result
 
@@ -459,6 +463,10 @@ class Node(ErrorHandlerMixin, ABC):
             self._initialize()
             self.start()
 
+            # Check for cancellation before execution (if workflow is available)
+            if hasattr(self, "workflow") and self.workflow and hasattr(self.workflow, "ensure_not_cancelled"):
+                self.workflow.ensure_not_cancelled()
+
             if self.type in NodeType.ACTION_TYPES or self.type in NodeType.CONTROL_TYPES:
                 # Check if node prefers async streaming over sync execute
                 # This allows sync runner (Node.run) to execute async streaming nodes like ChatAgenticNode
@@ -518,9 +526,24 @@ class Node(ErrorHandlerMixin, ABC):
             self._initialize()
             self.start()
 
+            # Check for cancellation before execution (if workflow is available)
+            if hasattr(self, "workflow") and self.workflow and hasattr(self.workflow, "ensure_not_cancelled"):
+                try:
+                    self.workflow.ensure_not_cancelled()
+                except Exception:
+                    # Re-raise to allow proper cancellation handling
+                    raise
+
             if self.type in NodeType.ACTION_TYPES or self.type in NodeType.CONTROL_TYPES:
                 # Execute with streaming and collect results
                 async for action in self.execute_stream(action_history_manager):
+                    # Check for cancellation during streaming (if workflow is available)
+                    if hasattr(self, "workflow") and self.workflow and hasattr(self.workflow, "ensure_not_cancelled"):
+                        try:
+                            self.workflow.ensure_not_cancelled()
+                        except Exception:
+                            # Re-raise to allow proper cancellation handling
+                            raise
                     yield action
 
                 # REFLECT type always completes successfully, others check result

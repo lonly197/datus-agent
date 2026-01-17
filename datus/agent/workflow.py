@@ -533,6 +533,32 @@ class Workflow:
 
         return workflow
 
+    def ensure_not_cancelled(self):
+        """
+        Check if the workflow has been cancelled.
+
+        This method checks for cancellation flags in the workflow metadata
+        and raises CancelledError if cancellation is detected.
+
+        Raises:
+            asyncio.CancelledError: If the workflow has been cancelled
+        """
+        import asyncio
+
+        # Check for cooperative cancellation flag in metadata
+        if self.metadata and self.metadata.get("cancelled"):
+            logger.info(f"Workflow '{self.name}' cancellation detected via metadata flag")
+            raise asyncio.CancelledError("Workflow cancelled via metadata flag")
+
+        # Check cancellation registry for task-level cancellation
+        task_id = self.metadata.get("task_id") if self.metadata else None
+        if task_id:
+            from datus.agent.cancellation_registry import is_cancelled_sync
+
+            if is_cancelled_sync(task_id):
+                logger.info(f"Workflow '{self.name}' cancellation detected via registry for task {task_id}")
+                raise asyncio.CancelledError(f"Workflow task {task_id} cancelled via registry")
+
     def _init_tools(self):
         from datus.tools.func_tool import db_function_tools
 

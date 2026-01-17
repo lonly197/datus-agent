@@ -137,6 +137,11 @@ class DatusAPIService:
                 self.task_store.update_task(task_id, status="failed")
             raise
         finally:
+            # Clean up cancellation registry
+            from datus.agent.cancellation_registry import clear_cancelled_sync
+
+            clear_cancelled_sync(task_id)
+
             # Only remove from registry if not cancelled by API
             # (generator handles cleanup when meta["cancelled"] is set)
             if not cancelled_by_api:
@@ -217,6 +222,11 @@ class DatusAPIService:
                 self.task_store.update_task(task_id, status="failed")
             raise
         finally:
+            # Clean up cancellation registry
+            from datus.agent.cancellation_registry import clear_cancelled_sync
+
+            clear_cancelled_sync(task_id)
+
             # Only remove from registry if not cancelled by API
             # (generator handles cleanup when meta["cancelled"] is set)
             if not cancelled_by_api:
@@ -633,10 +643,10 @@ class DatusAPIService:
             )
 
     async def run_workflow_stream(
-        self, request: RunWorkflowRequest, client_id: str = None
+        self, request: RunWorkflowRequest, client_id: str = None, task_id: str = None
     ) -> AsyncGenerator[ActionHistory, None]:
         """Execute a workflow with streaming support and yield progress updates."""
-        task_id = request.task_id or self._generate_task_id(client_id or "unknown")
+        task_id = task_id or request.task_id or self._generate_task_id(client_id or "unknown")
 
         try:
             # Get agent for the namespace
@@ -652,7 +662,7 @@ class DatusAPIService:
             action_history_manager = ActionHistoryManager()
 
             # Execute workflow with streaming
-            async for action in agent.run_stream(sql_task, action_history_manager=action_history_manager):
+            async for action in agent.run_stream(sql_task, action_history_manager=action_history_manager, task_id=task_id):
                 yield action
 
         except Exception as e:
@@ -1148,11 +1158,14 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
         # Execute workflow with streaming
         sql_query = None
 
-        async for action in service.run_workflow_stream(req, current_client):
+        async for action in service.run_workflow_stream(req, current_client, task_id):
             # Check if task was cancelled (use meta flag, not status, to avoid race condition)
             running_task = await service.get_running_task(task_id)
             if running_task and running_task.meta and running_task.meta.get("cancelled"):
                 logger.info(f"Task {task_id} cancellation detected, stopping stream")
+                # Propagate cancellation to workflow metadata for workflow runner to detect
+                if running_task.meta:
+                    running_task.meta["workflow_cancelled"] = True
                 # Update task status and clean up
                 if service.task_store:
                     service.task_store.update_task(task_id, status="cancelled")
@@ -1715,6 +1728,12 @@ def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:
                 if running_task.meta:
                     running_task.meta["cancelled"] = True
                     logger.info(f"Set cancellation flag for task {task_id}")
+
+                # Mark task as cancelled in the registry for workflow runner to detect
+                from datus.agent.cancellation_registry import mark_cancelled_sync
+
+                mark_cancelled_sync(task_id)
+                logger.info(f"Marked task {task_id} as cancelled in registry")
 
                 # Cancel the asyncio task if it's still running
                 if not running_task.task.done():

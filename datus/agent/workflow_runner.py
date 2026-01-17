@@ -600,6 +600,7 @@ class WorkflowRunner:
         sql_task: Optional[SqlTask] = None,
         check_storage: bool = False,
         action_history_manager: Optional[ActionHistoryManager] = None,
+        task_id: Optional[str] = None,
     ) -> AsyncGenerator[ActionHistory, None]:
         """Stream workflow execution progress."""
         logger.info("Starting agent execution with streaming")
@@ -610,6 +611,10 @@ class WorkflowRunner:
             workflow_name = getattr(self.workflow, "name", "unknown")
             node_count = len(self.workflow.nodes) if self.workflow.nodes else 0
             logger.info(f"Workflow '{workflow_name}' initialized with {node_count} nodes, max_steps={max_steps}")
+
+            # Store task_id in workflow metadata for cancellation checks
+            if task_id:
+                self.workflow.metadata["task_id"] = task_id
 
             if sql_task:
                 logger.info(f"SQL task: {sql_task.task[:100]}... (id: {sql_task.id})")
@@ -656,7 +661,7 @@ class WorkflowRunner:
 
                 while self.workflow and not self.workflow.is_complete() and step_count < max_steps:
                     # Check for cancellation at loop start
-                    ensure_not_cancelled()
+                    self.workflow.ensure_not_cancelled()
 
                     current_node = self.workflow.get_current_node()
                     if not current_node:
@@ -680,13 +685,13 @@ class WorkflowRunner:
                         logger.info(f"Executing task: {current_node.description}")
 
                         # Check for cancellation before node execution
-                        ensure_not_cancelled()
+                        self.workflow.ensure_not_cancelled()
 
                         async for node_action in current_node.run_stream(action_history_manager):
                             yield node_action
 
                             # Check for cancellation during node execution
-                            ensure_not_cancelled()
+                            self.workflow.ensure_not_cancelled()
 
                         # Track completed nodes incrementally
                         if current_node.status == "completed":
