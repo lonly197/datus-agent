@@ -1632,18 +1632,9 @@ class DeepResearchEventConverter:
                     if isinstance(parsed, dict):
                         normalized_input = parsed
 
-            # Determine planId for tool events:
-            # - For plan tools: use specific todo_id if available, otherwise None for todo_write (creates entire plan)
-            # - For other tools: use todo_id if present (indicates tool is executing a specific todo)
-            tool_plan_id = None
-            if is_plan_tool:
-                if action.action_type == "todo_update" and todo_id:
-                    # todo_update operates on specific todo items
-                    tool_plan_id = todo_id
-                # todo_write creates the entire plan, so planId should be None
-            elif todo_id:
-                # Non-plan tools that are executing specific todos
-                tool_plan_id = todo_id
+            # Determine planId for tool events using unified strategy
+            # This ensures proper binding for both plan tools and Text2SQL workflow tools
+            tool_plan_id = self._get_unified_plan_id(action, force_associate=True)
 
             # If this is a plan tool and we found plan data, emit PlanUpdateEvent first
             if is_plan_tool and plan_data:
@@ -1741,7 +1732,7 @@ class DeepResearchEventConverter:
                 events.append(
                     ToolCallResultEvent(
                         id=event_id,
-                        planId=self.plan_id,
+                        planId=self._get_unified_plan_id(action, force_associate=True),
                         timestamp=timestamp,
                         toolCallId=str(tool_call_id),
                         data=action.output,
