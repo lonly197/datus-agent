@@ -27,6 +27,7 @@ class WorkflowTerminationStatus(str, Enum):
     """工作流终止状态"""
     CONTINUE = "continue"  # 继续执行
     SKIP_TO_REFLECT = "skip_to_reflect"  # 跳转到反思节点
+    PROCEED_TO_OUTPUT = "proceed_to_output"  # 继续执行到输出节点（生成报告）
     TERMINATE_WITH_ERROR = "terminate_with_error"  # 终止并报错
     TERMINATE_SUCCESS = "terminate_success"  # 成功终止
 
@@ -550,6 +551,11 @@ class WorkflowRunner:
                 logger.info(f"Node requested termination via metadata: {metadata_termination_status}")
                 if metadata_termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
                     is_soft_failure = True
+                elif metadata_termination_status == WorkflowTerminationStatus.PROCEED_TO_OUTPUT:
+                    # Strategies exhausted - continue to output node for report generation
+                    logger.info("Strategies exhausted, proceeding to output node for report generation")
+                    # Clear termination status to allow normal continuation
+                    self.workflow.metadata.pop("termination_status", None)
                 elif metadata_termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
                     self._terminate_workflow(
                         termination_status=WorkflowTerminationStatus.TERMINATE_WITH_ERROR,
@@ -707,6 +713,11 @@ class WorkflowRunner:
                             logger.info(f"Node requested termination via metadata: {metadata_termination_status}")
                             if metadata_termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
                                 is_soft_failure = True
+                            elif metadata_termination_status == WorkflowTerminationStatus.PROCEED_TO_OUTPUT:
+                                # Strategies exhausted - continue to output node for report generation
+                                logger.info("Strategies exhausted, proceeding to output node for report generation")
+                                # Clear termination status to allow normal continuation
+                                self.workflow.metadata.pop("termination_status", None)
                             elif metadata_termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
                                 self._terminate_workflow(
                                     termination_status=WorkflowTerminationStatus.TERMINATE_WITH_ERROR,

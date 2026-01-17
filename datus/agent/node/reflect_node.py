@@ -133,34 +133,34 @@ class ReflectNode(Node):
                 # Skip to reasoning strategy
                 return self._execute_strategy(details, workflow, StrategyType.REASONING)
             else:
-                # All strategies exhausted - terminate
+                # All strategies exhausted - proceed to output node for report generation
                 from datus.agent.workflow_runner import WorkflowTerminationStatus
-                workflow.metadata["termination_status"] = WorkflowTerminationStatus.TERMINATE_WITH_ERROR
+                workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
                 workflow.metadata["termination_reason"] = (
                     f"All recovery strategies exhausted after {workflow.reflection_round} reflection rounds. "
                     f"Strategies used: {strategy_counts}"
                 )
                 return {
                     "success": False,
-                    "message": "All recovery strategies exhausted",
-                    "terminated": True,
+                    "message": "All recovery strategies exhausted, proceeding to output",
+                    "terminated": False,
                     "termination_reason": "max_strategy_iterations",
                 }
 
         # Check for max reflection rounds (global limit)
         max_round = get_env_int("MAX_REFLECTION_ROUNDS", 3)
         if workflow.reflection_round > max_round:
-            logger.info("Max reflection rounds exceeded, terminating workflow")
+            logger.info("Max reflection rounds exceeded, proceeding to output node for report generation")
             from datus.agent.workflow_runner import WorkflowTerminationStatus
-            workflow.metadata["termination_status"] = WorkflowTerminationStatus.TERMINATE_WITH_ERROR
+            workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
             workflow.metadata["termination_reason"] = (
                 f"Max reflection rounds ({max_round}) exceeded"
             )
 
             return {
                 "success": False,
-                "message": "Max reflection rounds exceeded",
-                "terminated": True,
+                "message": "Max reflection rounds exceeded, proceeding to output",
+                "terminated": False,
                 "termination_reason": "max_reflection_rounds",
             }
 
