@@ -1141,6 +1141,37 @@ class DeepResearchEventConverter:
 
         return None
 
+    def _get_unified_plan_id(self, action: ActionHistory, force_associate: bool = False) -> Optional[str]:
+        """
+        Unified planId retrieval strategy to ensure consistent event association.
+
+        This method implements a clear ID responsibility separation:
+        - virtual_plan_id: Stable event association identifier for Text2SQL workflow
+        - active_virtual_step_id: Internal state tracking only (never exposed as planId)
+        - todo_id: Specific task identifier from action (highest priority)
+
+        Args:
+            action: The action to get planId for
+            force_associate: If True, use virtual_plan_id when no todo_id exists
+                           (for events that need association like ToolCallEvent, ToolCallResultEvent)
+                           If False, return None when no todo_id exists
+                           (for general messages like ChatEvent that don't require association)
+
+        Returns:
+            planId priority: todo_id > virtual_plan_id > None
+        """
+        # 1. Priority: Extract todo_id from action (most specific)
+        todo_id = self._extract_todo_id_from_action(action)
+        if todo_id:
+            return todo_id
+
+        # 2. For events that require association, use virtual_plan_id (stable across workflow)
+        if force_associate:
+            return self.virtual_plan_id
+
+        # 3. For events that don't require association, return None
+        return None
+
     def _find_tool_call_id(self, action: ActionHistory) -> Optional[str]:
         """
         Try to determine the tool_call_id for a given action by:
@@ -1246,17 +1277,14 @@ class DeepResearchEventConverter:
         self.logger.debug(f"Converting action: {action.action_type}, role: {action.role}, status: {action.status}")
 
         # Extract todo_id if present (for plan-related events)
+        # Note: _get_unified_plan_id() will handle fallback logic properly
         todo_id = self._extract_todo_id_from_action(action)
-
-        # Fallback to virtual plan ID if no explicit todo_id (for Text2SQL workflow)
-        if not todo_id and self.active_virtual_step_id:
-            todo_id = self.active_virtual_step_id
 
         # 1. Handle chat/assistant messages
         if action.role == ActionRole.ASSISTANT:
             # ChatEvent should only have planId when directly related to a specific todo item execution
             # For general assistant messages (thinking, planning, etc.), planId should be None
-            chat_plan_id = todo_id if todo_id else None
+            chat_plan_id = self._get_unified_plan_id(action, force_associate=False)
 
             # Emit streaming token chunks ("raw_stream") always.
             # Emit intermediate "message" or "thinking" actions only when explicitly flagged
@@ -1401,7 +1429,7 @@ class DeepResearchEventConverter:
             events.append(
                 ChatEvent(
                     id=event_id,
-                    planId=todo_id if todo_id else self.active_virtual_step_id,
+                    planId=self._get_unified_plan_id(action, force_associate=True),
                     timestamp=timestamp,
                     content=content,
                 )
@@ -1415,8 +1443,8 @@ class DeepResearchEventConverter:
             if action.input and isinstance(action.input, dict):
                 tool_input = action.input
 
-            # Use virtual step ID as planId (fix for Text2SQL workflow)
-            schema_plan_id = todo_id if todo_id else self.active_virtual_step_id
+            # Use unified plan ID strategy (fix for Text2SQL workflow)
+            schema_plan_id = self._get_unified_plan_id(action, force_associate=True)
 
             events.append(
                 ToolCallEvent(
@@ -1480,8 +1508,8 @@ class DeepResearchEventConverter:
             if action.input and isinstance(action.input, dict):
                 tool_input = action.input
 
-            # Use virtual step ID as planId (fix for Text2SQL workflow)
-            exec_plan_id = todo_id if todo_id else self.active_virtual_step_id
+            # Use unified plan ID strategy (fix for Text2SQL workflow)
+            exec_plan_id = self._get_unified_plan_id(action, force_associate=True)
 
             events.append(
                 ToolCallEvent(
@@ -1809,7 +1837,7 @@ class DeepResearchEventConverter:
             events.append(
                 ChatEvent(
                     id=event_id,
-                    planId=self.active_virtual_step_id,  # Use active step ID
+                    planId=self._get_unified_plan_id(action, force_associate=True),  # Use unified plan ID
                     timestamp=timestamp,
                     content=content,
                 )
