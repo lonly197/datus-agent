@@ -224,6 +224,12 @@ class DatusAPIService:
             if not running_task or not running_task.meta:
                 raise ValueError(f"No registered task found for {task_id}")
 
+            # Check if task was cancelled before stream started
+            if running_task.meta.get("cancelled"):
+                logger.info(f"Task {task_id} was cancelled before stream started")
+                yield f"data: {to_str({'cancelled': True, 'message': 'Task was cancelled'})}\n\n"
+                return
+
             req_data = running_task.meta.get("request")
             current_client = running_task.meta.get("client")
             completion_event = running_task.meta.get("completion_event")
@@ -944,6 +950,13 @@ class DatusAPIService:
             async for event_data in converter.convert_stream_to_events(
                 agent.run_stream_with_metadata(sql_task, metadata=workflow_metadata)
             ):
+                # Check for cancellation flag in meta
+                running_task = await self.get_running_task(task_id)
+                if running_task and running_task.meta and running_task.meta.get("cancelled"):
+                    logger.info(f"Task {task_id} cancellation detected, stopping workflow")
+                    yield f"data: {to_str({'cancelled': True, 'message': 'Task was cancelled'})}\n\n"
+                    raise asyncio.CancelledError("Task cancelled by API")
+
                 yield event_data
 
             # Update task status
@@ -1681,6 +1694,11 @@ def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:
                 task_client = running_task.meta.get("client") if running_task.meta else None
                 if task_client != current_client:
                     raise HTTPException(status_code=403, detail=f"Task {task_id} belongs to different client")
+
+                # Set cancellation flag in meta for streaming tasks to detect
+                if running_task.meta:
+                    running_task.meta["cancelled"] = True
+                    logger.info(f"Set cancellation flag for task {task_id}")
 
                 # Cancel the asyncio task if it's still running
                 if not running_task.task.done():
