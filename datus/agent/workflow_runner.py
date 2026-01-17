@@ -4,7 +4,7 @@ import os
 import time
 from datetime import datetime
 from enum import Enum
-from typing import Any, AsyncGenerator, Callable, Dict, Optional
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from datus.agent.evaluate import evaluate_result, setup_node_input
 from datus.agent.node import Node
@@ -221,6 +221,91 @@ class WorkflowRunner:
             action.output = {"error": error or "Unknown error"}
             if output_data:
                 action.output.update(output_data)
+
+    def _build_termination_error_markdown(self) -> Optional[str]:
+        """Build markdown-formatted error message for ErrorEvent."""
+        if not self.workflow or not self.workflow.metadata:
+            return None
+
+        lines = [
+            "# ❌ SQL生成失败",
+            "",
+        ]
+
+        # Error reason
+        termination_reason = self.workflow.metadata.get("termination_reason", "Unknown error")
+        lines.append(f"**错误原因**: {termination_reason}")
+        lines.append("")
+
+        # Reflection rounds
+        reflection_round = getattr(self.workflow, "reflection_round", 0)
+        lines.append(f"**总尝试次数**: {reflection_round}")
+        lines.append("")
+
+        # Strategies used
+        strategy_counts = self.workflow.metadata.get("strategy_counts", {})
+        if strategy_counts:
+            lines.append("**使用的策略**:")
+            for strategy, count in strategy_counts.items():
+                lines.append(f"- {strategy}: {count}次")
+            lines.append("")
+
+        # Last SQL query and error
+        sql_contexts = self.workflow.context.sql_contexts if self.workflow.context else []
+        if sql_contexts:
+            last_sql = sql_contexts[-1]
+            if hasattr(last_sql, "sql_query") and last_sql.sql_query:
+                lines.append("**最后执行的SQL**:")
+                lines.append("```sql")
+                lines.append(last_sql.sql_query)
+                lines.append("```")
+                lines.append("")
+
+            if hasattr(last_sql, "sql_error") and last_sql.sql_error:
+                lines.append("**错误信息**:")
+                lines.append(f"```\n{last_sql.sql_error}\n```")
+                lines.append("")
+
+        # Suggestions
+        suggestions = self._generate_failure_suggestions()
+        lines.append("**建议**:")
+        for i, suggestion in enumerate(suggestions, 1):
+            lines.append(f"{i}. {suggestion}")
+
+        return "\n".join(lines)
+
+    def _generate_failure_suggestions(self) -> List[str]:
+        """Generate actionable suggestions based on failure context."""
+        suggestions = []
+
+        if not self.workflow or not self.workflow.context:
+            return ["无法获取详细错误信息，请检查系统日志"]
+
+        # Check if schema was found
+        if not hasattr(self.workflow.context, "table_schemas") or not self.workflow.context.table_schemas:
+            suggestions.append("未找到表 - 请验证数据库连接和表是否存在")
+
+        # Check specific error patterns
+        sql_contexts = self.workflow.context.sql_contexts if self.workflow.context else []
+        for ctx in sql_contexts:
+            if hasattr(ctx, "sql_error") and ctx.sql_error:
+                error_msg = ctx.sql_error
+                if "Column" in error_msg and "cannot be resolved" in error_msg:
+                    suggestions.append("列名不匹配 - 请检查表结构中的正确列名")
+                elif "Table" in error_msg and "doesn't exist" in error_msg:
+                    suggestions.append("表不存在 - 请验证数据库中是否存在该表")
+                elif "syntax" in error_msg.lower():
+                    suggestions.append("SQL语法错误 - 生成的SQL有无效语法")
+
+        # Add default suggestions
+        if not suggestions:
+            suggestions = [
+                "尝试简化您的查询需求",
+                "检查数据库中是否存在所需数据",
+                "验证表名和列名是否正确",
+            ]
+
+        return suggestions
 
     def _handle_node_failure(
         self, current_node: Node, node_start_action: Optional[ActionHistory] = None
@@ -697,6 +782,26 @@ class WorkflowRunner:
         finally:
             # ALWAYS emit a completion action, regardless of how the workflow terminated
             # This ensures the frontend receives a CompleteEvent for all workflows
+
+            # Check for termination status and yield ErrorEvent if needed
+            if self.workflow and self.workflow.metadata:
+                termination_status = self.workflow.metadata.get("termination_status")
+                if termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
+                    # Build markdown-formatted error message
+                    error_md = self._build_termination_error_markdown()
+                    if error_md:
+                        # Create error action for ErrorEvent conversion
+                        error_action = self._create_action_history(
+                            action_id="workflow_error",
+                            messages=error_md,
+                            action_type="error",
+                            input_data={
+                                "termination_status": termination_status,
+                                "termination_reason": self.workflow.metadata.get("termination_reason", "Unknown"),
+                            },
+                        )
+                        error_action.status = ActionStatus.FAILED
+                        yield error_action
 
             # Calculate and log performance metrics
             execution_time = time.time() - start_time

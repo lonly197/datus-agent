@@ -106,14 +106,51 @@ class ReflectNode(Node):
         """
         strategy = strategy.upper()
 
-        # Check for max reflection rounds
+        # Initialize workflow metadata if needed
+        if not hasattr(workflow, "metadata") or workflow.metadata is None:
+            workflow.metadata = {}
+
+        # Per-strategy iteration limits
+        STRATEGY_MAX_ITERATIONS = {
+            "schema_linking": 2,
+            "simple_regenerate": 3,
+            "reasoning": 3,
+            "doc_search": 1,
+        }
+
+        # Check for per-strategy iteration limits
+        strategy_counts = workflow.metadata.get("strategy_counts", {})
+        current_count = strategy_counts.get(strategy.lower(), 0)
+        max_allowed = STRATEGY_MAX_ITERATIONS.get(strategy.lower(), 1)
+
+        if current_count >= max_allowed:
+            logger.warning(
+                f"Strategy {strategy} exceeded max iterations ({max_allowed}), "
+                f"falling back to reasoning or terminating"
+            )
+            # Try reasoning as last resort (unless already reasoning)
+            if strategy.lower() != "reasoning" and max_allowed > 0:
+                # Skip to reasoning strategy
+                return self._execute_strategy(details, workflow, StrategyType.REASONING)
+            else:
+                # All strategies exhausted - terminate
+                from datus.agent.workflow_runner import WorkflowTerminationStatus
+                workflow.metadata["termination_status"] = WorkflowTerminationStatus.TERMINATE_WITH_ERROR
+                workflow.metadata["termination_reason"] = (
+                    f"All recovery strategies exhausted after {workflow.reflection_round} reflection rounds. "
+                    f"Strategies used: {strategy_counts}"
+                )
+                return {
+                    "success": False,
+                    "message": "All recovery strategies exhausted",
+                    "terminated": True,
+                    "termination_reason": "max_strategy_iterations",
+                }
+
+        # Check for max reflection rounds (global limit)
         max_round = get_env_int("MAX_REFLECTION_ROUNDS", 3)
         if workflow.reflection_round > max_round:
             logger.info("Max reflection rounds exceeded, terminating workflow")
-
-            # Set termination status in workflow metadata
-            if not hasattr(workflow, "metadata") or workflow.metadata is None:
-                workflow.metadata = {}
             from datus.agent.workflow_runner import WorkflowTerminationStatus
             workflow.metadata["termination_status"] = WorkflowTerminationStatus.TERMINATE_WITH_ERROR
             workflow.metadata["termination_reason"] = (
@@ -131,10 +168,9 @@ class ReflectNode(Node):
             # Successful completion - return success without termination
             return {"success": True, "message": "go on to output", "terminated": False}
 
-        if workflow.reflection_round == max_round:
-            logger.info("Max reflection rounds reached, execute reasoning")
-            # Continue with reasoning strategy, but don't terminate yet
-            return self._execute_strategy(details, workflow, StrategyType.REASONING)
+        # Increment strategy count
+        strategy_counts[strategy.lower()] = current_count + 1
+        workflow.metadata["strategy_counts"] = strategy_counts
 
         # Handle recovery strategies
         if strategy in [
@@ -147,8 +183,6 @@ class ReflectNode(Node):
 
         # Unknown strategy - terminate with error
         logger.error(f"Unknown reflection strategy: {strategy}")
-        if not hasattr(workflow, "metadata") or workflow.metadata is None:
-            workflow.metadata = {}
         from datus.agent.workflow_runner import WorkflowTerminationStatus
         workflow.metadata["termination_status"] = WorkflowTerminationStatus.TERMINATE_WITH_ERROR
         workflow.metadata["termination_reason"] = f"Unknown strategy: {strategy}"
