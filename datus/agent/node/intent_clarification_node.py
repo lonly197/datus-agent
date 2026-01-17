@@ -196,9 +196,135 @@ class IntentClarificationNode(Node, LLMMixin):
             - entities: Extracted business terms, time ranges, dimensions, metrics
             - corrections: Typos fixed, ambiguities resolved
             - confidence: Confidence score (0-1)
-            - need_clarification: Questions if more info needed
         """
-        prompt = f"""你是一个专业的数据分析助手。请分析用户的查询意图并输出结构化信息。
+        # Try up to 2 attempts with different prompt strictness
+        max_attempts = 2
+
+        for attempt in range(max_attempts):
+            try:
+                # Build prompt with increasing strictness for retries
+                prompt = self._build_clarification_prompt(
+                    task_text, ext_knowledge, strict=(attempt > 0)
+                )
+
+                if attempt > 0:
+                    logger.info(f"Retry {attempt + 1}: Using stricter prompt for JSON parsing")
+
+                # Use different cache key for each attempt to avoid cache poisoning
+                cache_key = f"intent_clarification:{hash(task_text)}_{attempt}"
+                response = await self.llm_call_with_retry(
+                    prompt=prompt,
+                    operation_name="intent_clarification",
+                    cache_key=cache_key,
+                    max_retries=1,  # Reduce retries on each attempt
+                )
+
+                # Parse LLM response using robust JSON utility
+                response_text = response.get("text", "")
+                clarification_result = llm_result2json(response_text, expected_type=dict)
+
+                if clarification_result is not None:
+                    # Validate and normalize required fields
+                    if "clarified_task" not in clarification_result:
+                        clarification_result["clarified_task"] = task_text
+
+                    if "entities" not in clarification_result:
+                        clarification_result["entities"] = {}
+
+                    if "corrections" not in clarification_result:
+                        clarification_result["corrections"] = {}
+
+                    if "confidence" not in clarification_result:
+                        clarification_result["confidence"] = 0.7  # Better default than 0.3
+
+                    # Ensure entities structure is complete
+                    entities = clarification_result["entities"]
+                    if "business_terms" not in entities:
+                        entities["business_terms"] = []
+                    if "time_range" not in entities:
+                        entities["time_range"] = None
+                    if "dimensions" not in entities:
+                        entities["dimensions"] = []
+                    if "metrics" not in entities:
+                        entities["metrics"] = []
+
+                    # Ensure corrections structure is complete
+                    corrections = clarification_result["corrections"]
+                    if "typos_fixed" not in corrections:
+                        corrections["typos_fixed"] = []
+                    if "ambiguities_resolved" not in corrections:
+                        corrections["ambiguities_resolved"] = []
+
+                    logger.info(
+                        f"Intent clarification succeeded on attempt {attempt + 1}: "
+                        f"clarified='{clarification_result.get('clarified_task', '')[:50]}...', "
+                        f"confidence={clarification_result.get('confidence', 0.0)}"
+                    )
+
+                    return clarification_result
+
+            except Exception as e:
+                logger.warning(f"Intent clarification attempt {attempt + 1} failed: {e}")
+
+        # All attempts exhausted - use enhanced fallback with basic entity extraction
+        logger.warning("All intent clarification attempts failed, using enhanced fallback")
+
+        # Extract basic entities using regex patterns
+        entities = self._extract_entities_fallback(task_text)
+
+        return {
+            "clarified_task": task_text,
+            "entities": entities,
+            "corrections": {
+                "typos_fixed": [],
+                "ambiguities_resolved": []
+            },
+            "confidence": 0.5,  # Higher than 0.3, signals partial success
+            "fallback": True,
+            "error": "JSON parsing failed after retries",
+        }
+
+    def _build_clarification_prompt(
+        self, task_text: str, ext_knowledge: Optional[str], strict: bool
+    ) -> str:
+        """Build prompt for intent clarification with configurable strictness."""
+        if strict:
+            # Stricter prompt for retries
+            return f"""你是一个专业的数据分析助手。请分析用户的查询意图并输出结构化信息。
+
+用户查询：{task_text}
+
+业务知识：
+{ext_knowledge or "无"}
+
+【重要】请严格按照以下JSON格式输出，不要包含任何其他文字、解释或标记：
+{{
+    "clarified_task": "澄清和规范化后的查询",
+    "entities": {{
+        "business_terms": ["业务术语1", "业务术语2"],
+        "time_range": "时间范围",
+        "dimensions": ["维度1", "维度2"],
+        "metrics": ["指标1"]
+    }},
+    "corrections": {{
+        "typos_fixed": ["原词→纠正词"],
+        "ambiguities_resolved": ["澄清的模糊表述"]
+    }},
+    "confidence": 0.95
+}}
+
+示例：
+输入："华山地区最近的销售额"
+输出：{{"clarified_task": "华南地区最近30天的销售额", "entities": {{"business_terms": ["华南", "销售额"], "time_range": "最近30天"}}, "corrections": {{"typos_fixed": ["华山→华南"]}}, "confidence": 0.9}}
+
+要求：
+1. 必须只输出JSON对象，不要包含markdown标记（如```json）
+2. 不要输出任何解释文字
+3. 确保JSON格式完全正确，所有括号和引号都匹配
+"""
+        else:
+            # Normal prompt for first attempt
+            return f"""你是一个专业的数据分析助手。请分析用户的查询意图并输出结构化信息。
 
 用户查询：{task_text}
 
@@ -218,73 +344,66 @@ class IntentClarificationNode(Node, LLMMixin):
         "typos_fixed": ["纠正的错别字（原词→纠正词）"],
         "ambiguities_resolved": ["澄清的模糊表述"]
     }},
-    "confidence": 0.95,
-    "need_clarification": "如果需要更多信息才能理解，列出问题（可选）"
+    "confidence": 0.95
 }}
 
 重要：
 1. 仅输出 JSON，不要包含其他解释
-2. 如果没有错别字或模糊表述，corrections 可以为空数组
+2. 如果没有错别字或模糊表述，corrections 可以为空对象
 3. confidence 应该基于查询的清晰度和完整性（0-1之间）
 4. 如果查询已经很清晰，clarified_task 可以与原查询相同或稍作调整
 """
 
-        try:
-            # Use LLMMixin with retry and caching
-            cache_key = f"intent_clarification:{hash(task_text)}"
-            response = await self.llm_call_with_retry(
-                prompt=prompt,
-                operation_name="intent_clarification",
-                cache_key=cache_key,
-                max_retries=3,
-            )
+    def _extract_entities_fallback(self, task_text: str) -> Dict[str, Any]:
+        """
+        Extract basic entities using simple regex patterns when LLM fails.
 
-            # Parse LLM response using robust JSON utility
-            response_text = response.get("text", "")
-            # Use llm_result2json to handle markdown, truncated JSON, and common format errors
-            clarification_result = llm_result2json(response_text, expected_type=dict)
+        This is a fallback method to provide at least some entity extraction
+        when JSON parsing completely fails.
+        """
+        import re
 
-            if clarification_result is None:
-                logger.warning("Failed to parse LLM response as JSON using llm_result2json. Using fallback.")
-                return {
-                    "clarified_task": task_text,
-                    "entities": {},
-                    "corrections": {},
-                    "confidence": 0.3,
-                    "error": "JSON parse error: llm_result2json returned None",
-                }
+        entities = {
+            "business_terms": [],
+            "time_range": None,
+            "dimensions": [],
+            "metrics": []
+        }
 
-            # Validate required fields
-            if "clarified_task" not in clarification_result:
-                clarification_result["clarified_task"] = task_text
+        # Extract time-related keywords
+        time_patterns = [
+            r'最近\d+天',
+            r'最近\d+月',
+            r'最近\d+周',
+            r'\d+月份',
+            r'\d+月',
+            r'今年',
+            r'去年',
+            r'本月',
+            r'上月',
+            r'每天',
+            r'每周',
+            r'每月',
+            r'每年'
+        ]
+        for pattern in time_patterns:
+            match = re.search(pattern, task_text)
+            if match:
+                entities["time_range"] = match.group(0)
+                break
 
-            if "entities" not in clarification_result:
-                clarification_result["entities"] = {}
+        # Extract business terms (quoted content in single or double quotes, or Chinese quotes)
+        quoted_terms = re.findall(r'[''""]([^'""]*?)[''""]', task_text)
+        if quoted_terms:
+            entities["business_terms"] = quoted_terms
 
-            if "corrections" not in clarification_result:
-                clarification_result["corrections"] = {}
+        # Extract common metric keywords
+        metric_keywords = ['销售额', '利润', '转化率', '平均', '总计', '数量', '金额', '周期']
+        for keyword in metric_keywords:
+            if keyword in task_text:
+                entities["metrics"].append(keyword)
 
-            if "confidence" not in clarification_result:
-                clarification_result["confidence"] = 0.5
-
-            logger.info(
-                f"LLM intent clarification completed: "
-                f"clarified='{clarification_result.get('clarified_task', '')[:50]}...', "
-                f"confidence={clarification_result.get('confidence', 0.0)}"
-            )
-
-            return clarification_result
-
-        except Exception as e:
-            logger.error(f"Intent clarification LLM call failed: {e}")
-            # Fallback: return minimal clarification result
-            return {
-                "clarified_task": task_text,
-                "entities": {},
-                "corrections": {},
-                "confidence": 0.0,
-                "error": str(e),
-            }
+        return entities
 
     def execute(self) -> BaseResult:
         """Execute intent clarification synchronously."""
