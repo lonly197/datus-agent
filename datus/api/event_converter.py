@@ -60,7 +60,7 @@ class DeepResearchEventConverter:
             "content": "执行SQL并验证结果",
             "node_types": ["execute_sql", "sql_execution", "sql_validate", "result_validation"],
         },
-        {"id": "step_reflect", "content": "自我纠正与优化", "node_types": ["reflect", "output"]},
+        {"id": "step_reflect", "content": "自我纠正与优化", "node_types": ["reflect", "reflection_analysis", "output"]},
     ]
 
     def __init__(self):
@@ -1372,7 +1372,7 @@ class DeepResearchEventConverter:
             events.append(
                 ChatEvent(
                     id=event_id,
-                    planId=todo_id,
+                    planId=self._get_unified_plan_id(action, force_associate=True),
                     timestamp=timestamp,
                     content=content,
                 )
@@ -1488,7 +1488,7 @@ class DeepResearchEventConverter:
             events.append(
                 ChatEvent(
                     id=event_id,
-                    planId=todo_id,
+                    planId=self._get_unified_plan_id(action, force_associate=True),
                     timestamp=timestamp,
                     content=content,
                 )
@@ -1505,7 +1505,7 @@ class DeepResearchEventConverter:
                 events.append(
                     ChatEvent(
                         id=event_id,
-                        planId=todo_id,
+                        planId=self._get_unified_plan_id(action, force_associate=True),
                         timestamp=timestamp,
                         content=content,
                     )
@@ -1600,7 +1600,7 @@ class DeepResearchEventConverter:
             events.append(
                 ChatEvent(
                     id=event_id,
-                    planId=todo_id,
+                    planId=self._get_unified_plan_id(action, force_associate=True),
                     timestamp=timestamp,
                     content=content,
                 )
