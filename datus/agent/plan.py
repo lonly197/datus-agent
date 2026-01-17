@@ -169,7 +169,7 @@ def _validate_standard_sql_workflow(workflow_name: str, workflow_nodes: List[str
         return errors
 
     # Required nodes for standard SQL workflows
-    required_nodes = ["schema_linking", "generate_sql", "execute_sql", "output"]
+    required_nodes = ["schema_discovery", "generate_sql", "execute_sql", "output"]
     for required_node in required_nodes:
         if required_node not in workflow_nodes:
             errors.append(f"{workflow_name} workflow missing required node: {required_node}")
@@ -186,7 +186,7 @@ def _validate_metric_to_sql_workflow(workflow_nodes: List[str]) -> List[str]:
         return errors
 
     # Metric workflow requires specific nodes for metric handling
-    required_nodes = ["schema_linking", "search_metrics", "generate_sql", "execute_sql", "output"]
+    required_nodes = ["schema_discovery", "search_metrics", "generate_sql", "execute_sql", "output"]
     for required_node in required_nodes:
         if required_node not in workflow_nodes:
             errors.append(f"metric_to_sql workflow missing required node: {required_node}")
