@@ -52,7 +52,7 @@ class DeepResearchEventConverter:
         {
             "id": "step_schema",
             "content": "发现数据库模式",
-            "node_types": ["schema_discovery", "schema_linking", "schema_validation"],
+            "node_types": ["schema_discovery", "schema_validation"],
         },
         {"id": "step_sql", "content": "生成SQL查询", "node_types": ["generate_sql"]},
         {
