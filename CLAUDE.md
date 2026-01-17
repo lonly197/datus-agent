@@ -577,6 +577,32 @@ When designing workflows with reflection/retry mechanisms, ensure the output nod
 - `PROCEED_TO_OUTPUT` - Recovery exhausted, generate final report
 - `TERMINATE_WITH_ERROR` - Hard failure, no recovery possible
 
+## FastAPI Streaming & Task Cancellation
+
+### Cooperative Cancellation Pattern for SSE
+
+When implementing FastAPI `StreamingResponse` with `asyncio.create_task()`, the generator and task are independent execution units. Cancelling the task doesn't stop the generator.
+
+**Problem pattern:**
+```python
+# chat_research endpoint creates two independent units:
+stream_task = asyncio.create_task(_run_chat_research_task(...))  # Background wait task
+return StreamingResponse(_generate_chat_research_stream(...))   # Generator with actual work
+# DELETE endpoint cancels stream_task, but generator continues running!
+```
+
+**Solution - Cooperative cancellation via meta flag:**
+1. DELETE endpoint sets `running_task.meta["cancelled"] = True` before calling `task.cancel()`
+2. Generator checks `running_task.meta.get("cancelled")` at start and during execution loop
+3. When detected, generator raises `asyncio.CancelledError` to stop workflow gracefully
+
+**Implementation locations:**
+- DELETE endpoint: `datus/api/service.py` (~1685-1688)
+- Stream generator: `_generate_chat_research_stream` (~227-231) checks at start
+- Workflow loop: `run_chat_research_stream` (~953-958) checks during iteration
+
+**Key insight:** `asyncio.create_task()` creates independent Tasks that don't control generators consumed by framework components like `StreamingResponse`. Use cooperative cancellation patterns when these need to coordinate.
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.

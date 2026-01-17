@@ -122,9 +122,9 @@ class DatusAPIService:
 
         except asyncio.CancelledError:
             logger.info(f"Streaming workflow task {task_id} was cancelled")
-            # Check if it was cancelled by API call
+            # Check if it was cancelled by API call (use meta flag to avoid race)
             running_task = await self.get_running_task(task_id)
-            if running_task and running_task.status == "cancelled":
+            if running_task and running_task.meta and running_task.meta.get("cancelled"):
                 cancelled_by_api = True
                 logger.info(f"Streaming task {task_id} was cancelled via API")
 
@@ -138,6 +138,7 @@ class DatusAPIService:
             raise
         finally:
             # Only remove from registry if not cancelled by API
+            # (generator handles cleanup when meta["cancelled"] is set)
             if not cancelled_by_api:
                 await self.unregister_running_task(task_id)
 
@@ -149,6 +150,12 @@ class DatusAPIService:
             running_task = await self.get_running_task(task_id)
             if not running_task or not running_task.meta:
                 raise ValueError(f"No registered task found for {task_id}")
+
+            # Check if task was cancelled before stream started
+            if running_task.meta.get("cancelled"):
+                logger.info(f"Task {task_id} was cancelled before stream started")
+                yield f"event: cancelled\ndata: {to_str({'cancelled': True, 'message': 'Task was cancelled'})}\n\n"
+                return
 
             req_data = running_task.meta.get("request")
             current_client = running_task.meta.get("client")
@@ -195,9 +202,9 @@ class DatusAPIService:
 
         except asyncio.CancelledError:
             logger.info(f"Chat research task {task_id} was cancelled")
-            # Check if it was cancelled by API call or client disconnect
+            # Check if it was cancelled by API call (use meta flag to avoid race)
             running_task = await self.get_running_task(task_id)
-            if running_task and running_task.status == "cancelled":
+            if running_task and running_task.meta and running_task.meta.get("cancelled"):
                 cancelled_by_api = True
                 logger.info(f"Task {task_id} was cancelled via API")
 
@@ -211,7 +218,7 @@ class DatusAPIService:
             raise
         finally:
             # Only remove from registry if not cancelled by API
-            # If cancelled by API, let the API call handle the cleanup
+            # (generator handles cleanup when meta["cancelled"] is set)
             if not cancelled_by_api:
                 await self.unregister_running_task(task_id)
 
@@ -954,6 +961,10 @@ class DatusAPIService:
                 running_task = await self.get_running_task(task_id)
                 if running_task and running_task.meta and running_task.meta.get("cancelled"):
                     logger.info(f"Task {task_id} cancellation detected, stopping workflow")
+                    # Update task status and clean up
+                    if self.task_store:
+                        self.task_store.update_task(task_id, status="cancelled")
+                    await self.unregister_running_task(task_id)
                     yield f"data: {to_str({'cancelled': True, 'message': 'Task was cancelled'})}\n\n"
                     raise asyncio.CancelledError("Task cancelled by API")
 
@@ -1138,10 +1149,15 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
         sql_query = None
 
         async for action in service.run_workflow_stream(req, current_client):
-            # Check if task was cancelled
+            # Check if task was cancelled (use meta flag, not status, to avoid race condition)
             running_task = await service.get_running_task(task_id)
-            if running_task and running_task.status == "cancelled":
-                logger.info(f"Task {task_id} was cancelled, stopping stream")
+            if running_task and running_task.meta and running_task.meta.get("cancelled"):
+                logger.info(f"Task {task_id} cancellation detected, stopping stream")
+                # Update task status and clean up
+                if service.task_store:
+                    service.task_store.update_task(task_id, status="cancelled")
+                await service.unregister_running_task(task_id)
+                yield f"event: cancelled\ndata: {to_str({'cancelled': True, 'message': 'Task was cancelled'})}\n\n"
                 break
             progress_seq += 1
 
@@ -1716,9 +1732,9 @@ def create_app(agent_args: argparse.Namespace, root_path: str = "") -> FastAPI:
 
                 running_task.status = "cancelled"
 
-                # For streaming tasks, remove from registry immediately since we cancelled it
-                # The _run_*_task method will detect this and not try to remove it again
-                await service.unregister_running_task(task_id)
+                # NOTE: Don't remove from registry immediately - let the generator detect
+                # the cancellation and handle cleanup. The generator will call unregister
+                # after finishing its cancellation handling.
 
                 # Update database
                 if service.task_store:
