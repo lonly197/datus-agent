@@ -394,6 +394,23 @@ class ExecuteSQLInput(BaseInput):
         default=None,
         description="Optional per-query timeout in seconds; if None, use AgentConfig.default_query_timeout_seconds",
     )
+    # Security flags for elevated permissions
+    allow_ddl: bool = Field(
+        default=False,
+        description="Allow DDL operations (CREATE, ALTER, DROP). Only use with explicit authorization.",
+    )
+    allow_dml: bool = Field(
+        default=False,
+        description="Allow DML operations (INSERT, UPDATE, DELETE). Only use with explicit authorization.",
+    )
+    require_explain_only: bool = Field(
+        default=False,
+        description="Only allow EXPLAIN queries for analysis without execution.",
+    )
+    permission_reason: Optional[str] = Field(
+        None,
+        description="Optional reason for requiring elevated permissions (for audit logging).",
+    )
 
 
 class SQLValidateInput(BaseInput):

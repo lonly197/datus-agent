@@ -390,6 +390,26 @@ class SQLValidateNode(Node):
             result["has_dangerous"] = True
             result["warnings"].append("TRUNCATE detected - this will delete all rows from the table")
 
+        # Check for CREATE TABLE
+        if sql_upper.startswith("CREATE") and "TABLE" in sql_upper:
+            result["has_dangerous"] = True
+            result["warnings"].append("CREATE TABLE detected - schema modification not allowed in text2sql workflow")
+
+        # Check for ALTER TABLE
+        if "ALTER TABLE" in sql_upper:
+            result["has_dangerous"] = True
+            result["warnings"].append("ALTER TABLE detected - schema modification not allowed")
+
+        # Check for CREATE INDEX
+        if "CREATE INDEX" in sql_upper:
+            result["has_dangerous"] = True
+            result["warnings"].append("CREATE INDEX detected - schema modification not allowed")
+
+        # Check for DROP INDEX
+        if "DROP INDEX" in sql_upper:
+            result["has_dangerous"] = True
+            result["warnings"].append("DROP INDEX detected - schema modification not allowed")
+
         return result
 
     def update_context(self, workflow: "Workflow") -> Dict[str, Any]:

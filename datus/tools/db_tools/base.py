@@ -16,6 +16,13 @@ logger = get_logger(__name__)
 
 
 class BaseSqlConnector(ABC):
+    # Allowed SQL types for text2sql workflow (read-only operations)
+    ALLOWED_SQL_TYPES = {
+        SQLType.SELECT,         # Data queries
+        SQLType.EXPLAIN,        # Query execution plans
+        SQLType.METADATA_SHOW,  # Metadata queries (SHOW, DESCRIBE, etc.)
+    }
+
     def __init__(self, config: ConnectionConfig, dialect: str):
         self.config = config
         self.timeout_seconds = config.timeout_seconds
@@ -105,6 +112,46 @@ class BaseSqlConnector(ABC):
         sql_query = input_params.sql_query.strip()
         try:
             sql_type = parse_sql_type(sql_query, self.dialect)
+
+            # Security check: Verify if SQL type is allowed
+            if sql_type not in self.ALLOWED_SQL_TYPES:
+                # Check if explicitly overridden (for admin operations)
+                allow_ddl = getattr(input_params, "allow_ddl", False)
+                allow_dml = getattr(input_params, "allow_dml", False)
+
+                if sql_type == SQLType.DDL and not allow_ddl:
+                    logger.warning(
+                        f"DDL operation blocked: {sql_type}, sql_preview={sql_query[:100]}"
+                    )
+                    return ExecuteSQLResult(
+                        success=False,
+                        error=(
+                            f"DDL operations not allowed in text2sql workflow: {sql_type}. "
+                            f"Schema modifications (CREATE/ALTER/DROP) require explicit authorization."
+                        ),
+                        sql_query=sql_query,
+                        sql_return="",
+                        row_count=0,
+                        result_format=result_format,
+                    )
+
+                if sql_type in (SQLType.INSERT, SQLType.UPDATE, SQLType.DELETE, SQLType.MERGE) and not allow_dml:
+                    logger.warning(
+                        f"DML operation blocked: {sql_type}, sql_preview={sql_query[:100]}"
+                    )
+                    return ExecuteSQLResult(
+                        success=False,
+                        error=(
+                            f"DML operations not allowed in text2sql workflow: {sql_type}. "
+                            f"Data modifications (INSERT/UPDATE/DELETE) require explicit authorization."
+                        ),
+                        sql_query=sql_query,
+                        sql_return="",
+                        row_count=0,
+                        result_format=result_format,
+                    )
+
+            # Route to appropriate execution method
             if sql_type == SQLType.INSERT:
                 result = self.execute_insert(sql_query)
             elif sql_type in (SQLType.UPDATE, SQLType.DELETE, SQLType.MERGE):
