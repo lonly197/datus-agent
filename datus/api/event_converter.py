@@ -1737,8 +1737,10 @@ class DeepResearchEventConverter:
                                 )
                             )
 
-            # For plan_update events, planId should be None (global plan update)
-            events.append(PlanUpdateEvent(id=event_id, planId=None, timestamp=timestamp, todos=todos))
+            # For plan_update events from workflow nodes, use virtual_plan_id to maintain association
+            # For plan_update events from tools, use event_id to maintain unique plan identification
+            plan_event_id = self.virtual_plan_id if action.role == ActionRole.WORKFLOW else event_id
+            events.append(PlanUpdateEvent(id=plan_event_id, planId=None, timestamp=timestamp, todos=todos))
 
         # 5. Handle workflow completion (修复 CompleteEvent 处理)
         elif action.action_type == "workflow_completion" and action.status == ActionStatus.SUCCESS:
