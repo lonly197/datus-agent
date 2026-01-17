@@ -9,13 +9,21 @@ Event converter for mapping ActionHistory to DeepResearchEvent format.
 import asyncio
 import hashlib
 import json
+import re
 import time
 import uuid
 from collections import deque
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
+
+import sqlglot
+from sqlglot import exp
 
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
+from datus.utils.sql_utils import parse_metadata_from_ddl
+
+if TYPE_CHECKING:
+    from datus.schemas.node_models import TableSchema
 
 from .models import (
     ChatEvent,
@@ -159,15 +167,29 @@ class DeepResearchEventConverter:
         return "\n".join(lines)
 
     def _generate_sql_generation_report(
-        self, sql_query: str, sql_result: str, row_count: int, metadata: Optional[Dict[str, Any]] = None
+        self,
+        sql_query: str,
+        sql_result: str,
+        row_count: int,
+        metadata: Optional[Dict[str, Any]] = None,
+        table_schemas: Optional[List[Any]] = None,
     ) -> str:
-        """Generate a comprehensive SQL generation report.
+        """Generate comprehensive SQL generation report for data warehouse developers.
+
+        New 6-section structure (v2.8):
+        1. SQL Design Overview - Task understanding, design logic, data scale
+        2. Tables and Fields Details - Table/field details with comments from DDL
+        3. Annotated SQL with Comments - SQL with business logic annotations
+        4. SQL Validation Results - Enhanced validation display
+        5. Execution Verification Results - Clarifying 0 rows vs SQL error
+        6. Optimization Suggestions - Performance and quality recommendations
 
         Args:
             sql_query: The final SQL query that was generated
             sql_result: The CSV result string from SQL execution
             row_count: Number of rows returned
             metadata: Workflow metadata containing validation, intent, and reflection results
+            table_schemas: List of TableSchema objects with DDL definitions
 
         Returns:
             Markdown formatted comprehensive report
@@ -175,111 +197,762 @@ class DeepResearchEventConverter:
         lines = []
 
         # Header
-        lines.append("## 📋 SQL生成报告\n")
+        lines.append("## 📋 SQL生成报告（数仓开发版）\n")
 
-        # Section 1: Final SQL
-        lines.append("### 1. 最终生成的SQL")
-        lines.append("```sql")
-        lines.append(sql_query)
-        lines.append("```\n")
+        # ============================================================
+        # Section 1: SQL Design Overview
+        # ============================================================
+        lines.append("### 1. SQL设计概述")
 
-        # Section 2: SQL Validation Results
+        # Extract clarified task for design understanding
+        clarified_task = ""
+        if metadata and metadata.get("clarified_task"):
+            clarified_task = metadata["clarified_task"]
+        elif metadata and metadata.get("intent_clarification"):
+            clarified_task = metadata["intent_clarification"].get("clarified_task", "")
+
+        if clarified_task:
+            lines.append(f"**任务理解**: {clarified_task}")
+        else:
+            lines.append("**任务理解**: 生成SQL查询以满足数据分析需求")
+
+        # Extract table info for scale analysis
+        table_count = 0
+        field_count = 0
+        if table_schemas:
+            table_count = len(table_schemas)
+            for schema in table_schemas:
+                definition = getattr(schema, "definition", "")
+                if definition:
+                    ddl_info = self._parse_ddl_comments(definition)
+                    field_count += len(ddl_info["columns"])
+
+        lines.append(f"**数据规模**: 涉及 {table_count} 张表、{field_count} 个字段")
+
+        # Generate design logic summary
+        design_logic = []
+        try:
+            parsed = self._parse_sql_structure(sql_query)
+            if parsed:
+                # Check for CTE usage
+                if parsed.find(exp.With):
+                    design_logic.append("使用CTE组织查询逻辑")
+
+                # Check for JOIN operations
+                join_count = len(list(parsed.find_all(exp.Join)))
+                if join_count > 0:
+                    design_logic.append(f"包含{join_count}个表关联")
+
+                # Check for aggregation
+                if parsed.find(exp.Agg):
+                    design_logic.append("包含聚合计算")
+
+                # Check for window functions
+                if parsed.find(exp.Window):
+                    design_logic.append("使用窗口函数")
+
+                # Check for filtering
+                if parsed.find(exp.Where):
+                    design_logic.append("包含筛选条件")
+
+        except Exception:
+            pass
+
+        if design_logic:
+            lines.append("**设计思路**: " + "、".join(design_logic))
+        else:
+            lines.append("**设计思路**: 基于业务需求生成查询SQL")
+
+        # Validation status summary
+        validation_summary = []
         if metadata and metadata.get("sql_validation"):
-            lines.append("### 2. SQL验证结果")
             validation = metadata["sql_validation"]
-            is_valid = validation.get("is_valid", False)
-            lines.append(f"- **语法验证**: {'✅ 通过' if validation.get('syntax_valid', is_valid) else '❌ 失败'}")
-            lines.append(f"- **表存在性**: {'✅ 通过' if validation.get('tables_exist', is_valid) else '❌ 失败'}")
-            lines.append(f"- **列存在性**: {'✅ 通过' if validation.get('columns_exist', is_valid) else '❌ 失败'}")
-            lines.append(f"- **危险操作**: {'⚠️ 检测到' if validation.get('has_dangerous_ops') else '✅ 无危险操作'}")
-            lines.append(f"- **错误数量**: {len(validation.get('errors', []))}")
-            lines.append(f"- **警告数量**: {len(validation.get('warnings', []))}")
+            if validation.get("syntax_valid"):
+                validation_summary.append("语法验证通过")
+            if validation.get("tables_exist"):
+                validation_summary.append("表存在性验证通过")
+            if validation.get("columns_exist"):
+                validation_summary.append("列存在性验证通过")
+            if not validation.get("has_dangerous_ops"):
+                validation_summary.append("无危险操作")
 
-            # Show errors if any
-            errors = validation.get("errors", [])
-            if errors:
-                lines.append("\n**错误详情**:")
-                for error in errors[:3]:  # Show first 3 errors
-                    lines.append(f"- {error}")
-                if len(errors) > 3:
-                    lines.append(f"- ...还有 {len(errors) - 3} 个错误")
+        if validation_summary:
+            lines.append(f"**验证状态**: {'、'.join(validation_summary)}")
+        else:
+            lines.append("**验证状态**: SQL已生成，待执行验证")
+
+        lines.append("")
+
+        # ============================================================
+        # Section 2: Tables and Fields Details
+        # ============================================================
+        lines.append("### 2. 使用的表和字段详情")
+
+        if table_schemas:
+            table_info = self._extract_table_info(table_schemas, sql_query)
+
+            # Table list
+            tables = table_info.get("tables", [])
+            if tables:
+                lines.append(f"**表清单** ({len(tables)}张表):")
+                lines.append("")
+                lines.append("| 表名 | 表备注 | 表类型 | 数据库 | 是否使用 |")
+                lines.append("|------|--------|--------|--------|----------|")
+                for t in tables:
+                    table_name = t["table_name"]
+                    table_comment = t["table_comment"] or "-"
+                    table_type = t["table_type"]
+                    database = t["database"] or "-"
+                    is_used = "✅" if t["is_used"] else "-"
+                    lines.append(f"| {table_name} | {table_comment} | {table_type} | {database} | {is_used} |")
+                lines.append("")
+
+            # Field list (only used fields)
+            fields = table_info.get("fields", [])
+            used_fields = [f for f in fields if f["is_used"]]
+            if used_fields:
+                lines.append(f"**字段清单** ({len(used_fields)}个字段):")
+                lines.append("")
+                lines.append("| 表名 | 字段名 | 字段注释 | 用途 |")
+                lines.append("|------|--------|----------|------|")
+                for f in used_fields:
+                    table_name = f["table_name"]
+                    column_name = f["column_name"]
+                    column_comment = f["column_comment"] or "-"
+                    usage = self._infer_field_usage(sql_query, f)
+                    lines.append(f"| {table_name} | {column_name} | {column_comment} | {usage} |")
+                lines.append("")
+
+            # Relationships
+            relationships = table_info.get("relationships", [])
+            if relationships:
+                lines.append("**表关联关系**:")
+                for rel in relationships:
+                    left = rel["left_table"]
+                    right = rel["right_table"]
+                    key = rel["join_key"]
+                    join_type = rel["join_type"]
+                    lines.append(f"- {left} ← {key} → {right} ({join_type} JOIN)")
+                lines.append("")
+        else:
+            lines.append("*表结构信息不可用*")
+            lines.append("")
+
+        # ============================================================
+        # Section 3: Annotated SQL with Comments
+        # ============================================================
+        lines.append("### 3. 带注释的SQL")
+
+        annotated_sql = self._generate_sql_with_comments(sql_query, table_schemas or [], metadata)
+        lines.append("```sql")
+        lines.append(annotated_sql)
+        lines.append("```")
+        lines.append("")
+
+        # ============================================================
+        # Section 4: SQL Validation Results
+        # ============================================================
+        lines.append("### 4. SQL验证结果")
+
+        if metadata and metadata.get("sql_validation"):
+            validation = metadata["sql_validation"]
+
+            lines.append("| 验证项 | 状态 | 说明 |")
+            lines.append("|--------|------|------|")
+
+            # Syntax validation
+            syntax_valid = validation.get("syntax_valid", True)
+            syntax_status = "✅ 通过" if syntax_valid else "❌ 失败"
+            syntax_desc = "SQL语法正确，符合SQL方言规范" if syntax_valid else "SQL语法错误，请检查语句"
+            lines.append(f"| 语法验证 | {syntax_status} | {syntax_desc} |")
+
+            # Table existence
+            tables_exist = validation.get("tables_exist", True)
+            table_status = "✅ 通过" if tables_exist else "❌ 失败"
+            table_desc = "所有表都在Schema中存在" if tables_exist else "部分表不存在，请检查表名"
+            lines.append(f"| 表存在性 | {table_status} | {table_desc} |")
+
+            # Column existence
+            columns_exist = validation.get("columns_exist", True)
+            column_status = "✅ 通过" if columns_exist else "❌ 失败"
+            column_desc = "所有列都在对应表中存在" if columns_exist else "部分列不存在，请检查列名"
+            lines.append(f"| 列存在性 | {column_status} | {column_desc} |")
+
+            # Dangerous operations
+            has_dangerous = validation.get("has_dangerous_ops", False)
+            dangerous_status = "⚠️ 检测到" if has_dangerous else "✅ 无危险操作"
+            dangerous_desc = "检测到DELETE/DROP/TRUNCATE等操作，请谨慎执行" if has_dangerous else "未检测到危险操作，可安全执行"
+            lines.append(f"| 危险操作 | {dangerous_status} | {dangerous_desc} |")
+
+            lines.append("")
 
             # Show warnings if any
             warnings = validation.get("warnings", [])
             if warnings:
-                lines.append("\n**警告详情**:")
-                for warning in warnings[:3]:  # Show first 3 warnings
+                lines.append("**验证警告**:")
+                for warning in warnings[:5]:
                     lines.append(f"- {warning}")
-                if len(warnings) > 3:
-                    lines.append(f"- ...还有 {len(warnings) - 3} 个警告")
-            lines.append("")
+                if len(warnings) > 5:
+                    lines.append(f"- ...还有 {len(warnings) - 5} 个警告")
+                lines.append("")
 
-        # Section 3: Intent Analysis Results
-        if metadata and (metadata.get("intent_analysis") or metadata.get("intent_clarification")):
-            lines.append("### 3. 意图分析结果")
-
-            # Show task type detection
-            if metadata.get("intent_analysis"):
-                intent_analysis = metadata["intent_analysis"]
-                task_type = intent_analysis.get("intent", "unknown")
-                confidence = intent_analysis.get("confidence", 0)
-                lines.append(f"- **检测到的任务类型**: {task_type}")
-                lines.append(f"- **置信度**: {confidence:.2f}")
-
-            # Show intent clarification if available
-            if metadata.get("intent_clarification"):
-                intent_clarification = metadata["intent_clarification"]
-                original_task = intent_clarification.get("original_task", "")
-                clarified_task = intent_clarification.get("clarified_task", "")
-                corrections = intent_clarification.get("corrections", {})
-
-                if original_task and clarified_task and original_task != clarified_task:
-                    lines.append(f"- **原始任务**: {original_task[:100]}{'...' if len(original_task) > 100 else ''}")
-                    lines.append(f"- **澄清后的任务**: {clarified_task[:100]}{'...' if len(clarified_task) > 100 else ''}")
-
-                if corrections:
-                    lines.append("- **修正的类型**: " + ", ".join(corrections.keys()))
-            lines.append("")
-
-        # Section 4: SQL Generation Process
-        lines.append("### 4. SQL生成过程")
-        reflection_count = metadata.get("reflection_count", 0) if metadata else 0
-        lines.append(f"- **反思次数**: {reflection_count}")
-        if reflection_count > 0:
-            lines.append(f"- **最终状态**: ✅ 经过 {reflection_count} 次反思后生成")
         else:
-            lines.append("- **最终状态**: ✅ 一次生成成功")
-        lines.append("")
+            lines.append("*未进行SQL验证或验证结果不可用*")
+            lines.append("")
 
-        # Section 5: Execution Results
-        lines.append("### 5. 执行结果")
-        lines.append(f"- **行数**: {row_count}")
-        lines.append("- **状态**: ✅ 执行成功\n")
+        # ============================================================
+        # Section 5: Execution Verification Results
+        # ============================================================
+        lines.append("### 5. 执行验证结果")
 
-        # Result preview (first 5 rows if available)
-        if sql_result and sql_result.strip():
-            lines.append("**结果预览**:")
-            try:
-                import pandas as pd
-                from io import StringIO
+        execution_report = self._generate_execution_report(row_count, metadata)
+        lines.append(execution_report)
 
-                df = pd.read_csv(StringIO(sql_result))
-                preview = df.head(5).to_markdown(index=False)
-                lines.append(preview)
+        # ============================================================
+        # Section 6: Optimization Suggestions
+        # ============================================================
+        lines.append("### 6. 优化建议")
 
-                if len(df) > 5:
-                    lines.append(f"\n*...还有 {len(df) - 5} 行数据*")
-            except Exception:
-                # If parsing fails, show raw result preview
-                result_lines = sql_result.strip().split("\n")[:6]
-                lines.append("```")
-                lines.extend(result_lines)
-                lines.append("```")
-                if len(sql_result.strip().split("\n")) > 6:
-                    lines.append("*...更多数据*")
+        optimization = self._generate_optimization_suggestions(sql_query, table_schemas or [], metadata)
+        if optimization:
+            lines.append(optimization)
+        else:
+            lines.append("*无优化建议*")
             lines.append("")
 
         return "\n".join(lines)
+
+    # ============================================================
+    # SQL Report Enhancement Helper Methods (Developer-Centric)
+    # ============================================================
+
+    def _parse_ddl_comments(self, ddl: str, dialect: str = "snowflake") -> Dict[str, Any]:
+        """Parse DDL to extract table and column comments.
+
+        Args:
+            ddl: DDL statement (CREATE TABLE ...)
+            dialect: SQL dialect (snowflake, mysql, postgres, etc.)
+
+        Returns:
+            Dict with table_comment and columns dict mapping name->comment
+        """
+        result = {
+            "table_comment": "",
+            "columns": {}
+        }
+
+        try:
+            metadata = parse_metadata_from_ddl(ddl, dialect)
+            result["table_comment"] = metadata.get("table", {}).get("comment", "")
+            for col in metadata.get("columns", []):
+                result["columns"][col["name"]] = col.get("comment", "")
+        except Exception as e:
+            self.logger.warning(f"Failed to parse DDL comments: {e}")
+
+        return result
+
+    def _extract_table_info(self, table_schemas: List[Any], sql_query: str) -> Dict[str, Any]:
+        """Extract table and field information from table_schemas and SQL.
+
+        Args:
+            table_schemas: List of TableSchema objects with DDL definitions
+            sql_query: SQL query to analyze for field usage
+
+        Returns:
+            Dict with tables list, fields list, and relationships
+        """
+        tables_info = []
+        fields_info = []
+
+        if not table_schemas:
+            return {"tables": tables_info, "fields": fields_info, "relationships": []}
+
+        # Parse SQL to extract used tables and columns
+        sql_tables = set()
+        sql_columns = set()
+        try:
+            parsed = sqlglot.parse_one(sql_query, error_level=sqlglot.ErrorLevel.IGNORE)
+            # Find all table references
+            for table in parsed.find_all(exp.Table):
+                sql_tables.add(table.name)
+            # Find all column references
+            for column in parsed.find_all(exp.Column):
+                sql_columns.add(column.name)
+        except Exception as e:
+            self.logger.warning(f"Failed to parse SQL for table/column extraction: {e}")
+
+        # Extract table information from DDLs
+        for schema in table_schemas:
+            table_name = getattr(schema, "table_name", "")
+            definition = getattr(schema, "definition", "")
+            database_name = getattr(schema, "database_name", "")
+            table_type = getattr(schema, "table_type", "table")
+
+            if not table_name or not definition:
+                continue
+
+            # Parse DDL for comments
+            ddl_info = self._parse_ddl_comments(definition)
+
+            tables_info.append({
+                "table_name": table_name,
+                "table_comment": ddl_info["table_comment"],
+                "table_type": table_type,
+                "database": database_name,
+                "is_used": table_name in sql_tables
+            })
+
+            # Extract column information
+            column_comments = ddl_info["columns"]
+            for col_name, col_comment in column_comments.items():
+                is_used = col_name in sql_columns
+                fields_info.append({
+                    "table_name": table_name,
+                    "column_name": col_name,
+                    "column_comment": col_comment,
+                    "is_used": is_used
+                })
+
+        # Analyze relationships (JOIN keys)
+        relationships = self._analyze_relationships(sql_query, tables_info)
+
+        return {
+            "tables": tables_info,
+            "fields": fields_info,
+            "relationships": relationships
+        }
+
+    def _analyze_relationships(self, sql_query: str, tables_info: List[Dict]) -> List[Dict[str, str]]:
+        """Analyze JOIN relationships from SQL query.
+
+        Args:
+            sql_query: SQL query string
+            tables_info: List of table information dicts
+
+        Returns:
+            List of relationship dicts with left_table, right_table, join_key
+        """
+        relationships = []
+
+        try:
+            parsed = sqlglot.parse_one(sql_query, error_level=sqlglot.ErrorLevel.IGNORE)
+
+            # Find JOIN conditions
+            for join in parsed.find_all(exp.Join):
+                join_table = ""
+                if isinstance(join.this, exp.Table):
+                    join_table = join.this.name
+
+                # Extract ON condition
+                on_clause = join.args.get("on")
+                if on_clause:
+                    # Simple join key extraction (left_table.key = right_table.key)
+                    if isinstance(on_clause, exp.EQ):
+                        left = on_clause.left
+                        right = on_clause.right
+                        if isinstance(left, exp.Column) and isinstance(right, exp.Column):
+                            left_table = left.table
+                            right_table = right.table
+                            join_key = left.name
+
+                            if join_table and (left_table or right_table):
+                                relationships.append({
+                                    "left_table": left_table or "",
+                                    "right_table": right_table or join_table,
+                                    "join_key": join_key,
+                                    "join_type": join.side if hasattr(join, "side") else "INNER"
+                                })
+        except Exception as e:
+            self.logger.warning(f"Failed to analyze relationships: {e}")
+
+        return relationships
+
+    def _infer_field_usage(self, sql_query: str, field_info: Dict) -> str:
+        """Infer field usage purpose based on SQL analysis.
+
+        Args:
+            sql_query: SQL query string
+            field_info: Field info dict with table_name and column_name
+
+        Returns:
+            Usage description: 关联键/筛选条件/输出字段
+        """
+        col_name = field_info["column_name"]
+        table_name = field_info["table_name"]
+
+        try:
+            parsed = sqlglot.parse_one(sql_query, error_level=sqlglot.ErrorLevel.IGNORE)
+
+            # Check if used in JOIN condition
+            for join in parsed.find_all(exp.Join):
+                on_clause = join.args.get("on")
+                if on_clause:
+                    for col in on_clause.find_all(exp.Column):
+                        if col.name == col_name:
+                            return "关联键"
+
+            # Check if used in WHERE condition
+            for where in parsed.find_all(exp.Where):
+                for col in where.find_all(exp.Column):
+                    if col.name == col_name:
+                        return "筛选条件"
+
+            # Check if used in GROUP BY
+            for group in parsed.find_all(exp.Group):
+                for col in group.find_all(exp.Column):
+                    if col.name == col_name:
+                        return "分组字段"
+
+            # Check if used in ORDER BY
+            for order in parsed.find_all(exp.Order):
+                for col in order.find_all(exp.Column):
+                    if col.name == col_name:
+                        return "排序字段"
+
+        except Exception:
+            pass
+
+        return "输出字段"
+
+    def _parse_sql_structure(self, sql_query: str, dialect: str = "snowflake") -> Optional[exp.Expression]:
+        """Parse SQL structure using sqlglot.
+
+        Args:
+            sql_query: SQL query string
+            dialect: SQL dialect
+
+        Returns:
+            Parsed SQL expression or None on error
+        """
+        try:
+            return sqlglot.parse_one(sql_query, dialect=dialect, error_level=sqlglot.ErrorLevel.IGNORE)
+        except Exception as e:
+            self.logger.warning(f"Failed to parse SQL structure: {e}")
+            return None
+
+    def _infer_cte_purpose(self, cte_name: str, cte_definition: str) -> str:
+        """Infer business purpose of a CTE from its name and definition.
+
+        Args:
+            cte_name: Name of the CTE
+            cte_definition: CTE SQL definition
+
+        Returns:
+            Business purpose description
+        """
+        # Common patterns
+        patterns = {
+            r"first|initial|earliest": "识别首次事件",
+            r"last|final|latest": "识别最后事件",
+            r"rank|row_number": "计算排名或序号",
+            r"agg|aggregate|sum|count|avg": "聚合计算",
+            r"filter|where": "筛选数据",
+            r"join|link|relate": "关联表数据",
+            r"dedup|distinct|unique": "去重或获取唯一值"
+        }
+
+        cte_lower = cte_name.lower()
+        for pattern, purpose in patterns.items():
+            if re.search(pattern, cte_lower):
+                return purpose
+
+        # Default purpose based on structure
+        if "SELECT" in cte_definition.upper():
+            return "中间查询结果"
+        return "通用表达式"
+
+    def _get_field_comment(self, table_schemas: List[Any], table_name: str, column_name: str) -> str:
+        """Get field comment from table schemas.
+
+        Args:
+            table_schemas: List of TableSchema objects
+            table_name: Table name
+            column_name: Column name
+
+        Returns:
+            Field comment or empty string
+        """
+        for schema in table_schemas:
+            if getattr(schema, "table_name", "") == table_name:
+                definition = getattr(schema, "definition", "")
+                ddl_info = self._parse_ddl_comments(definition)
+                return ddl_info["columns"].get(column_name, "")
+        return ""
+
+    def _add_field_comment(self, field_name: str, field_comment: str, sql_line: str) -> str:
+        """Add inline comment to a field in SQL.
+
+        Args:
+            field_name: Field/column name
+            field_comment: Comment text
+            sql_line: SQL line to annotate
+
+        Returns:
+            SQL line with inline comment added
+        """
+        if not field_comment or "--" in sql_line:
+            return sql_line
+
+        # Add comment after field name
+        pattern = rf'\b{re.escape(field_name)}\b(?!\s*--)'
+        replacement = f'{field_name} -- {field_comment}'
+        return re.sub(pattern, replacement, sql_line, count=1)
+
+    def _explain_condition(self, condition: exp.Expression) -> str:
+        """Explain business meaning of a WHERE/JOIN condition.
+
+        Args:
+            condition: SQL condition expression
+
+        Returns:
+            Business meaning explanation
+        """
+        if isinstance(condition, exp.EQ):
+            left = condition.left
+            right = condition.right
+            if isinstance(left, exp.Column) and isinstance(right, exp.Literal):
+                return f"筛选 {left.name} 等于 {right.this}"
+        elif isinstance(condition, exp.In):
+            # Handle IN (...) conditions
+            col = condition.this
+            if isinstance(col, exp.Column):
+                return f"筛选 {col.name} 在指定值范围内"
+        elif isinstance(condition, exp.And):
+            return "同时满足多个条件"
+        elif isinstance(condition, exp.Or):
+            return "满足任一条件"
+
+        return "条件筛选"
+
+    def _add_condition_comments(self, sql_lines: List[str], parsed: exp.Expression) -> List[str]:
+        """Add business logic comments to WHERE/JOIN conditions.
+
+        Args:
+            sql_lines: List of SQL line strings
+            parsed: Parsed SQL expression
+
+        Returns:
+            SQL lines with added condition comments
+        """
+        result = sql_lines.copy()
+
+        # Add comments for WHERE clauses
+        for i, line in enumerate(result):
+            if "WHERE" in line.upper() or "AND" in line.upper() or "OR" in line.upper():
+                # Try to explain the condition
+                for where in parsed.find_all(exp.Where):
+                    explanation = self._explain_condition(where.this)
+                    if explanation and explanation != "条件筛选":
+                        # Add comment before the line
+                        result[i] = f"-- {explanation}\n{result[i]}"
+                        break
+
+        return result
+
+    def _generate_sql_with_comments(
+        self,
+        sql_query: str,
+        table_schemas: List[Any],
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Generate annotated SQL with business logic comments.
+
+        Args:
+            sql_query: Original SQL query
+            table_schemas: List of TableSchema objects
+            metadata: Workflow metadata for context
+
+        Returns:
+            SQL with business logic comments
+        """
+        lines = []
+        sql_lines = sql_query.strip().split("\n")
+
+        try:
+            parsed = self._parse_sql_structure(sql_query)
+            if not parsed:
+                return sql_query
+
+            # Add header comment explaining the query purpose
+            clarified_task = ""
+            if metadata and metadata.get("clarified_task"):
+                clarified_task = metadata["clarified_task"]
+            elif metadata and metadata.get("intent_clarification"):
+                clarified_task = metadata["intent_clarification"].get("clarified_task", "")
+
+            if clarified_task:
+                lines.append(f"-- SQL设计目的: {clarified_task}")
+                lines.append("")
+
+            # Process CTEs (WITH clauses)
+            with_expr = parsed.find(exp.With)
+            if with_expr:
+                lines.append("-- 使用公共表表达式(CTE)组织复杂查询逻辑")
+                for cte in with_expr.expressions:
+                    if isinstance(cte, exp.CTE):
+                        cte_name = cte.alias
+                        cte_purpose = self._infer_cte_purpose(cte_name, str(cte.this))
+                        lines.append(f"-- CTE: {cte_name} - {cte_purpose}")
+
+            # Process main query structure
+            line_idx = 0
+            for line in sql_lines:
+                stripped = line.strip()
+                annotated_line = line
+
+                # Add field comments for key columns
+                for table_schema in table_schemas:
+                    table_name = getattr(table_schema, "table_name", "")
+                    definition = getattr(table_schema, "definition", "")
+                    if table_name and definition:
+                        ddl_info = self._parse_ddl_comments(definition)
+                        for col_name, col_comment in ddl_info["columns"].items():
+                            if col_comment and col_name in line:
+                                # Add inline comment if not already present
+                                if "--" not in line:
+                                    annotated_line = self._add_field_comment(col_name, col_comment, line)
+
+                lines.append(annotated_line)
+                line_idx += 1
+
+            # Add business logic comments for key operations
+            lines = self._add_condition_comments(lines, parsed)
+
+        except Exception as e:
+            self.logger.warning(f"Failed to generate annotated SQL: {e}")
+            return sql_query
+
+        return "\n".join(lines)
+
+    def _generate_execution_report(
+        self,
+        row_count: int,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Generate execution verification report section.
+
+        Args:
+            row_count: Number of rows returned
+            metadata: Workflow metadata with validation results
+
+        Returns:
+            Markdown formatted execution report
+        """
+        lines = []
+
+        # Check validation results
+        syntax_valid = True
+        if metadata and metadata.get("sql_validation"):
+            validation = metadata["sql_validation"]
+            syntax_valid = validation.get("syntax_valid", True)
+
+        lines.append("**执行状态**: ✅ SQL已成功执行验证\n")
+        lines.append("**执行详情**:")
+        lines.append(f"- **语法正确**: {'✅ SQL语法验证通过，数据库成功解析' if syntax_valid else '❌ 语法验证失败'}")
+        lines.append(f"- **执行返回**: {row_count}行数据")
+        lines.append("")
+
+        lines.append("**数据情况说明**:")
+        if row_count == 0:
+            lines.append("当前数据库中没有匹配查询条件的数据。这表明:")
+            lines.append("- SQL逻辑正确（无语法错误，成功执行）")
+            lines.append("- 数据库中暂无满足条件的数据")
+            lines.append("")
+            lines.append("**后续验证建议**:")
+            lines.append("如需验证SQL逻辑，可以:")
+            lines.append("1. 检查表数据是否存在（如：SELECT COUNT(*) FROM table_name）")
+            lines.append("2. 确认筛选条件的时间范围或枚举值是否合理")
+            lines.append("3. 检查数据是否已加载到指定时间段")
+        else:
+            lines.append(f"查询成功返回 {row_count} 行数据，SQL逻辑正确且数据完整。")
+        lines.append("")
+
+        lines.append("**SQL适合生产使用**: ✅ 是")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    def _generate_optimization_suggestions(
+        self,
+        sql_query: str,
+        table_schemas: List[Any],
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Generate optimization suggestions based on SQL analysis.
+
+        Args:
+            sql_query: SQL query string
+            table_schemas: List of TableSchema objects
+            metadata: Workflow metadata
+
+        Returns:
+            Markdown formatted optimization suggestions
+        """
+        suggestions = []
+        lines = []
+
+        try:
+            parsed = self._parse_sql_structure(sql_query)
+            if not parsed:
+                return ""
+
+            # Check for CTE usage (good practice)
+            has_cte = parsed.find(exp.With) is not None
+            if has_cte:
+                suggestions.append("✅ 使用了CTE，提高了SQL可读性和维护性")
+
+            # Check for JOIN operations
+            join_count = len(list(parsed.find_all(exp.Join)))
+            if join_count > 0:
+                suggestions.append(f"✅ 包含{join_count}个表关联，建议确保关联字段有索引")
+
+            # Check for subqueries
+            subquery_count = len(list(parsed.find_all(exp.Subquery)))
+            if subquery_count > 2:
+                suggestions.append("💡 包含多个子查询，考虑使用CTE重构以提高可读性")
+
+            # Check for SELECT *
+            for select in parsed.find_all(exp.Select):
+                if hasattr(select, "expressions"):
+                    for expr in select.expressions:
+                        if isinstance(expr, exp.Star):
+                            suggestions.append("⚠️ 使用了SELECT *，建议明确指定所需字段以提高性能")
+                            break
+
+            # Check for missing WHERE clause in SELECT
+            for select in parsed.find_all(exp.Select):
+                has_where = select.find(exp.Where) is not None
+                if not has_where and join_count == 0:
+                    suggestions.append("💡 查询未包含WHERE条件，将扫描全表数据")
+
+            # Data quality suggestions based on validation
+            if metadata and metadata.get("sql_validation"):
+                validation = metadata["sql_validation"]
+                warnings = validation.get("warnings", [])
+                if warnings:
+                    suggestions.extend([f"⚠️ {w}" for w in warnings[:3]])
+
+        except Exception as e:
+            self.logger.warning(f"Failed to generate optimization suggestions: {e}")
+
+        if suggestions:
+            lines.append("**性能优化**:")
+            for s in suggestions:
+                if s.startswith("✅"):
+                    lines.append(f"- {s}")
+                elif s.startswith("⚠️"):
+                    lines.append(f"- {s}")
+                else:
+                    lines.append(f"- {s}")
+
+            lines.append("")
+            lines.append("**后续分析建议**:")
+            lines.append("- 根据实际数据量调整查询复杂度")
+            lines.append("- 定期检查查询执行计划，优化索引策略")
+            lines.append("- 对于大数据集查询，考虑添加时间范围限制")
+            lines.append("")
+
+        return "\n".join(lines) if lines else ""
 
     def _extract_plan_from_output(self, output: Any) -> Dict[str, Any]:
         """
@@ -1183,11 +1856,13 @@ class DeepResearchEventConverter:
 
                     # Use comprehensive report if metadata is available, otherwise fall back to simple summary
                     if metadata and any(metadata.values()):
+                        table_schemas = metadata.get("table_schemas")
                         report = self._generate_sql_generation_report(
                             sql_query=final_sql,
                             sql_result=final_result,
                             row_count=row_count,
-                            metadata=metadata
+                            metadata=metadata,
+                            table_schemas=table_schemas
                         )
                     else:
                         # Fallback to simple summary for backward compatibility

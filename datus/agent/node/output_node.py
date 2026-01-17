@@ -57,6 +57,7 @@ class OutputNode(Node):
             "clarified_task": workflow.metadata.get("clarified_task"),
             "intent_analysis": workflow.metadata.get("intent_analysis"),
             "reflection_count": workflow.metadata.get("reflection_count", 0),
+            "table_schemas": workflow.context.table_schemas,  # Pass table schemas for developer report
         }
 
         # normally last node of workflow
