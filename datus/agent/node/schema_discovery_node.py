@@ -283,7 +283,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             task_text = task.task.lower()
 
             # ✅ NEW: Apply progressive matching based on reflection round (from SchemaLinkingNode)
-            base_matching_rate = self.agent_config.schema_discovery_config.base_matching_rate if self.agent_config else "fast"
+            if self.agent_config and hasattr(self.agent_config, 'schema_discovery_config'):
+                base_matching_rate = self.agent_config.schema_discovery_config.base_matching_rate
+            else:
+                base_matching_rate = "fast"  # Default for backward compatibility
             final_matching_rate = self._apply_progressive_matching(base_matching_rate)
 
             # ✅ NEW: External knowledge enhancement (from SchemaLinkingNode)
@@ -499,8 +502,11 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             tables = []
 
-            # Get similarity threshold from configuration
-            similarity_threshold = self.agent_config.schema_discovery_config.semantic_similarity_threshold
+            # Get similarity threshold from configuration (with backward compatibility)
+            if hasattr(self.agent_config, 'schema_discovery_config'):
+                similarity_threshold = self.agent_config.schema_discovery_config.semantic_similarity_threshold
+            else:
+                similarity_threshold = 0.5  # Default threshold for backward compatibility
 
             # 1. Use SchemaWithValueRAG for direct table semantic search
             rag = SchemaWithValueRAG(agent_config=self.agent_config)
@@ -1045,7 +1051,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         if not self.workflow or not self.agent_config:
             return base_rate
 
-        # Check if progressive matching is enabled
+        # Check if progressive matching is enabled (with backward compatibility)
+        if not hasattr(self.agent_config, 'schema_discovery_config'):
+            return base_rate
+
         if not self.agent_config.schema_discovery_config.progressive_matching_enabled:
             return base_rate
 
@@ -1090,7 +1099,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             if not self.agent_config:
                 return ""
 
-            # Check if external knowledge enhancement is enabled
+            # Check if external knowledge enhancement is enabled (with backward compatibility)
+            if not hasattr(self.agent_config, 'schema_discovery_config'):
+                return ""
+
             if not self.agent_config.schema_discovery_config.external_knowledge_enabled:
                 logger.debug("External knowledge enhancement is disabled")
                 return ""
@@ -1107,8 +1119,11 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             layer1 = subject_path[1] if len(subject_path) > 1 else ""
             layer2 = subject_path[2] if len(subject_path) > 2 else ""
 
-            # Get top_n from configuration
-            top_n = self.agent_config.schema_discovery_config.external_knowledge_top_n
+            # Get top_n from configuration (with backward compatibility)
+            if hasattr(self.agent_config, 'schema_discovery_config'):
+                top_n = self.agent_config.schema_discovery_config.external_knowledge_top_n
+            else:
+                top_n = 5  # Default value for backward compatibility
 
             search_result = context_search_tools.search_external_knowledge(
                 query_text=user_query,
@@ -1174,7 +1189,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         if not self.agent_config or matching_rate != "from_llm":
             return []
 
-        # Check if LLM matching is enabled
+        # Check if LLM matching is enabled (with backward compatibility)
+        if not hasattr(self.agent_config, 'schema_discovery_config'):
+            return []
+
         if not self.agent_config.schema_discovery_config.llm_matching_enabled:
             logger.debug("LLM-based schema matching is disabled")
             return []
