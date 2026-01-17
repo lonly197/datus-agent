@@ -72,6 +72,29 @@ class SQLReviewPreflightConfig:
 
 
 @dataclass
+class SchemaDiscoveryConfig:
+    """Schema discovery configuration (v2.5 - enhanced with SchemaLinkingNode capabilities)."""
+
+    # Progressive matching (from SchemaLinkingNode)
+    progressive_matching_enabled: bool = True
+    base_matching_rate: str = "fast"  # fast/medium/slow/from_llm
+    matching_rates: List[str] = field(default_factory=lambda: ["fast", "medium", "slow", "from_llm"])
+
+    # External knowledge enhancement (from SchemaLinkingNode)
+    external_knowledge_enabled: bool = True
+    external_knowledge_top_n: int = 5
+
+    # LLM schema matching (from SchemaLinkingNode)
+    llm_matching_enabled: bool = True
+    llm_matching_threshold: int = 200  # Use LLM matching when table count > threshold
+
+    # Existing SchemaDiscoveryNode parameters
+    semantic_similarity_threshold: float = 0.5
+    context_search_threshold: int = 10
+    fallback_table_limit: int = 50
+
+
+@dataclass
 class DbConfig:
     path_pattern: str = field(default="", init=True)
     type: str = field(default="", init=True)
@@ -246,6 +269,8 @@ class AgentConfig:
     # v2.4 additions
     scenarios: Dict[str, ScenarioConfig]
     sql_review_preflight: SQLReviewPreflightConfig
+    # v2.5 additions
+    schema_discovery_config: SchemaDiscoveryConfig
 
     def __init__(self, nodes: Dict[str, NodeConfig], **kwargs):
         """
@@ -309,6 +334,10 @@ class AgentConfig:
         plan_executor_config = kwargs.get("plan_executor", {})
         sql_review_cfg = plan_executor_config.get("sql_review_preflight", {})
         self.sql_review_preflight = SQLReviewPreflightConfig(**sql_review_cfg)
+
+        # Initialize schema discovery configuration (v2.5)
+        schema_discovery_cfg = kwargs.get("schema_discovery", {})
+        self.schema_discovery_config = SchemaDiscoveryConfig(**schema_discovery_cfg)
 
         # Benchmark paths are now fixed at {agent.home}/benchmark/{name}
         # Supported benchmarks: bird_dev, spider2, semantic_layer

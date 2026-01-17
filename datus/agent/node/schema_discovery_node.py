@@ -282,12 +282,40 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         if intent in ["text2sql", "sql"] and hasattr(task, "task"):
             task_text = task.task.lower()
 
+            # ✅ NEW: Apply progressive matching based on reflection round (from SchemaLinkingNode)
+            base_matching_rate = self.agent_config.schema_discovery_config.base_matching_rate if self.agent_config else "fast"
+            final_matching_rate = self._apply_progressive_matching(base_matching_rate)
+
+            # ✅ NEW: External knowledge enhancement (from SchemaLinkingNode)
+            if self.workflow and hasattr(self.workflow, "task"):
+                enhanced_knowledge = await self._search_and_enhance_external_knowledge(
+                    self.workflow.task.task,
+                    getattr(self.workflow.task, "subject_path", None),
+                )
+
+                if enhanced_knowledge:
+                    original_knowledge = getattr(self.workflow.task, "external_knowledge", "")
+                    combined_knowledge = self._combine_knowledge(original_knowledge, enhanced_knowledge)
+                    self.workflow.task.external_knowledge = combined_knowledge
+                    logger.info(f"Enhanced external knowledge with {len(enhanced_knowledge.split(chr(10)))} entries")
+
+            # ✅ NEW: Check if LLM matching should be used (from SchemaLinkingNode)
+            if final_matching_rate == "from_llm":
+                logger.info(f"[LLM Matching] Using LLM-based schema matching for large datasets")
+                llm_tables = await self._llm_based_schema_matching(task.task, final_matching_rate)
+                if llm_tables:
+                    candidate_tables.extend(llm_tables)
+                    logger.info(f"[LLM Matching] Found {len(llm_tables)} tables via LLM inference")
+
             # --- Stage 1: Fast Cache/Keyword & Semantic (Hybrid Search) ---
+            # Adjust top_n based on matching rate
+            top_n = {"fast": 5, "medium": 10, "slow": 20, "from_llm": 20}.get(final_matching_rate, 5)
+
             # 1. Semantic Search (High Priority)
-            semantic_tables = await self._semantic_table_discovery(task.task)
+            semantic_tables = await self._semantic_table_discovery(task.task, top_n=top_n)
             if semantic_tables:
                 candidate_tables.extend(semantic_tables)
-                logger.info(f"[Stage 1] Found {len(semantic_tables)} tables via semantic search")
+                logger.info(f"[Stage 1] Found {len(semantic_tables)} tables via semantic search (top_n={top_n})")
 
             # 2. Keyword Matching (Medium Priority)
             # Optimization: Always run keyword search to improve recall (Hybrid Search)
@@ -451,14 +479,16 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             logger.info(f"Updated context with {len(new_schemas)} new schemas")
 
-    async def _semantic_table_discovery(self, task_text: str) -> List[str]:
+    async def _semantic_table_discovery(self, task_text: str, top_n: int = 20) -> List[str]:
         """
         Discover tables using semantic vector search.
 
         ✅ Optimized: Added similarity threshold filtering to improve precision.
+        ✅ Enhanced: Dynamic top_n parameter for progressive matching (from SchemaLinkingNode).
 
         Args:
-            query: User query text
+            task_text: User query text
+            top_n: Number of results to retrieve (adjusted by progressive matching)
 
         Returns:
             List of table names
@@ -469,16 +499,19 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             tables = []
 
+            # Get similarity threshold from configuration
+            similarity_threshold = self.agent_config.schema_discovery_config.semantic_similarity_threshold
+
             # 1. Use SchemaWithValueRAG for direct table semantic search
             rag = SchemaWithValueRAG(agent_config=self.agent_config)
-            # ✅ Optimized: Increase top_n to 20 and filter by similarity threshold
-            schema_results, _ = rag.search_similar(query_text=task_text, top_n=20)
+            # ✅ Enhanced: Use dynamic top_n from progressive matching
+            schema_results, _ = rag.search_similar(query_text=task_text, top_n=top_n)
 
             if schema_results and len(schema_results) > 0:
-                # ✅ Optimized: Filter by similarity threshold
+                # ✅ Optimized: Filter by similarity threshold (from config)
                 # LanceDB vector search returns _distance column (lower = more similar)
                 # Convert distance to similarity: similarity = 1 / (1 + distance)
-                similarity_threshold = 0.5  # Configurable threshold
+                # similarity_threshold is now from schema_discovery_config
 
                 try:
                     # Check if _distance column exists
@@ -990,3 +1023,193 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         except Exception as e:
             logger.error(f"Failed to update schema discovery context: {str(e)}")
             return {"success": False, "message": f"Schema discovery context update failed: {str(e)}"}
+
+    # ===== SchemaLinkingNode Integration Methods (v2.5) =====
+
+    def _apply_progressive_matching(self, base_rate: str = "fast") -> str:
+        """
+        Calculate final matching rate based on reflection round (from SchemaLinkingNode).
+
+        Progressive matching strategy:
+        - Round 0: fast (5 tables)
+        - Round 1: medium (10 tables)
+        - Round 2: slow (20 tables)
+        - Round 3+: from_llm (LLM-based matching)
+
+        Args:
+            base_rate: Base matching rate (fast/medium/slow/from_llm)
+
+        Returns:
+            Final matching rate adjusted for reflection round
+        """
+        if not self.workflow or not self.agent_config:
+            return base_rate
+
+        # Check if progressive matching is enabled
+        if not self.agent_config.schema_discovery_config.progressive_matching_enabled:
+            return base_rate
+
+        # Get matching rates from configuration
+        matching_rates = self.agent_config.schema_discovery_config.matching_rates
+
+        # Find base rate index
+        try:
+            start_idx = matching_rates.index(base_rate) if base_rate in matching_rates else 0
+        except ValueError:
+            start_idx = 0
+
+        # Get reflection round
+        reflection_round = getattr(self.workflow, "reflection_round", 0)
+
+        # Calculate final rate index
+        final_idx = min(start_idx + reflection_round, len(matching_rates) - 1)
+        final_rate = matching_rates[final_idx]
+
+        logger.info(
+            f"Progressive matching: base={base_rate}, round={reflection_round}, final={final_rate}"
+        )
+
+        return final_rate
+
+    async def _search_and_enhance_external_knowledge(
+        self, user_query: str, subject_path: Optional[List[str]] = None
+    ) -> str:
+        """
+        Search for relevant external knowledge based on user query (from SchemaLinkingNode).
+
+        This method enhances the query context with domain knowledge before schema discovery.
+
+        Args:
+            user_query: The user's natural language query
+            subject_path: Optional subject hierarchy path (e.g., ['Finance', 'Revenue', 'Q1'])
+
+        Returns:
+            Formatted string of relevant knowledge entries
+        """
+        try:
+            if not self.agent_config:
+                return ""
+
+            # Check if external knowledge enhancement is enabled
+            if not self.agent_config.schema_discovery_config.external_knowledge_enabled:
+                logger.debug("External knowledge enhancement is disabled")
+                return ""
+
+            context_search_tools = ContextSearchTools(self.agent_config)
+
+            # Check if external knowledge store is available
+            if not context_search_tools.has_ext_knowledge:
+                logger.debug("External knowledge store is empty, skipping search")
+                return ""
+
+            # Convert subject_path to domain/layer1/layer2 format
+            domain = subject_path[0] if len(subject_path) > 0 else ""
+            layer1 = subject_path[1] if len(subject_path) > 1 else ""
+            layer2 = subject_path[2] if len(subject_path) > 2 else ""
+
+            # Get top_n from configuration
+            top_n = self.agent_config.schema_discovery_config.external_knowledge_top_n
+
+            search_result = context_search_tools.search_external_knowledge(
+                query_text=user_query,
+                domain=domain,
+                layer1=layer1,
+                layer2=layer2,
+                top_n=top_n,
+            )
+
+            if search_result.success and search_result.result:
+                knowledge_items = []
+                for result in search_result.result:
+                    terminology = result.get("terminology", "")
+                    explanation = result.get("explanation", "")
+                    if terminology and explanation:
+                        knowledge_items.append(f"- {terminology}: {explanation}")
+
+                if knowledge_items:
+                    formatted_knowledge = "\n".join(knowledge_items)
+                    logger.info(f"Found {len(knowledge_items)} relevant external knowledge entries")
+                    return formatted_knowledge
+
+            return ""
+
+        except Exception as e:
+            logger.warning(f"Failed to search external knowledge: {str(e)}")
+            return ""
+
+    def _combine_knowledge(self, original: str, enhanced: str) -> str:
+        """
+        Combine original knowledge and searched knowledge (from SchemaLinkingNode).
+
+        Args:
+            original: Original knowledge text
+            enhanced: Enhanced knowledge from external search
+
+        Returns:
+            Combined knowledge string
+        """
+        parts = []
+        if original:
+            parts.append(original)
+        if enhanced:
+            parts.append(f"Relevant Business Knowledge:\n{enhanced}")
+        return "\n\n".join(parts)
+
+    async def _llm_based_schema_matching(
+        self, query: str, matching_rate: str = "from_llm"
+    ) -> List[str]:
+        """
+        Use LLM-based schema matching for large datasets (from SchemaLinkingNode).
+
+        This method leverages MatchSchemaTool for intelligent table selection
+        when dealing with databases containing many tables.
+
+        Args:
+            query: User query text
+            matching_rate: Matching rate strategy (should be "from_llm")
+
+        Returns:
+            List of selected table names
+        """
+        if not self.agent_config or matching_rate != "from_llm":
+            return []
+
+        # Check if LLM matching is enabled
+        if not self.agent_config.schema_discovery_config.llm_matching_enabled:
+            logger.debug("LLM-based schema matching is disabled")
+            return []
+
+        try:
+            from datus.schemas.schema_linking_node_models import SchemaLinkingInput
+            from datus.tools.lineage_graph_tools.schema_lineage import SchemaLineageTool
+
+            # Get task from workflow
+            task = self.workflow.task if self.workflow else None
+            if not task:
+                return []
+
+            # Create SchemaLinkingInput for MatchSchemaTool
+            linking_input = SchemaLinkingInput(
+                input_text=query,
+                database_type=getattr(task, "database_type", "sqlite"),
+                catalog_name=getattr(task, "catalog_name", ""),
+                database_name=getattr(task, "database_name", ""),
+                schema_name=getattr(task, "schema_name", ""),
+                matching_rate=matching_rate,
+                table_type=getattr(task, "schema_linking_type", "table"),
+            )
+
+            # Use SchemaLineageTool with MatchSchemaTool
+            tool = SchemaLineageTool(agent_config=self.agent_config)
+            result = tool.execute(linking_input, self.model)
+
+            if result.success and result.table_schemas:
+                table_names = [schema.table_name for schema in result.table_schemas]
+                logger.info(f"LLM-based matching found {len(table_names)} tables")
+                return table_names
+
+            return []
+
+        except Exception as e:
+            logger.warning(f"LLM-based schema matching failed: {e}")
+            return []
