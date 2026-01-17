@@ -393,7 +393,7 @@ class IntentClarificationNode(Node, LLMMixin):
                 break
 
         # Extract business terms (quoted content in single or double quotes, or Chinese quotes)
-        quoted_terms = re.findall(r'[''""]([^'""]*?)[''""]', task_text)
+        quoted_terms = re.findall(r"""['"]([^'"]*?)['"]""", task_text)
         if quoted_terms:
             entities["business_terms"] = quoted_terms
 
