@@ -56,9 +56,14 @@ class OutputNode(Node):
             "intent_clarification": workflow.metadata.get("intent_clarification"),
             "clarified_task": workflow.metadata.get("clarified_task"),
             "intent_analysis": workflow.metadata.get("intent_analysis"),
-            "reflection_count": workflow.metadata.get("reflection_count", 0),
+            "reflection_count": workflow.metadata.get("reflection_count") or None,  # Use None instead of 0 for better metadata check
             "table_schemas": workflow.context.table_schemas,  # Pass table schemas for developer report
         }
+
+        # Debug logging for metadata troubleshooting
+        logger.info(f"output_node metadata keys: {list(workflow_metadata.keys())}")
+        logger.info(f"table_schemas count: {len(workflow.context.table_schemas) if workflow.context.table_schemas else 0}")
+        logger.info(f"reflection_count: {workflow_metadata['reflection_count']}")
 
         # normally last node of workflow
         next_input = OutputInput(

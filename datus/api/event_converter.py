@@ -71,6 +71,9 @@ class DeepResearchEventConverter:
         self.active_virtual_step_id = None
         self.completed_virtual_steps = set()
 
+        # Fixed virtual plan ID for all PlanUpdateEvents (fixes event association issue)
+        self.virtual_plan_id = str(uuid.uuid4())
+
     def _get_virtual_step_id(self, node_type: str) -> Optional[str]:
         """Map node type to virtual step ID."""
         for step in self.VIRTUAL_STEPS:
@@ -113,7 +116,7 @@ class DeepResearchEventConverter:
 
             todos.append(TodoItem(id=str(step["id"]), content=str(step["content"]), status=status))
 
-        return PlanUpdateEvent(id=str(uuid.uuid4()), planId=None, timestamp=int(time.time() * 1000), todos=todos)
+        return PlanUpdateEvent(id=self.virtual_plan_id, planId=None, timestamp=int(time.time() * 1000), todos=todos)
 
     def _hash_text(self, s: str) -> str:
         try:
@@ -1855,15 +1858,26 @@ class DeepResearchEventConverter:
                     final_result = sql_result_final if sql_result_final else sql_result
 
                     # Use comprehensive report if metadata is available, otherwise fall back to simple summary
-                    if metadata and any(metadata.values()):
-                        table_schemas = metadata.get("table_schemas")
-                        report = self._generate_sql_generation_report(
-                            sql_query=final_sql,
-                            sql_result=final_result,
-                            row_count=row_count,
-                            metadata=metadata,
-                            table_schemas=table_schemas
+                    # More lenient condition: check if metadata has valid content (excluding default reflection_count=0)
+                    if metadata:
+                        # Check if metadata has any valid content (excluding default reflection_count=0)
+                        has_valid_content = any(
+                            bool(v) and not (k == "reflection_count" and v == 0)
+                            for k, v in metadata.items()
                         )
+
+                        if has_valid_content or "table_schemas" in metadata:
+                            table_schemas = metadata.get("table_schemas")
+                            report = self._generate_sql_generation_report(
+                                sql_query=final_sql,
+                                sql_result=final_result,
+                                row_count=row_count,
+                                metadata=metadata,
+                                table_schemas=table_schemas
+                            )
+                        else:
+                            # Fallback to simple summary for backward compatibility
+                            report = self._generate_sql_summary(final_sql, final_result, row_count)
                     else:
                         # Fallback to simple summary for backward compatibility
                         report = self._generate_sql_summary(final_sql, final_result, row_count)
