@@ -19,6 +19,19 @@ logger = get_logger(__name__)
 
 
 class SchemaLinkingNode(Node):
+    """
+    @deprecated This node is deprecated. Use SchemaDiscoveryNode instead.
+
+    SchemaLinkingNode functionality has been fully integrated into SchemaDiscoveryNode,
+    which provides enhanced features including:
+    - Progressive matching (semantic + keyword + context + fallback)
+    - External knowledge enhancement
+    - LLM-based schema matching
+    - Multi-stage discovery pipeline
+
+    This node is retained for backward compatibility only.
+    """
+
     def __init__(
         self,
         node_id: str,
@@ -44,6 +57,12 @@ class SchemaLinkingNode(Node):
         self, action_history_manager: Optional[ActionHistoryManager] = None
     ) -> AsyncGenerator[ActionHistory, None]:
         """Execute schema linking with streaming support."""
+        # Emit deprecation warning
+        logger.warning(
+            "SchemaLinkingNode is deprecated. Use SchemaDiscoveryNode instead. "
+            "SchemaDiscoveryNode provides enhanced features including progressive matching, "
+            "external knowledge enhancement, and LLM-based schema matching."
+        )
         async for action in self._schema_linking_stream(action_history_manager):
             yield action
 

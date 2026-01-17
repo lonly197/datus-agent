@@ -112,7 +112,7 @@ class SchemaValidationNode(Node, LLMMixin):
                     "is_sufficient": False,
                     "error": "No schemas discovered",
                     "missing_tables": ["all"],
-                    "suggestions": ["Trigger schema_linking to discover tables"],
+                    "suggestions": ["Run schema_discovery to find relevant tables"],
                     "allow_reflection": False,  # No reflection - this is unrecoverable
                 }
                 yield ActionHistory(
@@ -177,7 +177,7 @@ class SchemaValidationNode(Node, LLMMixin):
                     ]
                 elif schema_coverage["coverage_score"] < 0.3:
                     validation_result["suggestions"] = [
-                        "Trigger schema_linking to find more relevant tables",
+                        "Use enhanced schema_discovery (with progressive matching and LLM inference) to find matching tables",
                         f"Consider tables matching terms: {', '.join(schema_coverage['uncovered_terms'][:5])}",
                     ]
                     validation_result["missing_tables"] = schema_coverage["uncovered_terms"][:5]

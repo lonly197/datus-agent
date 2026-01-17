@@ -1,7 +1,7 @@
 workflow:
   # Reflection-based SQL generation workflow
   reflection:
-    - schema_linking
+    - schema_discovery
     - generate_sql
     - execute_sql
     - reflect
@@ -9,7 +9,7 @@ workflow:
 
   # Fixed SQL generation workflow (no reflection)
   fixed:
-    - schema_linking
+    - schema_discovery
     - generate_sql
     - execute_sql
     - output
@@ -18,7 +18,7 @@ workflow:
 
   # Dynamic SQL generation workflow
   dynamic:
-    - schema_linking
+    - schema_discovery
     - generate_sql
     - execute_sql
     - reflect
@@ -26,7 +26,7 @@ workflow:
 
   # Metric-based SQL generation workflow
   metric_to_sql:
-    - schema_linking
+    - schema_discovery
     - search_metrics
     - date_parser
     - generate_sql

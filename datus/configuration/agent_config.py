@@ -219,7 +219,7 @@ logger = get_logger(__name__)
 
 DEFAULT_REFLECTION_NODES = {
     StrategyType.SCHEMA_LINKING.lower(): [
-        NodeType.TYPE_SCHEMA_LINKING,
+        NodeType.TYPE_SCHEMA_DISCOVERY,  # Maps to unified SchemaDiscoveryNode (contains all SchemaLinking features)
         NodeType.TYPE_SCHEMA_VALIDATION,  # Validate newly discovered schemas
         NodeType.TYPE_GENERATE_SQL,
         NodeType.TYPE_EXECUTE_SQL,
