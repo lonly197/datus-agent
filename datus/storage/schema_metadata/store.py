@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import os
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pyarrow as pa
@@ -58,6 +59,7 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             embedding_model=embedding_model,
             schema=pa.schema(
                 [
+                    # Original fields (v0)
                     pa.field("identifier", pa.string()),
                     pa.field("catalog_name", pa.string()),
                     pa.field("database_name", pa.string()),
@@ -66,6 +68,18 @@ class BaseMetadataStorage(BaseEmbeddingStore):
                     pa.field("table_type", pa.string()),
                     pa.field(vector_source_name, pa.string()),
                     pa.field("vector", pa.list_(pa.float32(), list_size=embedding_model.dim_size)),
+                    # Enhanced fields (v1) - Business Semantics (HIGH PRIORITY)
+                    pa.field("table_comment", pa.string()),  # Extracted from DDL COMMENT
+                    pa.field("column_comments", pa.string()),  # JSON: {"col1": "comment1", ...}
+                    pa.field("business_tags", pa.list_(pa.string())),  # ["finance", "fact_table", "revenue"]
+                    # Statistics (MEDIUM PRIORITY)
+                    pa.field("row_count", pa.int64()),  # Table row count
+                    pa.field("sample_statistics", pa.string()),  # JSON: {"col1": {"min": 0, "max": 100, ...}}
+                    # Relationships (MEDIUM PRIORITY)
+                    pa.field("relationship_metadata", pa.string()),  # JSON: {"foreign_keys": [...], "join_paths": [...]}
+                    # Metadata Management
+                    pa.field("metadata_version", pa.int32()),  # 0=legacy, 1=enhanced
+                    pa.field("last_updated", pa.int64()),  # Unix timestamp
                 ]
             ),
             vector_source_name=vector_source_name,
@@ -291,9 +305,16 @@ class SchemaStorage(BaseMetadataStorage):
         database_name: str = "",
         schema_name: str = "",
         table_type: TABLE_TYPE = "table",
+        table_comment: str = "",
+        column_comments: Optional[Dict[str, str]] = None,
+        business_tags: Optional[List[str]] = None,
+        row_count: int = 0,
+        sample_statistics: Optional[Dict[str, Dict]] = None,
+        relationship_metadata: Optional[Dict[str, Any]] = None,
+        metadata_version: int = 1,
     ) -> bool:
         """
-        Update or insert a table's schema definition.
+        Update or insert a table's schema definition with enhanced metadata.
 
         This method is used for metadata repair when DDL is retrieved from the database.
 
@@ -304,11 +325,20 @@ class SchemaStorage(BaseMetadataStorage):
             database_name: Optional database name
             schema_name: Optional schema name
             table_type: Type of table (table, view, mv)
+            table_comment: Table comment from DDL
+            column_comments: Dictionary mapping column names to comments
+            business_tags: List of business domain tags
+            row_count: Approximate row count
+            sample_statistics: Column statistics (min, max, mean, std)
+            relationship_metadata: Foreign keys and join paths
+            metadata_version: Schema version (0=legacy, 1=enhanced)
 
         Returns:
             True if update was successful, False otherwise
         """
         try:
+            import json
+
             self._ensure_table_ready()
 
             # Build identifier
@@ -329,7 +359,7 @@ class SchemaStorage(BaseMetadataStorage):
                 schema_name=schema_name,
             )
 
-            # Prepare data
+            # Prepare data with enhanced fields
             data = {
                 "identifier": identifier,
                 "catalog_name": catalog_name or "",
@@ -338,6 +368,15 @@ class SchemaStorage(BaseMetadataStorage):
                 "table_name": table_name,
                 "table_type": table_type,
                 "definition": definition,
+                # Enhanced metadata fields
+                "table_comment": table_comment or "",
+                "column_comments": json.dumps(column_comments or {}, ensure_ascii=False),
+                "business_tags": business_tags or [],
+                "row_count": row_count or 0,
+                "sample_statistics": json.dumps(sample_statistics or {}, ensure_ascii=False),
+                "relationship_metadata": json.dumps(relationship_metadata or {}, ensure_ascii=False),
+                "metadata_version": metadata_version,
+                "last_updated": int(time.time()),
             }
 
             # Generate embedding
@@ -357,11 +396,11 @@ class SchemaStorage(BaseMetadataStorage):
                 )
                 self.table.delete(where_clause)
                 self.table.add([embedded_data])
-                logger.info(f"Updated schema for table: {table_name}")
+                logger.info(f"Updated enhanced schema for table: {table_name}")
             else:
                 # Insert new record
                 self.table.add([embedded_data])
-                logger.info(f"Inserted schema for table: {table_name}")
+                logger.info(f"Inserted enhanced schema for table: {table_name}")
 
             return True
 

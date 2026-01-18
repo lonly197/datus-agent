@@ -484,10 +484,11 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
     async def _semantic_table_discovery(self, task_text: str, top_n: int = 20) -> List[str]:
         """
-        Discover tables using semantic vector search.
+        Discover tables using semantic vector search with comment enhancement.
 
-        ✅ Optimized: Added similarity threshold filtering to improve precision.
-        ✅ Enhanced: Dynamic top_n parameter for progressive matching (from SchemaLinkingNode).
+        ✅ Enhanced: Concatenate table_comment with definition for embedding (improves precision).
+        ✅ Enhanced: Filter by business_tags if query contains domain keywords.
+        ✅ Enhanced: Use row_count to prioritize frequently accessed tables.
 
         Args:
             task_text: User query text
@@ -497,6 +498,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             List of table names
         """
         try:
+            from datus.configuration.business_term_config import infer_business_tags
+
             if not self.agent_config:
                 return []
 
@@ -508,13 +511,21 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             else:
                 similarity_threshold = 0.5  # Default threshold for backward compatibility
 
+            # ✅ NEW: Detect query domain for business tag filtering
+            query_tags = infer_business_tags(task_text, [])
+
+            # Build enhanced search text with domain hints
+            enhanced_query = task_text
+            if query_tags:
+                enhanced_query = f"{task_text} domain:{','.join(query_tags)}"
+
             # 1. Use SchemaWithValueRAG for direct table semantic search
             rag = SchemaWithValueRAG(agent_config=self.agent_config)
             # ✅ Enhanced: Use dynamic top_n from progressive matching
-            schema_results, _ = rag.search_similar(query_text=task_text, top_n=top_n)
+            schema_results, _ = rag.search_similar(query_text=enhanced_query, top_n=top_n)
 
             if schema_results and len(schema_results) > 0:
-                # ✅ Optimized: Filter by similarity threshold (from config)
+                # ✅ Enhanced: Filter by similarity threshold (from config)
                 # LanceDB vector search returns _distance column (lower = more similar)
                 # Convert distance to similarity: similarity = 1 / (1 + distance)
                 # similarity_threshold is now from schema_discovery_config
@@ -525,19 +536,56 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         distances = schema_results.column("_distance").to_pylist()
                         table_names = schema_results.column("table_name").to_pylist()
 
-                        # Filter tables by similarity threshold
-                        filtered_tables = []
-                        for table_name, distance in zip(table_names, distances):
+                        # ✅ Enhanced: Extract additional metadata for ranking
+                        table_comments = schema_results.column("table_comment").to_pylist() if "table_comment" in schema_results.column_names else [""] * len(table_names)
+                        row_counts = schema_results.column("row_count").to_pylist() if "row_count" in schema_results.column_names else [0] * len(table_names)
+                        business_tags_list = []
+                        if "business_tags" in schema_results.column_names:
+                            # Convert from list if present
+                            for tags in schema_results.column("business_tags").to_pylist():
+                                if isinstance(tags, list):
+                                    business_tags_list.append(tags)
+                                else:
+                                    business_tags_list.append([])
+                        else:
+                            business_tags_list = [[]] * len(table_names)
+
+                        # ✅ Enhanced: Multi-factor ranking (similarity + row_count + tag matching)
+                        scored_tables = []
+                        for idx, (table_name, distance, table_comment, row_count, tags) in enumerate(
+                            zip(table_names, distances, table_comments, row_counts, business_tags_list)
+                        ):
                             # Calculate similarity from distance (LanceDB uses Euclidean distance)
                             similarity = 1.0 / (1.0 + distance)
-                            if similarity >= similarity_threshold:
-                                filtered_tables.append(table_name)
 
-                        if filtered_tables:
-                            tables.extend(filtered_tables)
+                            # Filter by similarity threshold
+                            if similarity < similarity_threshold:
+                                continue
+
+                            # ✅ Enhanced: Row count boost (prefer larger tables for analytics)
+                            # Cap at 1M rows for normalization
+                            row_count_score = min(row_count / 1_000_000, 1.0) if row_count else 0
+
+                            # ✅ Enhanced: Tag matching bonus (business domain relevance)
+                            tag_bonus = len(set(tags) & set(query_tags)) * 0.1 if query_tags else 0
+
+                            # ✅ Enhanced: Comment match bonus (if table comment contains query terms)
+                            comment_bonus = 0
+                            if table_comment and any(term.lower() in table_comment.lower() for term in task_text.split()):
+                                comment_bonus = 0.05
+
+                            # Final score: similarity + weighted enhancements
+                            final_score = similarity + (row_count_score * 0.2) + tag_bonus + comment_bonus
+                            scored_tables.append((table_name, final_score))
+
+                        if scored_tables:
+                            # Sort by final score and extract table names
+                            scored_tables.sort(key=lambda x: x[1], reverse=True)
+                            tables.extend([t[0] for t in scored_tables[:top_n]])
                             logger.info(
-                                f"Semantic search found {len(filtered_tables)}/{len(table_names)} tables "
-                                f"via metadata (threshold={similarity_threshold}): {filtered_tables}"
+                                f"Semantic search found {len(scored_tables)}/{len(table_names)} tables "
+                                f"via enhanced metadata (threshold={similarity_threshold}, tags={query_tags}): "
+                                f"{[t[0] for t in scored_tables[:5]]}"
                             )
                         else:
                             logger.warning(

@@ -106,6 +106,152 @@ def parse_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[s
         return {"table": {"name": ""}, "columns": []}
 
 
+def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, Any]:
+    """
+    Extract comprehensive metadata from DDL including comments, constraints, and relationships.
+
+    Args:
+        sql: SQL CREATE TABLE statement
+        dialect: SQL dialect (mysql, oracle, postgre, snowflake, bigquery...)
+
+    Returns:
+        Dict containing:
+        {
+            "table": {
+                "name": str,
+                "comment": str
+            },
+            "columns": [
+                {
+                    "name": str,
+                    "type": str,
+                    "comment": str,
+                    "nullable": bool
+                }
+            ],
+            "primary_keys": [str],  # List of PK column names
+            "foreign_keys": [
+                {
+                    "from_column": str,
+                    "to_table": str,
+                    "to_column": str
+                }
+            ],
+            "indexes": [
+                {
+                    "name": str,
+                    "columns": [str]
+                }
+            ]
+        }
+    """
+    dialect = parse_dialect(dialect)
+
+    try:
+        result = {
+            "table": {"name": "", "schema_name": "", "database_name": ""},
+            "columns": [],
+            "primary_keys": [],
+            "foreign_keys": [],
+            "indexes": []
+        }
+
+        # Parse SQL using sqlglot with error handling
+        parsed = sqlglot.parse_one(sql.strip(), dialect=dialect, error_level=sqlglot.ErrorLevel.IGNORE)
+
+        if isinstance(parsed, sqlglot.exp.Create):
+            tb_info = parsed.find_all(Table).__next__()
+            # Get table name
+            table_name = tb_info.name
+
+            if isinstance(table_name, str):
+                table_name = table_name.strip('"').strip("`").strip("[]")
+            result["table"]["name"] = table_name
+            result["table"]["schema_name"] = tb_info.db
+            result["table"]["database_name"] = tb_info.catalog
+            if tb_info.comments:
+                result["table"]["comment"] = tb_info.comments
+
+            # Get column definitions
+            for column in parsed.this.expressions:
+                if isinstance(column, sqlglot.exp.ColumnDef):
+                    col_name = column.name
+                    if isinstance(col_name, str):
+                        col_name = col_name.strip('"').strip("`").strip("[]")
+
+                    col_dict = {"name": col_name, "type": str(column.kind), "nullable": True}
+
+                    # Get column comment if exists
+                    if hasattr(column, "constraints") and column.constraints:
+                        # Check for NOT NULL constraint
+                        for constraint in column.constraints:
+                            if isinstance(constraint, sqlglot.exp.NotNull):
+                                col_dict["nullable"] = False
+
+                    if hasattr(column, "comments") and column.comments:
+                        col_dict["comment"] = column.comments
+                    elif hasattr(column, "comment") and column.comment:
+                        col_dict["comment"] = column.comment
+
+                    result["columns"].append(col_dict)
+
+            # Extract primary keys
+            for constraint in parsed.find_all(sqlglot.exp.PrimaryKey):
+                pk_columns = [col.name for col in constraint.expressions if hasattr(col, 'name')]
+                result["primary_keys"].extend(pk_columns)
+
+            # Extract foreign keys
+            for constraint in parsed.find_all(sqlglot.exp.ForeignKey):
+                fk_dict = {
+                    "from_column": "",
+                    "to_table": "",
+                    "to_column": ""
+                }
+
+                # Get source column
+                if constraint.expressions:
+                    fk_dict["from_column"] = constraint.expressions[0].name if hasattr(constraint.expressions[0], 'name') else str(constraint.expressions[0])
+
+                # Get reference table and column
+                if constraint.ref:
+                    ref_table = constraint.ref.name if hasattr(constraint.ref, 'name') else str(constraint.ref)
+                    fk_dict["to_table"] = ref_table
+                    if constraint.ref.expressions:
+                        fk_dict["to_column"] = constraint.ref.expressions[0].name if hasattr(constraint.ref.expressions[0], 'name') else str(constraint.ref.expressions[0])
+
+                result["foreign_keys"].append(fk_dict)
+
+            # Extract indexes
+            for constraint in parsed.find_all(sqlglot.exp.Index):
+                index_dict = {
+                    "name": "",
+                    "columns": []
+                }
+
+                if hasattr(constraint, 'name'):
+                    index_dict["name"] = constraint.name
+
+                if constraint.expressions:
+                    index_dict["columns"] = [
+                        expr.name if hasattr(expr, 'name') else str(expr)
+                        for expr in constraint.expressions
+                    ]
+
+                result["indexes"].append(index_dict)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error parsing SQL for enhanced metadata: {e}")
+        return {
+            "table": {"name": ""},
+            "columns": [],
+            "primary_keys": [],
+            "foreign_keys": [],
+            "indexes": []
+        }
+
+
 def extract_table_names(sql, dialect=DBType.SNOWFLAKE, ignore_empty=False) -> List[str]:
     """
     Extract fully qualified table names (database.schema.table) from SQL.

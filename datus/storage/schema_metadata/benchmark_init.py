@@ -4,6 +4,7 @@
 
 import json
 import os
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Set
@@ -14,7 +15,8 @@ from datus.storage.schema_metadata.init_utils import exists_table_value
 from datus.storage.schema_metadata.store import SchemaWithValueRAG
 from datus.utils.json_utils import json2csv
 from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import metadata_identifier
+from datus.utils.sql_utils import metadata_identifier, extract_enhanced_metadata_from_ddl
+from datus.configuration.business_term_config import infer_business_tags
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -131,6 +133,31 @@ def do_process_by_database(
                             ddl = f"""{ddl[:-1]} COMMENT = '{description}';"""
                         else:
                             ddl = f"""{ddl} COMMENT = '{description}';"""
+
+                    # Extract enhanced metadata from DDL
+                    parsed_metadata = extract_enhanced_metadata_from_ddl(ddl, dialect="snowflake")
+
+                    # Extract table and column comments
+                    table_comment = parsed_metadata["table"].get("comment", "")
+                    column_comments = {
+                        col["name"]: col.get("comment", "")
+                        for col in parsed_metadata["columns"]
+                    }
+
+                    # Infer business tags
+                    column_names = [col["name"] for col in parsed_metadata["columns"]]
+                    business_tags = infer_business_tags(table_name, column_names)
+
+                    # Extract relationships
+                    foreign_keys = parsed_metadata.get("foreign_keys", [])
+                    relationship_metadata = {
+                        "foreign_keys": foreign_keys,
+                        "join_paths": [
+                            f"{fk['from_column']} -> {fk['to_table']}.{fk['to_column']}"
+                            for fk in foreign_keys
+                        ]
+                    }
+
                     batch_records.append(
                         {
                             "identifier": metadata_identifier(
@@ -146,6 +173,15 @@ def do_process_by_database(
                             "table_name": table_name,
                             "definition": ddl,
                             "table_type": "table",
+                            # Enhanced metadata fields (v1)
+                            "table_comment": table_comment,
+                            "column_comments": json.dumps(column_comments, ensure_ascii=False),
+                            "business_tags": business_tags,
+                            "row_count": 0,  # Not available from CSV files
+                            "sample_statistics": json.dumps({}, ensure_ascii=False),  # Not available from CSV
+                            "relationship_metadata": json.dumps(relationship_metadata, ensure_ascii=False),
+                            "metadata_version": 1,
+                            "last_updated": int(time.time())
                         }
                     )
                 if full_tb_name not in all_value_tables and (sample_rows := json_data.get("sample_rows")):

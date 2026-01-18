@@ -207,3 +207,99 @@ def get_table_keyword_pattern(keyword: str) -> str:
         Table name or empty string if no mapping
     """
     return TABLE_KEYWORD_PATTERNS.get(keyword, "")
+
+
+# Business tag patterns for automatic domain detection
+BUSINESS_TAG_PATTERNS = {
+    "finance": ["fact_", "transaction", "payment", "revenue", "expense", "budget", "cost", "profit", "margin", "invoice", "billing"],
+    "sales": ["sales_", "order", "customer", "product_", "invoice", "quote", "deal", "opportunity", "lead"],
+    "inventory": ["inventory_", "stock", "warehouse", "supply_chain", "product_", "item", "sku", "quantity"],
+    "analytics": ["agg_", "summary", "metrics", "kpi_", "report_", "dashboard", "analytics", "statistics"],
+    "temporal": ["date_", "time_", "calendar", "fiscal_", "quarter", "month_", "day_", "year_", "period", "date_dim", "time_dim"],
+    "user": ["user_", "customer", "account", "profile", "person", "employee", "staff"],
+    "location": ["geo_", "location", "address", "region", "country", "city", "state", "province", "zip"],
+    "dimension": ["dim_", "dimension", "lookup", "ref_", "reference"],
+    "fact": ["fact_", "fct_", "metrics", "measures", "transactions"]
+}
+
+
+def infer_business_tags(table_name: str, column_names: list) -> list:
+    """
+    Infer business domain tags from table and column naming patterns.
+
+    Args:
+        table_name: Name of the table
+        column_names: List of column names in the table
+
+    Returns:
+        List of inferred business tags (e.g., ["finance", "fact_table", "temporal"])
+    """
+    import re
+    from typing import List
+
+    tags = []
+    table_lower = table_name.lower()
+    columns_lower = [col.lower() for col in column_names]
+
+    # Check table-level patterns
+    for tag, patterns in BUSINESS_TAG_PATTERNS.items():
+        for pattern in patterns:
+            if pattern in table_lower:
+                if tag not in tags:
+                    tags.append(tag)
+                break
+
+    # Check column-level patterns (aggregate evidence)
+    column_tag_scores = {}
+    for col in columns_lower:
+        for tag, patterns in BUSINESS_TAG_PATTERNS.items():
+            for pattern in patterns:
+                if pattern in col:
+                    column_tag_scores[tag] = column_tag_scores.get(tag, 0) + 1
+
+    # Add tags that appear in multiple columns (stronger signal)
+    for tag, score in column_tag_scores.items():
+        if score >= 2 and tag not in tags:  # Appears in 2+ columns
+            tags.append(tag)
+
+    # Detect fact vs dimension tables
+    if table_lower.startswith("fact_") or table_lower.startswith("fct_"):
+        tags.append("fact_table")
+    elif table_lower.startswith("dim_") or any(col.endswith("_id") or col.endswith("_key") for col in columns_lower):
+        tags.append("dimension_table")
+
+    # Detect aggregate/summary tables
+    if any(kw in table_lower for kw in ["agg_", "summary", "metrics", "kpi_"]):
+        tags.append("aggregate_table")
+
+    # Detect temporal tables
+    if any(col in columns_lower for col in ["date", "time", "year", "month", "day", "quarter", "fiscal"]):
+        tags.append("temporal_table")
+
+    return tags
+
+
+def detect_temporal_granularity(column_name: str, comment: str = "") -> str:
+    """
+    Infer date/time granularity from naming/comment patterns.
+
+    Args:
+        column_name: Name of the temporal column
+        comment: Optional column comment
+
+    Returns:
+        Granularity level: "daily", "weekly", "monthly", "quarterly", "yearly", "unknown"
+    """
+    patterns = {
+        "daily": ["daily", "_day", "_d_", "date"],
+        "weekly": ["weekly", "_week", "_w_", "week"],
+        "monthly": ["monthly", "_month", "_m_", "month"],
+        "quarterly": ["quarter", "_q_", "fiscal_quarter"],
+        "yearly": ["yearly", "_year", "_y_", "annual", "fiscal_year"]
+    }
+
+    col_lower = column_name.lower() + " " + comment.lower()
+    for granularity, keywords in patterns.items():
+        if any(kw in col_lower for kw in keywords):
+            return granularity
+    return "unknown"
