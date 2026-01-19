@@ -36,6 +36,112 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 
+def report_cleanup_state(db_path: str, table_name: str = "schema_metadata"):
+    """
+    Report current cleanup state for debugging and diagnostics.
+
+    This function provides comprehensive pre-cleanup state information including:
+    - Table existence
+    - Record count
+    - Schema field information
+    - Data summary
+
+    Args:
+        db_path: Path to LanceDB database directory
+        table_name: Name of the table to check (default: "schema_metadata")
+    """
+    import lancedb
+
+    logger.info("=" * 80)
+    logger.info("CLEANUP STATE CHECK")
+    logger.info("=" * 80)
+    logger.info(f"Database path: {db_path}")
+    logger.info("")
+
+    try:
+        # Check if database path exists
+        if not os.path.exists(db_path):
+            logger.info(f"✗ Database path does not exist: {db_path}")
+            logger.info("  → This is normal for fresh installations")
+            logger.info("  → No cleanup needed")
+            logger.info("=" * 80)
+            return
+
+        db = lancedb.connect(db_path)
+
+        # Check if table exists
+        table_names = db.table_names()
+        logger.info(f"Tables in database: {table_names}")
+
+        if table_name not in table_names:
+            logger.info(f"✗ Table '{table_name}' DOES NOT EXIST")
+            logger.info("  → This is normal for fresh installations")
+            logger.info("  → No cleanup needed (table already removed or never created)")
+            logger.info("=" * 80)
+            return
+
+        # Table exists - report details
+        logger.info(f"✓ Table '{table_name}' EXISTS")
+        table = db.open_table(table_name)
+
+        # Get record count
+        all_data = table.to_arrow()
+        count = len(all_data)
+        logger.info(f"  Record count: {count}")
+
+        if count == 0:
+            logger.info("  → Table is empty (will be dropped during cleanup)")
+        else:
+            logger.info(f"  → Table contains {count} records (will be exported before cleanup)")
+
+        # Check schema
+        schema = table.schema
+        field_names = schema.names
+        logger.info(f"  Fields ({len(field_names)}): {field_names}")
+
+        # Check if it has v1 fields
+        v1_fields = [
+            "table_comment", "column_comments", "business_tags",
+            "row_count", "sample_statistics", "relationship_metadata",
+            "metadata_version", "last_updated"
+        ]
+        has_v1_fields = [f for f in v1_fields if f in field_names]
+
+        if has_v1_fields:
+            logger.info(f"  Has v1 fields: {len(has_v1_fields)}/{len(v1_fields)}")
+            logger.info("  → Table appears to have v1 schema (already migrated?)")
+            logger.info("  → Verify if this is the correct table to clean up")
+
+            # Check metadata_version if field exists
+            if "metadata_version" in field_names:
+                try:
+                    version_data = table.search().select(["metadata_version"]).to_arrow()
+                    versions = [row.get("metadata_version", 0) for row in version_data.to_pylist()]
+                    from collections import Counter
+                    version_counts = Counter(versions)
+                    logger.info(f"  Version distribution: {dict(version_counts)}")
+
+                    v1_count = version_counts.get(1, 0)
+                    if v1_count > 0:
+                        logger.warning("  ⚠️  WARNING: Table contains v1 data!")
+                        logger.warning("     → This table has already been migrated")
+                        logger.warning("     → Cleaning up v1 data will require re-migration")
+                        logger.warning("     → Only proceed if you intend to re-run the full migration")
+                except Exception as e:
+                    logger.debug(f"Could not read version distribution: {e}")
+        else:
+            logger.info("  Has v1 fields: 0/8")
+            logger.info("  → Table has v0 schema structure")
+
+    except Exception as e:
+        logger.error(f"Error checking cleanup state: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
+
+    logger.info("=" * 80)
+    logger.info("")
+
+
 def select_namespace_interactive(agent_config: AgentConfig, specified_namespace: Optional[str] = None) -> Optional[str]:
     """
     Smart namespace selection:
@@ -379,6 +485,9 @@ def main():
             # Use base storage path (Schema-only cleanup)
             db_path = os.path.join(agent_config.rag_base_path, "lancedb")
             logger.info("Using base storage path (Schema-only cleanup)")
+
+    # Report current cleanup state (diagnostics)
+    report_cleanup_state(db_path, args.table_name)
 
     # Run cleanup
     try:

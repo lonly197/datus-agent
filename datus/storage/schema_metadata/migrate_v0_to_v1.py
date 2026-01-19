@@ -104,6 +104,129 @@ def select_namespace_interactive(agent_config: AgentConfig, specified_namespace:
         return selected
 
 
+def report_migration_state(db_path: str, table_name: str = "schema_metadata"):
+    """
+    Report current migration state for debugging and diagnostics.
+
+    This function provides comprehensive pre-migration state information including:
+    - Table existence
+    - Record count
+    - Schema field information
+    - Metadata version distribution
+    - v1 field presence detection
+
+    Args:
+        db_path: Path to LanceDB database directory
+        table_name: Name of the table to check (default: "schema_metadata")
+    """
+    import lancedb
+    from collections import Counter
+
+    logger.info("=" * 80)
+    logger.info("MIGRATION STATE CHECK")
+    logger.info("=" * 80)
+    logger.info(f"Database path: {db_path}")
+    logger.info("")
+
+    try:
+        # Check if database path exists
+        if not os.path.exists(db_path):
+            logger.info(f"✗ Database path does not exist: {db_path}")
+            logger.info("  → This is normal for fresh installations")
+            logger.info("  → A new database will be created during migration")
+            logger.info("=" * 80)
+            return
+
+        db = lancedb.connect(db_path)
+
+        # Check if table exists
+        table_names = db.table_names()
+        logger.info(f"Tables in database: {table_names}")
+
+        if table_name not in table_names:
+            logger.info(f"✗ Table '{table_name}' DOES NOT EXIST")
+            logger.info("  → This is normal for fresh installations")
+            logger.info("  → A new v1 table will be created during migration")
+            logger.info("=" * 80)
+            return
+
+        # Table exists - report details
+        logger.info(f"✓ Table '{table_name}' EXISTS")
+        table = db.open_table(table_name)
+
+        # Get record count
+        all_data = table.to_arrow()
+        count = len(all_data)
+        logger.info(f"  Record count: {count}")
+
+        # Check schema
+        schema = table.schema
+        field_names = schema.names
+        logger.info(f"  Fields ({len(field_names)}): {field_names}")
+
+        # Check if it has v1 fields
+        v1_fields = [
+            "table_comment", "column_comments", "business_tags",
+            "row_count", "sample_statistics", "relationship_metadata",
+            "metadata_version", "last_updated"
+        ]
+        has_v1_fields = [f for f in v1_fields if f in field_names]
+        logger.info(f"  Has v1 fields: {len(has_v1_fields)}/{len(v1_fields)}")
+
+        if has_v1_fields:
+            logger.info(f"    Present: {', '.join(has_v1_fields)}")
+            missing = [f for f in v1_fields if f not in field_names]
+            if missing:
+                logger.info(f"    Missing: {', '.join(missing)}")
+
+        # Check metadata_version distribution if field exists
+        if "metadata_version" in field_names:
+            try:
+                # Select only metadata_version to reduce payload
+                version_data = table.search().select(["metadata_version"]).to_arrow()
+                versions = [row.get("metadata_version", 0) for row in version_data.to_pylist()]
+                version_counts = Counter(versions)
+                logger.info(f"  Version distribution: {dict(version_counts)}")
+
+                v0_count = version_counts.get(0, 0)
+                v1_count = version_counts.get(1, 0)
+                other_count = sum(v for k, v in version_counts.items() if k not in [0, 1])
+
+                if v1_count > 0:
+                    logger.info(f"  → Already migrated: {v1_count} v1 records found")
+                if v0_count > 0:
+                    logger.info(f"  → Legacy data: {v0_count} v0 records need migration")
+                if other_count > 0:
+                    logger.info(f"  → Other versions: {other_count} records with unexpected versions")
+
+            except Exception as e:
+                logger.debug(f"Could not read version distribution: {e}")
+
+        logger.info("")
+        logger.info("Summary:")
+        if count == 0:
+            logger.info("  → Table exists but is empty (fresh installation)")
+        elif len(has_v1_fields) == len(v1_fields):
+            if "metadata_version" in field_names:
+                version_data = table.search().select(["metadata_version"]).to_arrow()
+                if any(row.get("metadata_version", 0) == 1 for row in version_data.to_pylist()):
+                    logger.info("  → Table already contains v1 data (use --force to re-migrate)")
+                else:
+                    logger.info("  → Table has v1 schema but v0 data (migration needed)")
+            else:
+                logger.info("  → Table has v1 schema structure")
+        else:
+            logger.info("  → Table has v0 schema structure (migration needed)")
+
+    except Exception as e:
+        logger.error(f"Error checking migration state: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
+
+    logger.info("=" * 80)
+    logger.info("")
+
+
 def detect_dialect_from_ddl(ddl: str) -> str:
     """
     Attempt to detect SQL dialect from DDL statement.
@@ -369,9 +492,16 @@ def migrate_schema_value_storage(
         return 0
 
 
-def verify_migration(storage: SchemaWithValueRAG) -> bool:
+def verify_migration_detailed(storage: SchemaWithValueRAG) -> bool:
     """
-    Verify migration success by checking metadata_version distribution.
+    Verify migration with detailed diagnostic output.
+
+    This function performs comprehensive verification including:
+    - Table existence check
+    - Record count verification
+    - Schema field validation
+    - Metadata version distribution analysis
+    - Detailed error reporting with actionable suggestions
 
     Args:
         storage: SchemaWithValueRAG instance
@@ -379,47 +509,166 @@ def verify_migration(storage: SchemaWithValueRAG) -> bool:
     Returns:
         True if migration appears successful
     """
+    from collections import Counter
+
     try:
         schema_store = storage.schema_store
         schema_store._ensure_table_ready()
 
-        # Check if metadata_version column exists and has data
-        all_data = schema_store._search_all(
-            where=None,
-            select_fields=["metadata_version"]
-        )
+        logger.info("=" * 80)
+        logger.info("VERIFICATION DETAILS")
+        logger.info("=" * 80)
 
-        if len(all_data) == 0:
-            # Check if v1 table exists (even if empty)
-            if schema_store.table_name in schema_store.db.table_names():
-                logger.info("✅ v1 table exists (empty) - migration completed successfully")
-                return True
-            else:
-                logger.warning("No records found for verification and table doesn't exist")
+        # Check table state
+        table_exists = schema_store.table_name in schema_store.db.table_names()
+        logger.info(f"Table exists: {table_exists}")
+        logger.info(f"Table name: {schema_store.table_name}")
+        logger.info(f"Database path: {schema_store.db_path}")
+
+        if not table_exists:
+            logger.error("")
+            logger.error("❌ Table was not created - migration FAILED")
+            logger.info("")
+            logger.info("Possible causes:")
+            logger.info("  1. Storage path permission issue")
+            logger.info("  2. Disk space exhausted")
+            logger.info("  3. Configuration error (wrong namespace/path)")
+            logger.info("  4. Database connection failure")
+            logger.info("")
+            logger.info("Troubleshooting steps:")
+            logger.info("  • Check write permissions on storage directory")
+            logger.info("  • Verify available disk space")
+            logger.info("  • Confirm namespace configuration in agent.yml")
+            logger.info("  • Check logs above for specific errors")
+            logger.info("=" * 80)
+            return False
+
+        # Check table schema
+        try:
+            table = schema_store.db.open_table(schema_store.table_name)
+            schema = table.schema
+            field_names = schema.names
+            logger.info(f"Schema fields ({len(field_names)}): {field_names}")
+
+            # Verify v1 fields exist
+            v1_fields = [
+                "table_comment", "column_comments", "business_tags",
+                "row_count", "sample_statistics", "relationship_metadata",
+                "metadata_version", "last_updated"
+            ]
+            missing_v1_fields = [f for f in v1_fields if f not in field_names]
+
+            if missing_v1_fields:
+                logger.warning("")
+                logger.warning(f"⚠️  Missing v1 fields: {missing_v1_fields}")
+                logger.warning("  → Table may not have been created with v1 schema")
+                logger.warning("  → Re-run cleanup and migration scripts")
+                logger.info("=" * 80)
                 return False
 
-        # Count versions
-        import pyarrow as pa
-        version_counts = {}
-        for row in all_data.to_pylist():
-            version = row.get("metadata_version", 0)
-            version_counts[version] = version_counts.get(version, 0) + 1
+            logger.info("✅ All v1 fields present in schema")
 
-        logger.info(f"Metadata version distribution: {version_counts}")
-        logger.info(f"Total records: {sum(version_counts.values())}")
+        except Exception as e:
+            logger.error(f"Error checking table schema: {e}")
+            logger.info("=" * 80)
+            return False
 
-        # Success if we have any v1 records
-        success = version_counts.get(1, 0) > 0
-        if success:
-            logger.info("✅ Migration verification successful: v1 records found")
-        else:
-            logger.warning("⚠️  Migration verification: No v1 records found")
+        # Get data
+        try:
+            all_data = schema_store._search_all(
+                where=None,
+                select_fields=["metadata_version"]
+            )
 
-        return success
+            logger.info(f"Record count: {len(all_data)}")
+
+            if len(all_data) == 0:
+                logger.info("")
+                logger.info("✅ Empty v1 table created successfully")
+                logger.info("   This is expected for fresh installations")
+                logger.info("   The migration completed - no data to migrate")
+                logger.info("")
+                logger.info("Migration status: SUCCESS (empty v1 table)")
+                logger.info("=" * 80)
+                return True
+
+            # Has data - check versions
+            version_counts = Counter(
+                row.get("metadata_version", 0)
+                for row in all_data.to_pylist()
+            )
+
+            logger.info(f"Version distribution: {dict(version_counts)}")
+
+            v1_count = version_counts.get(1, 0)
+            v0_count = version_counts.get(0, 0)
+            other_count = sum(v for k, v in version_counts.items() if k not in [0, 1])
+            total_count = sum(version_counts.values())
+
+            logger.info(f"  v0 (legacy) records: {v0_count}")
+            logger.info(f"  v1 (enhanced) records: {v1_count}")
+            if other_count > 0:
+                logger.info(f"  other version records: {other_count}")
+
+            # Calculate migration percentage
+            if total_count > 0:
+                migration_pct = (v1_count / total_count) * 100
+                logger.info(f"  Migration completion: {migration_pct:.1f}%")
+
+            # Determine success
+            if v1_count > 0 and v0_count == 0:
+                logger.info("")
+                logger.info("✅ Migration successful - all records upgraded to v1")
+                logger.info("=" * 80)
+                return True
+            elif v1_count > 0:
+                logger.warning("")
+                logger.warning(f"⚠️  Partial migration: {v1_count}/{total_count} records upgraded")
+                logger.warning("  → Some v0 records remain")
+                logger.warning("  → Check migration logs for errors")
+                logger.warning("  → Re-run migration with --force to retry")
+                logger.info("=" * 80)
+                return False
+            else:
+                logger.warning("")
+                logger.warning("⚠️  No v1 records created - migration failed")
+                logger.warning("  → Check logs above for errors during data processing")
+                logger.warning("  → Verify backup file was correctly loaded")
+                logger.warning("  → Re-run migration with --force")
+                logger.info("=" * 80)
+                return False
+
+        except Exception as e:
+            logger.error(f"Error reading table data: {e}")
+            logger.error("")
+            logger.error("Possible causes:")
+            logger.error("  1. Table corruption during migration")
+            logger.error("  2. Insufficient permissions to read data")
+            logger.error("  3. Data format incompatibility")
+            logger.info("=" * 80)
+            return False
 
     except Exception as e:
-        logger.error(f"Migration verification failed: {e}")
+        logger.error(f"Verification failed with exception: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
+        logger.info("=" * 80)
         return False
+
+
+def verify_migration(storage: SchemaWithValueRAG) -> bool:
+    """
+    Verify migration success by checking metadata_version distribution.
+
+    This is a simplified version of verify_migration_detailed() for backward compatibility.
+
+    Args:
+        storage: SchemaWithValueRAG instance
+
+    Returns:
+        True if migration appears successful
+    """
+    return verify_migration_detailed(storage)
 
 
 def str_to_bool(v):
@@ -445,6 +694,80 @@ def str_to_bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError(f'Boolean value expected, got: {v}')
+
+
+def print_recovery_suggestions(db_path: str, table_name: str = "schema_metadata"):
+    """
+    Print recovery suggestions based on common migration failure scenarios.
+
+    Provides actionable troubleshooting steps for users encountering migration issues.
+
+    Args:
+        db_path: Path to LanceDB database directory
+        table_name: Name of the table (default: "schema_metadata")
+    """
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("TROUBLESHOOTING SUGGESTIONS")
+    logger.info("=" * 80)
+    logger.info("")
+    logger.info("To diagnose the issue, run the following commands:")
+    logger.info("")
+    logger.info("1. Check if the v1 table was actually created:")
+    logger.info(f"   python -c \"import lancedb; db = lancedb.connect('{db_path}'); print('Tables:', db.table_names())\"")
+    logger.info("")
+    logger.info("2. Check table contents (if table exists):")
+    logger.info(f"   python -c \"import lancedb; t = lancedb.connect('{db_path}').open_table('{table_name}'); print('Count:', len(t.to_arrow()))\"")
+    logger.info("")
+    logger.info("3. Verify metadata_version field (if table exists):")
+    logger.info(f"   python -c \"import lancedb; t = lancedb.connect('{db_path}').open_table('{table_name}'); print('Fields:', t.schema.names)\"")
+    logger.info("")
+    logger.info("4. Check record count and versions:")
+    logger.info(f"   python -c \"")
+    logger.info(f"     import lancedb")
+    logger.info(f"     from collections import Counter")
+    logger.info(f"     t = lancedb.connect('{db_path}').open_table('{table_name}')")
+    logger.info(f"     data = t.search().select(['metadata_version']).to_arrow()")
+    logger.info(f"     versions = [r.get('metadata_version', 0) for r in data.to_pylist()]")
+    logger.info(f"     print('Version distribution:', dict(Counter(versions)))")
+    logger.info(f"   \"")
+    logger.info("")
+    logger.info("5. Check disk space and permissions:")
+    logger.info(f"   df -h {os.path.dirname(db_path)}")
+    logger.info(f"   ls -la {db_path}")
+    logger.info("")
+    logger.info("Common scenarios and solutions:")
+    logger.info("")
+    logger.info("Scenario A: Table exists but migration shows FAILED")
+    logger.info("  → The table may have been created but verification logic failed")
+    logger.info("  → Check the version distribution using command #4 above")
+    logger.info("  → If v1 records exist, migration was successful (ignore the error)")
+    logger.info("  → Re-run with --force to see improved verification output")
+    logger.info("")
+    logger.info("Scenario B: No table exists")
+    logger.info("  → Check storage path configuration in agent.yml")
+    logger.info("  → Verify write permissions on the directory")
+    logger.info("  → Check available disk space")
+    logger.info("  → Review logs above for specific errors during table creation")
+    logger.info("")
+    logger.info("Scenario C: Table exists but empty (0 records)")
+    logger.info("  → This is normal for fresh installations")
+    logger.info("  → Migration was successful (empty v1 table created)")
+    logger.info("  → Ignore the error message")
+    logger.info("")
+    logger.info("Scenario D: Partial migration (some v0, some v1 records)")
+    logger.info("  → Check logs above for errors during data processing")
+    logger.info("  → Re-run with --force to complete migration")
+    logger.info("  → If issue persists, restore from backup and retry")
+    logger.info("")
+    logger.info("To restore from backup (if needed):")
+    logger.info(f"   # Find backup directory")
+    logger.info(f"   ls -la {db_path}.backup_v0_*")
+    logger.info(f"   # Restore (replace <backup_path> with actual backup)")
+    logger.info(f"   rm -rf {db_path}")
+    logger.info(f"   mv <backup_path> {db_path}")
+    logger.info("")
+    logger.info("=" * 80)
 
 
 def main():
@@ -492,6 +815,9 @@ def main():
     logger.info(f"Extract statistics: {args.extract_statistics}")
     logger.info(f"Extract relationships: {args.extract_relationships}")
     logger.info("")
+
+    # Report current migration state (diagnostics)
+    report_migration_state(db_path, "schema_metadata")
 
     # Backup existing database
     if not args.skip_backup:
@@ -590,6 +916,10 @@ def main():
                 logger.error("❌ MIGRATION VERIFICATION FAILED")
                 logger.error("=" * 80)
                 logger.error("Please check the logs above for details")
+
+                # Print recovery suggestions
+                print_recovery_suggestions(db_path, "schema_metadata")
+
                 sys.exit(1)
         else:
             # No namespace - schema migration only
@@ -617,8 +947,10 @@ def main():
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         logger.error("")
-        logger.error("Please restore from backup:")
-        logger.error(f"  rm -rf {db_path} && mv {backup_path} {db_path}")
+
+        # Print recovery suggestions
+        print_recovery_suggestions(db_path, "schema_metadata")
+
         sys.exit(1)
 
 
