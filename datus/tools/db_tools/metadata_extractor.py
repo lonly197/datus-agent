@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 from datus.utils.loggings import get_logger
+from datus.utils.sql_utils import quote_identifier
 
 logger = get_logger(__name__)
 
@@ -102,11 +103,13 @@ class DuckDBMetadataExtractor(BaseMetadataExtractor):
         Uses pg_class.reltuples for approximate count (faster than COUNT(*)).
         """
         try:
+            safe_table = quote_identifier(table_name, "postgres")
+
             # Try approximate count from statistics first
             query = f"""
                 SELECT COALESCE(reltuples, 0)::BIGINT as row_count
                 FROM pg_class
-                WHERE relname = '{table_name}'
+                WHERE relname = {quote_identifier(table_name, "postgres")}
             """
 
             result = self.connector.execute_sql(query)
@@ -116,7 +119,7 @@ class DuckDBMetadataExtractor(BaseMetadataExtractor):
                     return row_count
 
             # Fallback to COUNT(*) if statistics not available
-            query = f"SELECT COUNT(*) as row_count FROM {table_name}"
+            query = f"SELECT COUNT(*) as row_count FROM {safe_table}"
             result = self.connector.execute_sql(query)
             if result and len(result) > 0:
                 return result[0].get("row_count", 0)
@@ -135,11 +138,13 @@ class DuckDBMetadataExtractor(BaseMetadataExtractor):
         import json
 
         try:
+            safe_table = quote_identifier(table_name, "postgres")
+
             # Get numeric columns first
             query = f"""
                 SELECT column_name, data_type
                 FROM information_schema.columns
-                WHERE table_name = '{table_name}'
+                WHERE table_name = {quote_identifier(table_name, "postgres")}
                 AND data_type IN ('INTEGER', 'BIGINT', 'FLOAT', 'DOUBLE', 'DECIMAL', 'NUMERIC')
             """
 
@@ -155,15 +160,16 @@ class DuckDBMetadataExtractor(BaseMetadataExtractor):
             stats = {}
             for col in numeric_columns:
                 try:
+                    safe_col = quote_identifier(col, "postgres")
                     query = f"""
                         SELECT
-                            MIN({col}) as min_val,
-                            MAX({col}) as max_val,
-                            AVG({col}) as mean_val,
-                            STDDEV({col}) as std_val
+                            MIN({safe_col}) as min_val,
+                            MAX({safe_col}) as max_val,
+                            AVG({safe_col}) as mean_val,
+                            STDDEV({safe_col}) as std_val
                         FROM (
-                            SELECT {col}
-                            FROM {table_name}
+                            SELECT {safe_col}
+                            FROM {safe_table}
                             LIMIT {sample_size}
                         )
                     """
@@ -196,6 +202,8 @@ class DuckDBMetadataExtractor(BaseMetadataExtractor):
         Uses DuckDB's information_schema to query foreign key constraints.
         """
         try:
+            safe_table = quote_identifier(table_name, "postgres")
+
             # Query foreign key constraints
             query = f"""
                 SELECT
@@ -208,7 +216,7 @@ class DuckDBMetadataExtractor(BaseMetadataExtractor):
                 JOIN information_schema.constraint_column_usage AS ccu
                     ON ccu.constraint_name = tc.constraint_name
                 WHERE tc.constraint_type = 'FOREIGN KEY'
-                AND tc.table_name = '{table_name}'
+                AND tc.table_name = {quote_identifier(table_name, "postgres")}
             """
 
             result = self.connector.execute_sql(query)
@@ -256,7 +264,7 @@ class SnowflakeMetadataExtractor(BaseMetadataExtractor):
             query = f"""
                 SELECT row_count
                 FROM SNOWFLAKE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS
-                WHERE table_name = '{table_name.upper()}'
+                WHERE table_name = {quote_identifier(table_name.upper(), "snowflake")}
                 ORDER BY last_altered DESC
                 LIMIT 1
             """
@@ -277,11 +285,15 @@ class SnowflakeMetadataExtractor(BaseMetadataExtractor):
         Note: Snowflake SAMPLE clause is efficient for large tables.
         """
         try:
+            safe_table = quote_identifier(table_name, "snowflake")
+            safe_db = quote_identifier(self.connector.database, "snowflake") if self.connector.database else ""
+            safe_schema = quote_identifier(self.connector.schema, "snowflake") if self.connector.schema else ""
+
             # Get numeric columns
             query = f"""
                 SELECT column_name, data_type
-                FROM {self.connector.database}.INFORMATION_SCHEMA.COLUMNS
-                WHERE table_name = '{table_name.upper()}'
+                FROM {safe_db}.INFORMATION_SCHEMA.COLUMNS
+                WHERE table_name = {quote_identifier(table_name.upper(), "snowflake")}
                 AND data_type IN ('NUMBER', 'FLOAT', 'DOUBLE', 'DECIMAL', 'NUMERIC')
             """
 
@@ -296,13 +308,15 @@ class SnowflakeMetadataExtractor(BaseMetadataExtractor):
             stats = {}
             for col in numeric_columns:
                 try:
+                    safe_col = quote_identifier(col, "snowflake")
+                    qualified_table = f"{safe_db}.{safe_schema}.{safe_table}" if safe_db and safe_schema else safe_table
                     query = f"""
                         SELECT
-                            MIN({col}) as min_val,
-                            MAX({col}) as max_val,
-                            AVG({col}) as mean_val,
-                            STDDEV({col}) as std_val
-                        FROM {self.connector.database}.{self.connector.schema}.{table_name}
+                            MIN({safe_col}) as min_val,
+                            MAX({safe_col}) as max_val,
+                            AVG({safe_col}) as mean_val,
+                            STDDEV({safe_col}) as std_val
+                        FROM {qualified_table}
                         SAMPLE ({sample_size} ROWS)
                     """
 
@@ -332,18 +346,20 @@ class SnowflakeMetadataExtractor(BaseMetadataExtractor):
         Detect foreign key relationships from Snowflake information_schema.
         """
         try:
+            safe_db = quote_identifier(self.connector.database, "snowflake") if self.connector.database else ""
+
             query = f"""
                 SELECT
                     kcu.column_name as from_column,
                     ccu.table_name as to_table,
                     ccu.column_name as to_column
-                FROM {self.connector.database}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS AS tc
-                JOIN {self.connector.database}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE AS kcu
+                FROM {safe_db}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS AS tc
+                JOIN {safe_db}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE AS kcu
                     ON tc.constraint_name = kcu.constraint_name
-                JOIN {self.connector.database}.INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE AS ccu
+                JOIN {safe_db}.INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE AS ccu
                     ON ccu.constraint_name = tc.constraint_name
                 WHERE tc.constraint_type = 'FOREIGN KEY'
-                AND tc.table_name = '{table_name.upper()}'
+                AND tc.table_name = {quote_identifier(table_name.upper(), "snowflake")}
             """
 
             result = self.connector.execute_sql(query)

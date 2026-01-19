@@ -30,6 +30,45 @@ from datus.utils.constants import DBType
 logger = get_logger(__name__)
 
 
+def detect_dialect_from_ddl(ddl: str) -> str:
+    """
+    Attempt to detect SQL dialect from DDL statement.
+
+    Uses keyword and type pattern matching to identify the most likely
+    database dialect from the DDL content.
+
+    Args:
+        ddl: DDL statement to analyze
+
+    Returns:
+        Detected dialect (defaults to "snowflake" if unable to determine)
+    """
+    ddl_upper = ddl.upper()
+
+    # Snowflake-specific patterns
+    if "VARIANT" in ddl_upper or "OBJECT" in ddl_upper or "ARRAY" in ddl_upper:
+        return "snowflake"
+
+    # DuckDB-specific patterns
+    if "DOUBLE" in ddl_upper or "UBIGINT" in ddl_upper or "HUGEINT" in ddl_upper:
+        return "duckdb"
+
+    # PostgreSQL-specific patterns
+    if "SERIAL" in ddl_upper or "BIGSERIAL" in ddl_upper or "MONEY" in ddl_upper:
+        return "postgres"
+
+    # MySQL-specific patterns
+    if "TINYINT" in ddl_upper or "MEDIUMINT" in ddl_upper or "AUTO_INCREMENT" in ddl_upper:
+        return "mysql"
+
+    # BigQuery-specific patterns
+    if "STRUCT" in ddl_upper or "INT64" in ddl_upper or "FLOAT64" in ddl_upper:
+        return "bigquery"
+
+    # Default to snowflake as it's commonly used
+    return "snowflake"
+
+
 def backup_database(db_path: str) -> str:
     """
     Create a backup of the LanceDB database.
@@ -98,8 +137,9 @@ def migrate_schema_storage(
                 table_type = row["table_type"]
                 definition = row["definition"]
 
-                # Parse enhanced metadata from DDL
-                enhanced_metadata = extract_enhanced_metadata_from_ddl(definition, dialect="snowflake")
+                # Parse enhanced metadata from DDL with dialect detection
+                detected_dialect = detect_dialect_from_ddl(definition)
+                enhanced_metadata = extract_enhanced_metadata_from_ddl(definition, dialect=detected_dialect)
 
                 # Extract comment information
                 table_comment = enhanced_metadata["table"].get("comment", "")

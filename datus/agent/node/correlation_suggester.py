@@ -165,7 +165,7 @@ def _columns_related(
     """
     # Check comment semantic similarity
     comment1 = column_comments.get(col1, "").lower()
-    comment2 = comment_comments.get(col2, "").lower()
+    comment2 = column_comments.get(col2, "").lower()
 
     # Extract keywords from comments
     keywords1 = set(comment1.split())
@@ -222,8 +222,10 @@ def _estimate_strength(stats1: Dict, stats2: Dict) -> str:
 
     # Check if means are within same order of magnitude
     mean1, mean2 = abs(stats1["mean"]), abs(stats2["mean"])
-    if mean1 == 0 or mean2 == 0:
-        ratio = 0
+    if mean1 == 0 and mean2 == 0:
+        return "weak"  # Both means are zero
+    elif mean1 == 0 or mean2 == 0:
+        return "weak"  # One mean is zero, incomparable scales
     else:
         ratio = max(mean1, mean2) / min(mean1, mean2)
 

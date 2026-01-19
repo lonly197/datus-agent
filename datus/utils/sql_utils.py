@@ -37,6 +37,34 @@ def parse_dialect(dialect: str = DBType.SNOWFLAKE) -> str:
     return dialect
 
 
+def quote_identifier(name: str, dialect: str = "duckdb") -> str:
+    """
+    Safely quote a SQL identifier using sqlglot.
+
+    This function prevents SQL injection by properly quoting identifiers
+    (table names, column names, etc.) according to the dialect's rules.
+
+    Args:
+        name: The identifier name to quote
+        dialect: SQL dialect (duckdb, postgres, snowflake, mysql, etc.)
+
+    Returns:
+        The safely quoted identifier
+
+    Examples:
+        >>> quote_identifier("users", "postgres")
+        '"users"'
+        >>> quote_identifier("order", "mysql")
+        '`order`'
+        >>> quote_identifier("table-with-dash", "snowflake")
+        '"table-with-dash"'
+    """
+    if not name:
+        return name
+    identifier = exp.Identifier(this=name, quoted=True)
+    return identifier.sql(dialect=dialect)
+
+
 def parse_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, Any]:
     """
     Parse SQL CREATE TABLE statement and return structured table and column information.

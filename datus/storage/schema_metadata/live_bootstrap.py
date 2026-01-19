@@ -25,6 +25,39 @@ from datus.configuration.business_term_config import infer_business_tags
 logger = get_logger(__name__)
 
 
+# Comprehensive system table prefixes for different databases
+SYSTEM_TABLE_PREFIXES = {
+    "information_schema",
+    "pg_",
+    "pg_catalog",
+    "pg_toast",
+    "mysql_",
+    "performance_schema",
+    "sys.",
+    "sqlite_",
+    "snowflake.",
+    "system$",
+    "__",
+}
+
+
+def is_system_table(table_name: str) -> bool:
+    """
+    Check if a table name matches system table patterns.
+
+    System tables are internal database tables that should be excluded
+    from metadata bootstrap operations.
+
+    Args:
+        table_name: The table name to check
+
+    Returns:
+        True if the table appears to be a system table
+    """
+    table_lower = table_name.lower()
+    return any(table_lower.startswith(prefix.lower()) for prefix in SYSTEM_TABLE_PREFIXES)
+
+
 async def bootstrap_database_metadata(
     storage: SchemaWithValueRAG,
     connector,
@@ -86,8 +119,9 @@ async def bootstrap_database_metadata(
         # Filter by catalog/database/schema if specified
         filtered_tables = []
         for table in all_tables:
-            # Skip system tables
-            if table.startswith("information_schema") or table.startswith("pg_") or table.startswith("sqlite_"):
+            # Skip system tables using comprehensive filter
+            if is_system_table(table):
+                logger.debug(f"Skipping system table: {table}")
                 continue
 
             # Apply filters if specified
