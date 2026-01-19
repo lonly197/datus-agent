@@ -292,7 +292,10 @@ def cleanup_v0_table(
     record_count = export_table_to_json(db, table_name, backup_path)
 
     if record_count == 0:
-        logger.warning("No records found to export")
+        if table_name in db.table_names():
+            logger.warning(f"Table '{table_name}' exists but is empty")
+        else:
+            logger.info(f"No table '{table_name}' found - this is normal for fresh installations or already migrated systems")
     else:
         logger.info(f"✅ Exported {record_count} records to {backup_path}")
     logger.info("")

@@ -233,7 +233,7 @@ def migrate_schema_storage(
             )
 
             if not all_data or len(all_data) == 0:
-                logger.info("No existing data found in schema storage")
+                logger.info("No existing data found in schema storage - creating empty v1 table (successful migration)")
                 return 0
 
             backup_records = all_data.to_pylist()
@@ -390,8 +390,13 @@ def verify_migration(storage: SchemaWithValueRAG) -> bool:
         )
 
         if len(all_data) == 0:
-            logger.warning("No records found for verification")
-            return False
+            # Check if v1 table exists (even if empty)
+            if schema_store.table_name in schema_store.db.table_names():
+                logger.info("✅ v1 table exists (empty) - migration completed successfully")
+                return True
+            else:
+                logger.warning("No records found for verification and table doesn't exist")
+                return False
 
         # Count versions
         import pyarrow as pa
