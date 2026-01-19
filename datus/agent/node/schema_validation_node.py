@@ -112,7 +112,12 @@ class SchemaValidationNode(Node, LLMMixin):
                 # Get database information for diagnostics
                 database_name = getattr(task, "database_name", "unknown")
                 namespace = getattr(self.agent_config, "current_namespace", "unknown") if self.agent_config else "unknown"
-                candidate_tables_count = len(context.get("candidate_tables", [])) if context else 0
+
+                # Get candidate_tables from workflow metadata (not context)
+                candidate_tables = []
+                if self.workflow and hasattr(self.workflow, "metadata") and self.workflow.metadata:
+                    candidate_tables = self.workflow.metadata.get("discovered_tables", [])
+                candidate_tables_count = len(candidate_tables)
 
                 # Enhanced logging before hard termination
                 logger.error("")
@@ -191,7 +196,9 @@ class SchemaValidationNode(Node, LLMMixin):
                         },
                         {
                             "title": "4. SQL Generated (May Contain Hallucinated Tables)",
-                            "sql_query": context.get("sql_query", "No SQL generated") if context else "No SQL generated",
+                            # SQL query would be in workflow.metadata after generate_sql node
+                            # Since schema validation runs before SQL generation, there's no SQL yet
+                            "sql_query": "No SQL generated (validation failed before SQL generation)",
                             "warning": "SQL was generated without schema context - table names may be incorrect"
                         },
                         {
