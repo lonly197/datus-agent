@@ -10,6 +10,7 @@ database connections (not from benchmark CSV files). Supports incremental update
 and parallel processing for large databases.
 """
 
+import argparse
 import asyncio
 import json
 import time
@@ -24,6 +25,71 @@ from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, parse_dial
 from datus.configuration.business_term_config import infer_business_tags
 
 logger = get_logger(__name__)
+
+
+def select_namespace_interactive(agent_config: AgentConfig, specified_namespace: Optional[str] = None) -> Optional[str]:
+    """
+    智能选择 namespace：
+    - 如果用户通过 --namespace 指定，使用指定的值
+    - 如果配置只有一个 namespace，自动使用
+    - 如果配置有多个 namespace，交互式选择
+    - 如果没有 namespace，返回 None（使用 base path）
+
+    Returns:
+        namespace name 或 None（表示使用 base path）
+    """
+    from rich.console import Console
+    from rich.prompt import Prompt
+    from rich.table import Table
+
+    console = Console()
+
+    # 情况1: 用户已显式指定
+    if specified_namespace:
+        return specified_namespace
+
+    # 情况2: 没有配置任何 namespace
+    if not agent_config.namespaces:
+        console.print("[yellow]⚠️  No namespaces found in configuration[/]")
+        console.print("[yellow]Please configure namespaces in your agent.yml[/]")
+        return None
+
+    namespaces = list(agent_config.namespaces.keys())
+
+    # 情况3: 只有一个 namespace，自动使用
+    if len(namespaces) == 1:
+        selected = namespaces[0]
+        console.print(f"[green]✓ Auto-selected namespace: {selected}[/]")
+        return selected
+
+    # 情况4: 多个 namespace，交互式选择
+    console.print("\n[bold cyan]Available Namespaces:[/]\n")
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("No.", style="dim", width=3)
+    table.add_column("Namespace", style="green")
+    table.add_column("Type", style="blue")
+    table.add_column("Databases", style="yellow")
+
+    for i, ns_name in enumerate(namespaces, 1):
+        db_configs = agent_config.namespaces[ns_name]
+        first_db = list(db_configs.values())[0]
+        db_type = first_db.type
+        db_count = len(db_configs)
+
+        table.add_row(str(i), ns_name, db_type, f"{db_count} db(s)")
+
+    console.print(table)
+
+    choice = Prompt.ask(
+        "[bold cyan]Select namespace[/]",
+        choices=[str(i) for i in range(1, len(namespaces) + 1)],
+        default="1"
+    )
+
+    selected = namespaces[int(choice) - 1]
+    console.print(f"[green]✓ Selected namespace: {selected}[/]")
+    return selected
 
 
 # Comprehensive system table prefixes for different databases
@@ -475,6 +541,7 @@ async def main():
 
     parser = argparse.ArgumentParser(description="Bootstrap metadata from live database")
     parser.add_argument("--config", required=True, help="Path to agent configuration file")
+    parser.add_argument("--namespace", help="Namespace for the database (optional: will prompt if not specified and multiple namespaces exist)")
     parser.add_argument("--catalog", default="", help="Catalog name filter")
     parser.add_argument("--database", default="", help="Database name filter")
     parser.add_argument("--schema", default="", help="Schema name filter")
@@ -493,11 +560,19 @@ async def main():
         logger.error(f"Failed to load agent configuration: {e}")
         return
 
+    # 智能选择 namespace（交互式或自动）
+    namespace = select_namespace_interactive(agent_config, args.namespace)
+    if not namespace:
+        logger.error("No namespace configured. Please configure namespaces in your agent.yml")
+        return
+
+    agent_config.current_namespace = namespace
+
     # Get database connector
     try:
         from datus.tools.db_tools.db_manager import get_db_manager
         db_manager = get_db_manager()
-        connector = db_manager.get_conn(agent_config.current_namespace, args.database or agent_config.database_name)
+        connector = db_manager.get_conn(namespace, args.database or agent_config.database_name)
 
         if not connector:
             logger.error(f"Failed to get database connector for {args.database}")

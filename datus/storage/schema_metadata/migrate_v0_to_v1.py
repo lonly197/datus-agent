@@ -19,6 +19,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.agent_config_loader import load_agent_config
@@ -29,6 +30,78 @@ from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, parse_dial
 from datus.utils.constants import DBType
 
 logger = get_logger(__name__)
+
+
+def select_namespace_interactive(agent_config: AgentConfig, specified_namespace: Optional[str] = None) -> Optional[str]:
+    """
+    智能选择 namespace：
+    - 如果用户通过 --namespace 指定，使用指定的值
+    - 如果配置只有一个 namespace，自动使用
+    - 如果配置有多个 namespace，交互式选择
+    - 如果没有 namespace，返回 None（使用 base path）
+
+    Returns:
+        namespace name 或 None（表示使用 base path）
+    """
+    from rich.console import Console
+    from rich.prompt import Prompt
+    from rich.table import Table
+
+    console = Console()
+
+    # 情况1: 用户已显式指定
+    if specified_namespace:
+        return specified_namespace
+
+    # 情况2: 没有配置任何 namespace
+    if not agent_config.namespaces:
+        console.print("[yellow]⚠️  No namespaces found in configuration[/]")
+        console.print("[yellow]Will use base storage path (Schema-only migration)[/]")
+        return None
+
+    namespaces = list(agent_config.namespaces.keys())
+
+    # 情况3: 只有一个 namespace，自动使用
+    if len(namespaces) == 1:
+        selected = namespaces[0]
+        console.print(f"[green]✓ Auto-selected namespace: {selected}[/]")
+        return selected
+
+    # 情况4: 多个 namespace，交互式选择
+    console.print("\n[bold cyan]Available Namespaces:[/]\n")
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("No.", style="dim", width=3)
+    table.add_column("Namespace", style="green")
+    table.add_column("Type", style="blue")
+    table.add_column("Databases", style="yellow")
+
+    for i, ns_name in enumerate(namespaces, 1):
+        db_configs = agent_config.namespaces[ns_name]
+        first_db = list(db_configs.values())[0]
+        db_type = first_db.type
+        db_count = len(db_configs)
+
+        table.add_row(str(i), ns_name, db_type, f"{db_count} db(s)")
+
+    console.print(table)
+
+    # 添加"无 namespace"选项
+    console.print("[dim]0. No namespace (Schema-only migration)[/]\n")
+
+    choice = Prompt.ask(
+        "[bold cyan]Select namespace[/]",
+        choices=[str(i) for i in range(len(namespaces) + 1)],
+        default="1"
+    )
+
+    if choice == "0":
+        console.print("[yellow]Selected: Schema-only migration (base path)[/]")
+        return None
+    else:
+        selected = namespaces[int(choice) - 1]
+        console.print(f"[green]✓ Selected namespace: {selected}[/]")
+        return selected
 
 
 def detect_dialect_from_ddl(ddl: str) -> str:
@@ -357,7 +430,7 @@ def main():
     """Main migration function."""
     parser = argparse.ArgumentParser(description="Migrate LanceDB schema from v0 to v1")
     parser.add_argument("--config", required=True, help="Path to agent configuration file")
-    parser.add_argument("--namespace", help="Namespace for the database (required if --db-path not specified)")
+    parser.add_argument("--namespace", help="Namespace for the database (optional: will prompt if not specified and multiple namespaces exist)")
     parser.add_argument("--db-path", help="Override database path (default: from config)")
     parser.add_argument("--extract-statistics", type=str_to_bool, default=False, help="Extract column statistics (expensive)")
     parser.add_argument("--extract-relationships", type=str_to_bool, default=True, help="Extract relationship metadata")
@@ -376,16 +449,19 @@ def main():
     # Determine database path
     if args.db_path:
         db_path = args.db_path
-    elif args.namespace:
-        # Set namespace first, then get storage path
-        agent_config.current_namespace = args.namespace
-        db_path = agent_config.rag_storage_path()
+        namespace = None
     else:
-        # No namespace specified - use base storage path
-        # This migrates the base lancedb directory (used for cross-namespace metadata)
-        db_path = os.path.join(agent_config.rag_base_path, "lancedb")
-        logger.warning(f"No namespace specified. Using base storage path: {db_path}")
-        logger.warning("To migrate namespace-specific metadata, use --namespace <name>")
+        # 智能选择 namespace（交互式或自动）
+        namespace = select_namespace_interactive(agent_config, args.namespace)
+
+        if namespace:
+            # 设置 namespace 并获取存储路径
+            agent_config.current_namespace = namespace
+            db_path = agent_config.rag_storage_path()
+        else:
+            # 使用 base storage path (Schema-only migration)
+            db_path = os.path.join(agent_config.rag_base_path, "lancedb")
+            logger.info("Using base storage path (Schema-only migration)")
 
     logger.info("=" * 80)
     logger.info("LanceDB Schema Migration: v0 → v1")
@@ -403,17 +479,17 @@ def main():
 
     # Initialize storage
     try:
-        if args.namespace:
+        if namespace:
             # Use SchemaWithValueRAG with namespace (requires namespace to be set)
-            agent_config.current_namespace = args.namespace
             storage = SchemaWithValueRAG(agent_config)
             schema_store = storage.schema_store
-            logger.info(f"✅ Storage initialized for namespace: {args.namespace}")
+            logger.info(f"✅ Storage initialized for namespace: {namespace}")
         else:
             # Use SchemaStorage directly with base db_path (no namespace required)
             embedding_model = get_db_embedding_model()
             schema_store = SchemaStorage(db_path=db_path, embedding_model=embedding_model)
-            logger.info("✅ Storage initialized (base path, no namespace)")
+            storage = None
+            logger.info("✅ Storage initialized (base path, Schema-only migration)")
         logger.info("")
     except Exception as e:
         logger.error(f"Failed to initialize storage: {e}")
@@ -438,8 +514,8 @@ def main():
                 logger.info("")
                 logger.info("To re-run:")
                 logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --force")
-                if args.namespace:
-                    logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --namespace {args.namespace} --force")
+                if namespace:
+                    logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --namespace {namespace} --force")
                 sys.exit(0)
     except Exception as e:
         logger.debug(f"Could not check migration status: {e}")
@@ -460,7 +536,7 @@ def main():
         logger.info("")
 
         # Migrate schema value storage and verify (only if namespace provided)
-        if args.namespace and storage:
+        if namespace and storage:
             # Migrate schema value storage
             logger.info("Step 2/3: Checking schema value storage...")
             migrated_values = migrate_schema_value_storage(storage)
