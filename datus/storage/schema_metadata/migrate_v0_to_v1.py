@@ -212,7 +212,9 @@ def migrate_schema_storage(
         db.drop_table(table_name)
         logger.info(f"Dropped table {table_name}")
 
-        # CRITICAL: Reset the initialization flag so _ensure_table_ready() will recreate the table
+        # CRITICAL: Reset both the table reference and initialization flag
+        # This forces _ensure_table_ready() to create a fresh table with the v1 schema
+        storage.table = None
         storage._table_initialized = False
 
         # Step 4: Create new v1 table
