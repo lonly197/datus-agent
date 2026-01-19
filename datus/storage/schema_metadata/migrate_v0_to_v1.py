@@ -51,6 +51,30 @@ def select_namespace_interactive(agent_config: AgentConfig, specified_namespace:
 
     # 情况1: 用户已显式指定
     if specified_namespace:
+        # Validate that the specified namespace exists in configuration
+        if not agent_config.namespaces or specified_namespace not in agent_config.namespaces:
+            console.print("")
+            console.print("[red]" + "=" * 80 + "[/]")
+            console.print("[red]NAMESPACE NOT FOUND IN CONFIGURATION[/]")
+            console.print("[red]" + "=" * 80 + "[/]")
+            console.print("")
+            console.print(f"[red]Namespace '{specified_namespace}' does not exist in agent configuration[/]")
+            console.print("")
+            if agent_config.namespaces:
+                console.print("[yellow]Available namespaces:[/]")
+                for ns in agent_config.namespaces.keys():
+                    console.print(f"  [cyan]{ns}[/]")
+            else:
+                console.print("[yellow]No namespaces configured in agent.yml[/]")
+            console.print("")
+            console.print("[yellow]To fix this issue:[/]")
+            console.print("  1. Check that the namespace is correctly configured in agent.yml")
+            console.print("  2. Use --namespace with a valid namespace name")
+            console.print("  3. Or add the namespace configuration to agent.yml")
+            console.print("")
+            console.print("[red]" + "=" * 80 + "[/]")
+            console.print("")
+            sys.exit(1)
         return specified_namespace
 
     # 情况2: 没有配置任何 namespace
