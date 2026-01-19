@@ -745,6 +745,8 @@ def import_schema_metadata(agent_config: AgentConfig, namespace: str) -> int:
         logger.info(f"Importing schema metadata for namespace: {namespace}")
 
         # Validate namespace exists in config
+        # Note: This check validates agent_config.namespaces, but DBManager also
+        # needs to be initialized with the same config (see get_db_manager call below)
         if not agent_config.namespaces or namespace not in agent_config.namespaces:
             logger.error("")
             logger.error("=" * 80)
@@ -771,8 +773,8 @@ def import_schema_metadata(agent_config: AgentConfig, namespace: str) -> int:
         agent_config.current_namespace = namespace
         storage = SchemaWithValueRAG(agent_config)
 
-        # Get database manager
-        db_manager = get_db_manager()
+        # Get database manager - MUST pass namespaces configuration
+        db_manager = get_db_manager(agent_config.namespaces)
 
         # Import schemas from all databases
         # Use 'overwrite' mode to ensure full import for fresh installations

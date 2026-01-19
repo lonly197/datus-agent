@@ -636,8 +636,8 @@ def main():
 
     storage = SchemaWithValueRAG(agent_config)
 
-    # Get database manager
-    db_manager = get_db_manager()
+    # Get database manager - MUST pass namespaces configuration
+    db_manager = get_db_manager(agent_config.namespaces)
 
     # Import schemas
     try:
