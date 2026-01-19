@@ -22,6 +22,7 @@ from pathlib import Path
 
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.agent_config_loader import load_agent_config
+from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata import SchemaStorage, SchemaWithValueRAG
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, parse_dialect
@@ -356,6 +357,7 @@ def main():
     """Main migration function."""
     parser = argparse.ArgumentParser(description="Migrate LanceDB schema from v0 to v1")
     parser.add_argument("--config", required=True, help="Path to agent configuration file")
+    parser.add_argument("--namespace", help="Namespace for the database (required if --db-path not specified)")
     parser.add_argument("--db-path", help="Override database path (default: from config)")
     parser.add_argument("--extract-statistics", type=str_to_bool, default=False, help="Extract column statistics (expensive)")
     parser.add_argument("--extract-relationships", type=str_to_bool, default=True, help="Extract relationship metadata")
@@ -372,7 +374,18 @@ def main():
         sys.exit(1)
 
     # Determine database path
-    db_path = args.db_path or agent_config.rag_storage_path()
+    if args.db_path:
+        db_path = args.db_path
+    elif args.namespace:
+        # Set namespace first, then get storage path
+        agent_config.current_namespace = args.namespace
+        db_path = agent_config.rag_storage_path()
+    else:
+        # No namespace specified - use base storage path
+        # This migrates the base lancedb directory (used for cross-namespace metadata)
+        db_path = os.path.join(agent_config.rag_base_path, "lancedb")
+        logger.warning(f"No namespace specified. Using base storage path: {db_path}")
+        logger.warning("To migrate namespace-specific metadata, use --namespace <name>")
 
     logger.info("=" * 80)
     logger.info("LanceDB Schema Migration: v0 → v1")
@@ -390,9 +403,17 @@ def main():
 
     # Initialize storage
     try:
-        storage_cache = get_storage_cache_instance(agent_config)
-        storage = SchemaWithValueRAG(agent_config)
-        logger.info("✅ Storage initialized")
+        if args.namespace:
+            # Use SchemaWithValueRAG with namespace (requires namespace to be set)
+            agent_config.current_namespace = args.namespace
+            storage = SchemaWithValueRAG(agent_config)
+            schema_store = storage.schema_store
+            logger.info(f"✅ Storage initialized for namespace: {args.namespace}")
+        else:
+            # Use SchemaStorage directly with base db_path (no namespace required)
+            embedding_model = get_db_embedding_model()
+            schema_store = SchemaStorage(db_path=db_path, embedding_model=embedding_model)
+            logger.info("✅ Storage initialized (base path, no namespace)")
         logger.info("")
     except Exception as e:
         logger.error(f"Failed to initialize storage: {e}")
@@ -400,7 +421,6 @@ def main():
 
     # Check if migration already run
     try:
-        schema_store = storage.schema_store
         schema_store._ensure_table_ready()
 
         # Check for metadata_version field
@@ -417,7 +437,9 @@ def main():
                 logger.warning("Use --force to re-run migration")
                 logger.info("")
                 logger.info("To re-run:")
-                logger.info(f"  python {__file__} --config {args.config} --force")
+                logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --force")
+                if args.namespace:
+                    logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --namespace {args.namespace} --force")
                 sys.exit(0)
     except Exception as e:
         logger.debug(f"Could not check migration status: {e}")
@@ -427,33 +449,64 @@ def main():
     logger.info("")
 
     try:
-        # Migrate schema storage
+        # Migrate schema storage (always done)
         logger.info("Step 1/3: Migrating schema metadata...")
         migrated_schemas = migrate_schema_storage(
-            storage.schema_store,
+            schema_store,
             extract_statistics=args.extract_statistics,
             extract_relationships=args.extract_relationships
         )
         logger.info(f"✅ Migrated {migrated_schemas} schema records")
         logger.info("")
 
-        # Migrate schema value storage
-        logger.info("Step 2/3: Checking schema value storage...")
-        migrated_values = migrate_schema_value_storage(storage)
-        logger.info(f"✅ Schema value storage: {migrated_values} records (v1 compatible)")
-        logger.info("")
+        # Migrate schema value storage and verify (only if namespace provided)
+        if args.namespace and storage:
+            # Migrate schema value storage
+            logger.info("Step 2/3: Checking schema value storage...")
+            migrated_values = migrate_schema_value_storage(storage)
+            logger.info(f"✅ Schema value storage: {migrated_values} records (v1 compatible)")
+            logger.info("")
 
-        # Verify migration
-        logger.info("Step 3/3: Verifying migration...")
-        success = verify_migration(storage)
+            # Verify migration
+            logger.info("Step 3/3: Verifying migration...")
+            success = verify_migration(storage)
 
-        if success:
+            if success:
+                logger.info("")
+                logger.info("=" * 80)
+                logger.info("✅ MIGRATION SUCCESSFUL")
+                logger.info("=" * 80)
+                logger.info(f"Schema metadata: {migrated_schemas} records upgraded to v1")
+                logger.info(f"Schema value storage: {migrated_values} records")
+                logger.info("")
+                logger.info("Next steps:")
+                logger.info("1. Test the system with enhanced metadata")
+                logger.info("2. Verify schema discovery precision improvements")
+                logger.info("3. If issues arise, restore from backup:")
+                logger.info(f"   rm -rf {db_path} && mv {backup_path} {db_path}")
+                sys.exit(0)
+            else:
+                logger.error("")
+                logger.error("=" * 80)
+                logger.error("❌ MIGRATION VERIFICATION FAILED")
+                logger.error("=" * 80)
+                logger.error("Please check the logs above for details")
+                sys.exit(1)
+        else:
+            # No namespace - schema migration only
+            logger.info("Step 2/3: Skipped (schema value storage requires --namespace)")
+            logger.info("")
+            logger.info("Step 3/3: Skipped (verification requires --namespace)")
             logger.info("")
             logger.info("=" * 80)
-            logger.info("✅ MIGRATION SUCCESSFUL")
+            logger.info("✅ SCHEMA METADATA MIGRATION SUCCESSFUL")
             logger.info("=" * 80)
             logger.info(f"Schema metadata: {migrated_schemas} records upgraded to v1")
-            logger.info(f"Schema value storage: {migrated_values} records")
+            logger.info("")
+            logger.info("Note: Schema value storage was not migrated.")
+            logger.info("To migrate schema value storage, re-run with --namespace:")
+            if args.config:
+                logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --namespace <name> --force")
             logger.info("")
             logger.info("Next steps:")
             logger.info("1. Test the system with enhanced metadata")
@@ -461,13 +514,6 @@ def main():
             logger.info("3. If issues arise, restore from backup:")
             logger.info(f"   rm -rf {db_path} && mv {backup_path} {db_path}")
             sys.exit(0)
-        else:
-            logger.error("")
-            logger.error("=" * 80)
-            logger.error("❌ MIGRATION VERIFICATION FAILED")
-            logger.error("=" * 80)
-            logger.error("Please check the logs above for details")
-            sys.exit(1)
 
     except Exception as e:
         logger.error(f"Migration failed: {e}")
