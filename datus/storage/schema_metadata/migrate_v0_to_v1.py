@@ -259,26 +259,24 @@ def migrate_schema_storage(
                     "last_updated": int(time.time())
                 }
 
-                # Generate embedding
-                embedded_data = storage._embed_and_prepare(update_data)
-
-                batch_updates.append(embedded_data)
+                # LanceDB handles embedding automatically via table's embedding function config
+                batch_updates.append(update_data)
                 migrated_count += 1
 
                 # Batch update
                 if len(batch_updates) >= batch_size:
                     # Delete old records and insert new ones
-                    for embedded in batch_updates:
+                    for data in batch_updates:
                         from datus.storage.lancedb_conditions import build_where, eq, and_
                         from datus.storage.schema_metadata.store import _build_where_clause
 
                         where_clause = build_where(
                             _build_where_clause(
-                                table_name=embedded["table_name"],
-                                catalog_name=embedded["catalog_name"],
-                                database_name=embedded["database_name"],
-                                schema_name=embedded["schema_name"],
-                                table_type=embedded["table_type"]
+                                table_name=data["table_name"],
+                                catalog_name=data["catalog_name"],
+                                database_name=data["database_name"],
+                                schema_name=data["schema_name"],
+                                table_type=data["table_type"]
                             )
                         )
                         storage.table.delete(where_clause)
@@ -293,17 +291,17 @@ def migrate_schema_storage(
 
         # Flush remaining records
         if batch_updates:
-            for embedded in batch_updates:
+            for data in batch_updates:
                 from datus.storage.lancedb_conditions import build_where
                 from datus.storage.schema_metadata.store import _build_where_clause
 
                 where_clause = build_where(
                     _build_where_clause(
-                        table_name=embedded["table_name"],
-                        catalog_name=embedded["catalog_name"],
-                        database_name=embedded["database_name"],
-                        schema_name=embedded["schema_name"],
-                        table_type=embedded["table_type"]
+                        table_name=data["table_name"],
+                        catalog_name=data["catalog_name"],
+                        database_name=data["database_name"],
+                        schema_name=data["schema_name"],
+                        table_type=data["table_type"]
                     )
                 )
                 storage.table.delete(where_clause)
