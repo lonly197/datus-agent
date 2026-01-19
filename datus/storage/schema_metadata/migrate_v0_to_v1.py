@@ -32,6 +32,54 @@ from datus.utils.constants import DBType
 logger = get_logger(__name__)
 
 
+def ensure_v1_columns(storage: SchemaStorage) -> bool:
+    """
+    Ensure the schema_metadata table has all v1 columns.
+
+    Uses LanceDB's add_columns() API to add missing v1 fields to existing v0 tables.
+
+    Args:
+        storage: SchemaStorage instance
+
+    Returns:
+        True if columns were added or already exist, False on error
+    """
+    try:
+        existing_schema = storage.table.schema
+        existing_fields = {field.name for field in existing_schema}
+
+        # v1 columns that need to be added
+        import pyarrow as pa
+        v1_columns = {
+            "table_comment": pa.string(),
+            "column_comments": pa.string(),
+            "business_tags": pa.list_(pa.string()),
+            "row_count": pa.int64(),
+            "sample_statistics": pa.string(),
+            "relationship_metadata": pa.string(),
+            "metadata_version": pa.int32(),
+            "last_updated": pa.int64(),
+        }
+
+        # Find missing columns
+        missing_columns = {name: dtype for name, dtype in v1_columns.items() if name not in existing_fields}
+
+        if missing_columns:
+            logger.info(f"Adding {len(missing_columns)} missing v1 columns to schema_metadata table")
+            for col_name, col_type in missing_columns.items():
+                logger.debug(f"Adding column: {col_name} ({col_type})")
+            storage.table.add_columns(missing_columns)
+            logger.info("Successfully added v1 columns to schema_metadata table")
+            return True
+        else:
+            logger.info("All v1 columns already exist in schema_metadata table")
+            return True
+
+    except Exception as e:
+        logger.error(f"Failed to add v1 columns: {e}")
+        return False
+
+
 def select_namespace_interactive(agent_config: AgentConfig, specified_namespace: Optional[str] = None) -> Optional[str]:
     """
     智能选择 namespace：
@@ -184,6 +232,14 @@ def migrate_schema_storage(
     """
     try:
         storage._ensure_table_ready()
+
+        # Add v1 columns to existing v0 table
+        if not ensure_v1_columns(storage):
+            from datus.exceptions import DatusException, ErrorCode
+            raise DatusException(
+                ErrorCode.STORAGE_TABLE_OPERATION_FAILED,
+                message="Failed to add v1 columns to schema_metadata table"
+            )
 
         # Get all existing records (v0 format)
         all_data = storage._search_all(
