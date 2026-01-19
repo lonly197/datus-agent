@@ -60,7 +60,7 @@ class DeepResearchEventConverter:
             "content": "执行SQL并验证结果",
             "node_types": ["execute_sql", "sql_execution", "sql_validate", "result_validation"],
         },
-        {"id": "step_reflect", "content": "自我纠正与优化", "node_types": ["reflect", "reflection_analysis", "output"]},
+        {"id": "step_reflect", "content": "自我纠正与优化", "node_types": ["reflect", "reflection_analysis", "output", "output_generation"]},
     ]
 
     def __init__(self):
@@ -2055,7 +2055,7 @@ class DeepResearchEventConverter:
                     events.append(
                         ChatEvent(
                             id=f"{event_id}_report",
-                            planId=todo_id if todo_id else None,
+                            planId=self._get_unified_plan_id(action, force_associate=True),
                             timestamp=timestamp,
                             content=report,
                         )
@@ -2066,8 +2066,8 @@ class DeepResearchEventConverter:
                 report_data = action.output.get("html_content", "")
                 # Create ReportEvent if we have either url or data
                 if report_url or report_data:
-                    # ReportEvent should use todo_id if related to a specific todo
-                    report_plan_id = todo_id if todo_id else None
+                    # ReportEvent should use unified planId strategy to bind to virtual steps
+                    report_plan_id = self._get_unified_plan_id(action, force_associate=True)
                     events.append(
                         ReportEvent(
                             id=event_id, planId=report_plan_id, timestamp=timestamp, url=report_url, data=report_data
