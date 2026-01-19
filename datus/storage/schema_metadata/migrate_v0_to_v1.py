@@ -720,6 +720,29 @@ def import_schema_metadata(agent_config: AgentConfig, namespace: str) -> int:
         logger.info("=" * 80)
         logger.info(f"Importing schema metadata for namespace: {namespace}")
 
+        # Validate namespace exists in config
+        if not agent_config.namespaces or namespace not in agent_config.namespaces:
+            logger.error("")
+            logger.error("=" * 80)
+            logger.error("NAMESPACE NOT FOUND IN CONFIGURATION")
+            logger.error("=" * 80)
+            logger.error(f"Namespace '{namespace}' does not exist in agent configuration")
+            logger.error("")
+            if agent_config.namespaces:
+                logger.error("Available namespaces:")
+                for ns in agent_config.namespaces.keys():
+                    logger.error(f"  - {ns}")
+            else:
+                logger.error("No namespaces configured in agent.yml")
+            logger.error("")
+            logger.error("To fix this issue:")
+            logger.error("  1. Check that the namespace is correctly configured in agent.yml")
+            logger.error("  2. Use --namespace with a valid namespace name")
+            logger.error("  3. Or add the namespace configuration to agent.yml")
+            logger.error("=" * 80)
+            logger.error("")
+            return 0
+
         # Initialize storage with namespace
         agent_config.current_namespace = namespace
         storage = SchemaWithValueRAG(agent_config)
@@ -763,10 +786,11 @@ def import_schema_metadata(agent_config: AgentConfig, namespace: str) -> int:
         logger.info("  1. Database connection parameters in agent.yml")
         logger.info("  2. Database is accessible and contains tables")
         logger.info("  3. Credentials are valid")
+        logger.info("  4. Namespace exists in configuration")
         logger.info("")
         logger.info("To run schema import separately:")
         logger.info(f"  python -m datus.storage.schema_metadata.local_init \\")
-        logger.info(f"    --config={agent_config.config_path} --namespace={namespace}")
+        logger.info(f"    --config=<config_path> --namespace={namespace}")
         logger.info("=" * 80)
         return 0
 
