@@ -696,6 +696,81 @@ def str_to_bool(v):
         raise argparse.ArgumentTypeError(f'Boolean value expected, got: {v}')
 
 
+def import_schema_metadata(agent_config: AgentConfig, namespace: str) -> int:
+    """
+    Import schema metadata from database into LanceDB after migration.
+
+    This function populates the empty v1 table with actual schema data
+    from the configured database(s). It uses the same import logic as
+    the local_init module.
+
+    Args:
+        agent_config: Agent configuration with database settings
+        namespace: Namespace to import schemas for
+
+    Returns:
+        Number of schemas imported
+    """
+    try:
+        from datus.storage.schema_metadata.local_init import init_local_schema
+        from datus.tools.db_tools.db_manager import get_db_manager
+
+        logger.info("=" * 80)
+        logger.info("SCHEMA IMPORT")
+        logger.info("=" * 80)
+        logger.info(f"Importing schema metadata for namespace: {namespace}")
+
+        # Initialize storage with namespace
+        agent_config.current_namespace = namespace
+        storage = SchemaWithValueRAG(agent_config)
+
+        # Get database manager
+        db_manager = get_db_manager()
+
+        # Import schemas from all databases
+        # Use 'overwrite' mode to ensure full import for fresh installations
+        init_local_schema(
+            storage,
+            agent_config,
+            db_manager,
+            build_mode='overwrite',  # Force full import
+            table_type='full',  # Import both tables and views
+            pool_size=4
+        )
+
+        # Verify import was successful
+        schema_store = storage.schema_store
+        schema_store._ensure_table_ready()
+
+        all_data = schema_store._search_all(
+            where=None,
+            select_fields=["identifier"]
+        )
+
+        imported_count = len(all_data)
+
+        logger.info("")
+        logger.info(f"✅ Schema import completed: {imported_count} schemas imported")
+        logger.info("=" * 80)
+        logger.info("")
+
+        return imported_count
+
+    except Exception as e:
+        logger.error(f"Schema import failed: {e}")
+        logger.info("")
+        logger.info("To diagnose the issue, check:")
+        logger.info("  1. Database connection parameters in agent.yml")
+        logger.info("  2. Database is accessible and contains tables")
+        logger.info("  3. Credentials are valid")
+        logger.info("")
+        logger.info("To run schema import separately:")
+        logger.info(f"  python -m datus.storage.schema_metadata.local_init \\")
+        logger.info(f"    --config={agent_config.config_path} --namespace={namespace}")
+        logger.info("=" * 80)
+        return 0
+
+
 def print_recovery_suggestions(db_path: str, table_name: str = "schema_metadata"):
     """
     Print recovery suggestions based on common migration failure scenarios.
@@ -781,6 +856,7 @@ def main():
     parser.add_argument("--backup-path", help="Path to backup JSON file from cleanup script")
     parser.add_argument("--skip-backup", action="store_true", help="Skip backup creation")
     parser.add_argument("--force", action="store_true", help="Force migration even if v1 already exists")
+    parser.add_argument("--import-schemas", action="store_true", help="Import schema metadata from database after migration (recommended for fresh installations)")
 
     args = parser.parse_args()
 
@@ -904,12 +980,65 @@ def main():
                 logger.info(f"Schema metadata: {migrated_schemas} records upgraded to v1")
                 logger.info(f"Schema value storage: {migrated_values} records")
                 logger.info("")
-                logger.info("Next steps:")
-                logger.info("1. Test the system with enhanced metadata")
-                logger.info("2. Verify schema discovery precision improvements")
-                logger.info("3. If issues arise, restore from backup:")
-                logger.info(f"   rm -rf {db_path} && mv {backup_path} {db_path}")
-                sys.exit(0)
+
+                # Import schema metadata if requested
+                if args.import_schemas:
+                    logger.info("Step 4/4: Importing schema metadata from database...")
+                    imported_count = import_schema_metadata(agent_config, namespace)
+
+                    if imported_count > 0:
+                        logger.info("")
+                        logger.info("=" * 80)
+                        logger.info("✅ MIGRATION + IMPORT COMPLETE")
+                        logger.info("=" * 80)
+                        logger.info(f"Schema metadata: {migrated_schemas} records upgraded to v1")
+                        logger.info(f"Schema import: {imported_count} schemas imported from database")
+                        logger.info("")
+                        logger.info("Your system is now ready for text2sql queries!")
+                        logger.info("")
+                        logger.info("To verify the import:")
+                        logger.info(f"  python -c \"")
+                        logger.info(f"    from datus.storage.schema_metadata import SchemaStorage")
+                        logger.info(f"    from datus.configuration.agent_config_loader import load_agent_config")
+                        logger.info(f"    config = load_agent_config('{args.config}')")
+                        logger.info(f"    config.current_namespace = '{namespace}'")
+                        logger.info(f"    storage = SchemaStorage(db_path=config.rag_storage_path())")
+                        logger.info(f"    print('Schema count:', len(storage._search_all(where=None)))")
+                        logger.info(f"  \"")
+                        logger.info("=" * 80)
+                        sys.exit(0)
+                    else:
+                        logger.warning("")
+                        logger.warning("Schema import returned 0 schemas. This may indicate:")
+                        logger.warning("  1. Database connection issues")
+                        logger.warning("  2. Database is empty (no tables)")
+                        logger.warning("  3. Namespace/database name mismatch")
+                        logger.warning("")
+                        logger.warning("The migration was successful, but schema import failed.")
+                        logger.warning("You can run schema import separately:")
+                        logger.warning(f"  python -m datus.storage.schema_metadata.local_init \\")
+                        logger.warning(f"    --config={args.config} --namespace={namespace}")
+                        logger.warning("")
+                        logger.warning("Or verify database connection:")
+                        logger.warning(f"  python -c \"")
+                        logger.warning(f"    from datus.tools.db_tools.db_manager import get_db_manager")
+                        logger.warning(f"    db = get_db_manager().get_conn('{namespace}', '<database_name>')")
+                        logger.warning(f"    print('Tables:', len(db.get_tables_with_ddl()))")
+                        logger.warning(f"  \"")
+                        logger.info("=" * 80)
+                        sys.exit(1)
+                else:
+                    logger.info("Next steps:")
+                    logger.info("1. Test the system with enhanced metadata")
+                    logger.info("2. Verify schema discovery precision improvements")
+                    logger.info("3. If this is a fresh installation, import schemas:")
+                    logger.info(f"   python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
+                    logger.info(f"     --config={args.config} --namespace={namespace} \\")
+                    logger.info(f"     --import-schemas --force")
+                    logger.info("")
+                    logger.info("4. If issues arise, restore from backup:")
+                    logger.info(f"   rm -rf {db_path} && mv {backup_path} {db_path}")
+                    sys.exit(0)
             else:
                 logger.error("")
                 logger.error("=" * 80)
@@ -936,6 +1065,13 @@ def main():
             logger.info("To migrate schema value storage, re-run with --namespace:")
             if args.config:
                 logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --namespace <name> --force")
+            logger.info("")
+            logger.info("Note: Schema import requires --namespace.")
+            logger.info("To import schemas after migration, run:")
+            if args.config:
+                logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
+                logger.info(f"    --config={args.config} --namespace <name> \\")
+                logger.info(f"    --import-schemas --force")
             logger.info("")
             logger.info("Next steps:")
             logger.info("1. Test the system with enhanced metadata")

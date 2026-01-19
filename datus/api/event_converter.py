@@ -173,6 +173,83 @@ class DeepResearchEventConverter:
 
         return "\n".join(lines)
 
+    def _format_diagnostic_report(self, report: Dict[str, Any]) -> str:
+        """Format schema discovery failure report for user display.
+
+        Args:
+            report: Diagnostic report dictionary from schema_validation_node
+
+        Returns:
+            Markdown formatted diagnostic report
+        """
+        lines = []
+
+        # Header
+        lines.append("## ❌ Schema Discovery Failure Report\n")
+        lines.append(f"**Report Type**: {report.get('report_type', 'Unknown')}\n")
+        lines.append(f"**Timestamp**: {report.get('timestamp', 'Unknown')}\n")
+        lines.append(f"**Database**: {report.get('database_name', 'Unknown')}\n")
+        lines.append(f"**Namespace**: {report.get('namespace', 'Unknown')}\n")
+        lines.append(f"**Task**: {report.get('task', 'Unknown')[:100]}...\n")
+
+        # Format sections
+        sections = report.get("sections", [])
+        for section in sections:
+            lines.append(f"### {section.get('title', 'Unknown Section')}\n")
+
+            # Handle different section types
+            if "findings" in section:
+                findings = section["findings"]
+                lines.append("**Findings**:")
+                for key, value in findings.items():
+                    lines.append(f"- **{key}**: {value}")
+                lines.append("")
+
+            elif "possible_causes" in section:
+                causes = section["possible_causes"]
+                lines.append("**Possible Causes**:")
+                for i, cause in enumerate(causes, 1):
+                    lines.append(f"{i}. {cause}")
+                lines.append("")
+
+            elif "steps" in section:
+                steps = section["steps"]
+                lines.append("**Steps**:")
+                for step in steps:
+                    lines.append(f"- {step}")
+                lines.append("")
+
+            elif "commands" in section:
+                commands = section["commands"]
+                lines.append("**Commands**:")
+                for cmd in commands:
+                    lines.append(f"```bash")
+                    lines.append(cmd)
+                    lines.append("```")
+                lines.append("")
+
+            elif "sql_query" in section:
+                lines.append(f"**SQL Query**: `{section.get('sql_query', 'No SQL generated')[:100]}`")
+                if "warning" in section:
+                    lines.append(f"\n⚠️ **Warning**: {section['warning']}")
+                lines.append("")
+
+            elif "recommendations" in section:
+                recommendations = section["recommendations"]
+                lines.append("**Recommendations**:")
+                for rec in recommendations:
+                    lines.append(f"- {rec}")
+                lines.append("")
+
+            else:
+                # Generic section handling
+                for key, value in section.items():
+                    if key != "title":
+                        lines.append(f"**{key}**: {value}")
+                lines.append("")
+
+        return "\n".join(lines)
+
     def _generate_sql_generation_report(
         self,
         sql_query: str,
@@ -1477,6 +1554,67 @@ class DeepResearchEventConverter:
                     error=action.status == ActionStatus.FAILED,
                 )
             )
+
+            # Check for schema discovery failure report and send as ChatEvent
+            if action.status == ActionStatus.FAILED and action.output and isinstance(action.output, dict):
+                diagnostic_report = action.output.get("diagnostic_report")
+                if diagnostic_report:
+                    report_content = self._format_diagnostic_report(diagnostic_report)
+                    events.append(
+                        ChatEvent(
+                            id=f"{event_id}_diagnostic",
+                            planId=schema_plan_id,
+                            timestamp=timestamp,
+                            content=report_content,
+                        )
+                    )
+
+        # Handle Schema Validation (convert to ToolCallEvent with diagnostic report on failure)
+        elif action.action_type == "schema_validation":
+            tool_call_id = str(uuid.uuid4())
+            # Ensure input is a dict
+            tool_input = {}
+            if action.input and isinstance(action.input, dict):
+                tool_input = action.input
+
+            # Use unified plan ID strategy (fix for Text2SQL workflow)
+            validation_plan_id = self._get_unified_plan_id(action, force_associate=True)
+
+            events.append(
+                ToolCallEvent(
+                    id=f"{event_id}_call",
+                    planId=validation_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    toolName="schema_validation",
+                    input=tool_input,
+                )
+            )
+
+            events.append(
+                ToolCallResultEvent(
+                    id=f"{event_id}_result",
+                    planId=validation_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    data=action.output,
+                    error=action.status == ActionStatus.FAILED,
+                )
+            )
+
+            # Check for schema discovery failure report and send as ChatEvent
+            if action.status == ActionStatus.FAILED and action.output and isinstance(action.output, dict):
+                diagnostic_report = action.output.get("diagnostic_report")
+                if diagnostic_report:
+                    report_content = self._format_diagnostic_report(diagnostic_report)
+                    events.append(
+                        ChatEvent(
+                            id=f"{event_id}_diagnostic",
+                            planId=validation_plan_id,
+                            timestamp=timestamp,
+                            content=report_content,
+                        )
+                    )
 
         # Handle Schema Linking
         elif action.action_type == "schema_linking" and action.status == ActionStatus.SUCCESS:

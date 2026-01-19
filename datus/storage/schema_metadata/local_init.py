@@ -574,3 +574,133 @@ def _fill_sample_rows(
             if not row.get("identifier"):
                 row["identifier"] = identifier
         new_values.extend(sample_rows)
+
+
+def main():
+    """CLI entry point for schema import.
+
+    Usage:
+        python -m datus.storage.schema_metadata.local_init --config=<config_path> --namespace=<namespace>
+    """
+    import argparse
+    import sys
+
+    from datus.configuration.agent_config_loader import load_agent_config
+    from datus.tools.db_tools.db_manager import get_db_manager
+
+    parser = argparse.ArgumentParser(description="Import schema metadata from database into LanceDB")
+    parser.add_argument("--config", required=True, help="Path to agent configuration file")
+    parser.add_argument("--namespace", help="Namespace for the database")
+    parser.add_argument("--database", help="Database name (optional, uses all databases if not specified)")
+    parser.add_argument("--catalog", default="", help="Catalog name (for StarRocks/Snowflake)")
+    parser.add_argument("--table-type", default="full", choices=["table", "view", "mv", "full"], help="Type of tables to import")
+    parser.add_argument("--build-mode", default="overwrite", choices=["overwrite", "append"], help="Build mode: overwrite or append")
+
+    args = parser.parse_args()
+
+    # Load agent configuration
+    try:
+        agent_config = load_agent_config(config=args.config)
+    except Exception as e:
+        logger.error(f"Failed to load agent configuration: {e}")
+        sys.exit(1)
+
+    # Determine namespace
+    namespace = args.namespace
+    if not namespace:
+        namespaces = list(agent_config.namespaces.keys()) if agent_config.namespaces else []
+        if len(namespaces) == 1:
+            namespace = namespaces[0]
+            logger.info(f"Auto-selected namespace: {namespace}")
+        elif len(namespaces) > 1:
+            logger.error(f"Multiple namespaces found: {namespaces}")
+            logger.error("Please specify --namespace")
+            sys.exit(1)
+        else:
+            logger.error("No namespaces found in configuration")
+            sys.exit(1)
+
+    # Set current namespace
+    agent_config.current_namespace = namespace
+
+    logger.info("=" * 80)
+    logger.info("SCHEMA IMPORT")
+    logger.info("=" * 80)
+    logger.info(f"Namespace: {namespace}")
+    logger.info(f"Table type: {args.table_type}")
+    logger.info(f"Build mode: {args.build_mode}")
+    logger.info("")
+
+    # Initialize storage
+    from datus.storage.schema_metadata import SchemaWithValueRAG
+
+    storage = SchemaWithValueRAG(agent_config)
+
+    # Get database manager
+    db_manager = get_db_manager()
+
+    # Import schemas
+    try:
+        init_local_schema(
+            storage,
+            agent_config,
+            db_manager,
+            build_mode=args.build_mode,
+            table_type=args.table_type,
+            init_catalog_name=args.catalog,
+            init_database_name=args.database or "",
+        )
+
+        # Verify import was successful
+        schema_store = storage.schema_store
+        schema_store._ensure_table_ready()
+
+        all_data = schema_store._search_all(
+            where=None,
+            select_fields=["identifier"]
+        )
+
+        imported_count = len(all_data)
+
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("✅ SCHEMA IMPORT COMPLETE")
+        logger.info("=" * 80)
+        logger.info(f"Total schemas imported: {imported_count}")
+        logger.info("")
+        logger.info("To verify the import:")
+        logger.info(f"  python -c \"")
+        logger.info(f"    from datus.storage.schema_metadata import SchemaStorage")
+        logger.info(f"    from datus.configuration.agent_config_loader import load_agent_config")
+        logger.info(f"    config = load_agent_config('{args.config}')")
+        logger.info(f"    config.current_namespace = '{namespace}'")
+        logger.info(f"    storage = SchemaStorage(db_path=config.rag_storage_path())")
+        logger.info(f"    print('Schema count:', len(storage._search_all(where=None)))")
+        logger.info(f"  \"")
+        logger.info("=" * 80)
+        sys.exit(0)
+
+    except Exception as e:
+        logger.error(f"Schema import failed: {e}")
+        logger.info("")
+        logger.info("To diagnose the issue, check:")
+        logger.info("  1. Database connection parameters in agent.yml")
+        logger.info("  2. Database is accessible and contains tables")
+        logger.info("  3. Credentials are valid")
+        logger.info("")
+        logger.info("Example connection test:")
+        logger.info(f"  python -c \"")
+        logger.info(f"    from datus.tools.db_tools.db_manager import get_db_manager")
+        logger.info(f"    from datus.configuration.agent_config_loader import load_agent_config")
+        logger.info(f"    config = load_agent_config('{args.config}')")
+        logger.info(f"    config.current_namespace = '{namespace}'")
+        logger.info(f"    db = get_db_manager()")
+        logger.info(f"    conn = db.get_conn('{namespace}', '{args.database or '<database_name>'}')")
+        logger.info(f"    print('Tables:', len(conn.get_tables_with_ddl()))")
+        logger.info(f"  \"")
+        logger.info("=" * 80)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

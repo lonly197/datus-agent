@@ -13,6 +13,7 @@ are sufficient for generating SQL for the given query. It checks for:
 """
 
 import re
+from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from datus.agent.node.node import Node, execute_with_async_stream
@@ -108,12 +109,119 @@ class SchemaValidationNode(Node, LLMMixin):
                 # Set last_action_status to FAILED (not SOFT_FAILED)
                 self.last_action_status = ActionStatus.FAILED
 
+                # Get database information for diagnostics
+                database_name = getattr(task, "database_name", "unknown")
+                namespace = getattr(self.agent_config, "current_namespace", "unknown") if self.agent_config else "unknown"
+                candidate_tables_count = len(context.get("candidate_tables", [])) if context else 0
+
+                # Enhanced logging before hard termination
+                logger.error("")
+                logger.error("=" * 80)
+                logger.error("SCHEMA VALIDATION FAILED: NO SCHEMAS DISCOVERED")
+                logger.error("=" * 80)
+                logger.error("")
+                logger.error("Root Cause Analysis:")
+                logger.error("  • LanceDB schema storage is empty (no schema metadata found)")
+                logger.error("  • DDL fallback also failed to retrieve schemas from database")
+                logger.error(f"  • Found {candidate_tables_count} candidate tables, but none matched stored schemas")
+                logger.error("")
+                logger.error("Possible Causes:")
+                logger.error("  1. Schema import was not run after LanceDB v1 migration")
+                logger.error("  2. Database connection parameters are incorrect")
+                logger.error("  3. Database is empty (no tables exist)")
+                logger.error("  4. Namespace/database name mismatch")
+                logger.error("")
+                logger.error("Immediate Actions:")
+                logger.error("  1. Re-run migration with schema import:")
+                logger.error(f"     python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
+                logger.error(f"       --config=<config_path> --namespace={namespace} \\")
+                logger.error(f"       --import-schemas")
+                logger.error("")
+                logger.error("  2. Or run schema import separately:")
+                logger.error(f"     python -m datus.storage.schema_metadata.local_init \\")
+                logger.error(f"       --config=<config_path> --namespace={namespace}")
+                logger.error("")
+                logger.error("  3. Verify database connection:")
+                logger.error(f"     python -c \"")
+                logger.error(f"       from datus.tools.db_tools.db_manager import get_db_manager")
+                logger.error(f"       db = get_db_manager().get_conn('{namespace}', '{database_name}')")
+                logger.error(f"       print('Tables:', len(db.get_tables_with_ddl()))")
+                logger.error(f"     \"")
+                logger.error("=" * 80)
+                logger.error("")
+
+                # Generate diagnostic report before termination
+                diagnostic_report = {
+                    "report_type": "Schema Discovery Failure Report",
+                    "timestamp": datetime.now().isoformat(),
+                    "task": task.task if task else "unknown",
+                    "database_name": database_name,
+                    "namespace": namespace,
+                    "candidate_tables_count": candidate_tables_count,
+                    "sections": [
+                        {
+                            "title": "1. Schema Discovery Status",
+                            "status": "FAILED",
+                            "findings": {
+                                "lancedb_storage": "empty - no schema metadata found",
+                                "ddl_fallback": "returned 0 tables from database",
+                                "candidate_tables_found": candidate_tables_count,
+                            }
+                        },
+                        {
+                            "title": "2. Root Cause Analysis",
+                            "possible_causes": [
+                                "Schema import was not run after LanceDB v1 migration",
+                                "Database connection parameters are incorrect",
+                                "Database is empty (no tables exist)",
+                                "Namespace/database name mismatch"
+                            ]
+                        },
+                        {
+                            "title": "3. Immediate Actions Required",
+                            "steps": [
+                                "Re-run migration with --import-schemas flag",
+                                "Or run schema import separately",
+                                "Verify database connection and table existence"
+                            ],
+                            "commands": [
+                                f"python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config=<config> --namespace={namespace} --import-schemas",
+                                f"python -c \"from datus.tools.db_tools.db_manager import get_db_manager; db = get_db_manager().get_conn('{namespace}', '{database_name}'); print(f'Tables: {{len(db.get_tables_with_ddl())}}')\""
+                            ]
+                        },
+                        {
+                            "title": "4. SQL Generated (May Contain Hallucinated Tables)",
+                            "sql_query": context.get("sql_query", "No SQL generated") if context else "No SQL generated",
+                            "warning": "SQL was generated without schema context - table names may be incorrect"
+                        },
+                        {
+                            "title": "5. Next Steps",
+                            "recommendations": [
+                                "Import schema metadata using one of the commands above",
+                                "Re-run text2sql workflow after schema import completes",
+                                "Contact administrator if schema import fails"
+                            ]
+                        }
+                    ]
+                }
+
+                # Store report in workflow metadata for event converter
+                if self.workflow:
+                    if not hasattr(self.workflow, "metadata"):
+                        self.workflow.metadata = {}
+                    self.workflow.metadata["schema_discovery_failure_report"] = diagnostic_report
+
                 no_schemas_result = {
                     "is_sufficient": False,
                     "error": "No schemas discovered",
                     "missing_tables": ["all"],
-                    "suggestions": ["Run schema_discovery to find relevant tables"],
+                    "suggestions": [
+                        "Re-run migration with --import-schemas flag",
+                        "Or run: python -m datus.storage.schema_metadata.local_init",
+                    ],
                     "allow_reflection": False,  # No reflection - this is unrecoverable
+                    "diagnostic_report": diagnostic_report,
+                    "diagnostics_provided": True
                 }
                 yield ActionHistory(
                     action_id=f"{self.id}_no_schemas",
