@@ -16,6 +16,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from datus.configuration.agent_config import AgentConfig
+from datus.configuration.agent_config_loader import load_agent_config
 from datus.storage.schema_metadata import SchemaWithValueRAG
 from datus.tools.db_tools.metadata_extractor import get_metadata_extractor
 from datus.utils.loggings import get_logger
@@ -487,7 +488,7 @@ async def main():
 
     # Load agent configuration
     try:
-        agent_config = AgentConfig.from_yaml(args.config)
+        agent_config = load_agent_config(config=args.config)
     except Exception as e:
         logger.error(f"Failed to load agent configuration: {e}")
         return
