@@ -19,7 +19,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.agent_config_loader import load_agent_config
@@ -166,8 +166,29 @@ def backup_database(db_path: str) -> str:
     return backup_path
 
 
+def load_backup_json(backup_path: str) -> List[Dict]:
+    """
+    Load schema data from JSON backup file.
+
+    Args:
+        backup_path: Path to JSON backup file
+
+    Returns:
+        List of schema records as dictionaries
+    """
+    if not os.path.exists(backup_path):
+        raise FileNotFoundError(f"Backup file not found: {backup_path}")
+
+    with open(backup_path, 'r', encoding='utf-8') as f:
+        records = json.load(f)
+
+    logger.info(f"Loaded {len(records)} records from {backup_path}")
+    return records
+
+
 def migrate_schema_storage(
     storage: SchemaStorage,
+    backup_path: Optional[str] = None,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
 ) -> int:
@@ -175,13 +196,16 @@ def migrate_schema_storage(
     Migrate schema metadata from v0 to v1 format.
 
     This function:
-    1. Reads all existing v0 data into memory
-    2. Drops the v0 table
-    3. Creates a new v1 table
-    4. Inserts migrated v1 records
+    1. Loads data from backup JSON file (if provided) or reads from existing table
+    2. Creates a fresh v1 table (assumes cleanup has been run)
+    3. Inserts migrated v1 records with enhanced metadata
+
+    IMPORTANT: Before running this migration, ensure the cleanup script has been run:
+        python -m datus.storage.schema_metadata.cleanup_v0_table
 
     Args:
         storage: SchemaStorage instance
+        backup_path: Path to JSON backup file from cleanup script (recommended)
         extract_statistics: Whether to extract column statistics (expensive)
         extract_relationships: Whether to extract relationship metadata
 
@@ -189,43 +213,44 @@ def migrate_schema_storage(
         Number of records migrated
     """
     try:
-        # Step 1: Read all existing v0 data FIRST (before dropping table)
-        storage._ensure_table_ready()
+        # Step 1: Load source data
+        if backup_path and os.path.exists(backup_path):
+            # Load from backup JSON (recommended)
+            logger.info(f"Loading data from backup: {backup_path}")
+            backup_records = load_backup_json(backup_path)
+            if not backup_records:
+                logger.info("No records found in backup file")
+                return 0
+            logger.info(f"Loaded {len(backup_records)} records from backup")
+        else:
+            # Fallback: Read from existing table (if it exists)
+            logger.info("No backup provided, reading from existing table...")
+            storage._ensure_table_ready()
 
-        all_data = storage._search_all(
-            where=None,
-            select_fields=["identifier", "catalog_name", "database_name", "schema_name", "table_name", "table_type", "definition"]
-        )
+            all_data = storage._search_all(
+                where=None,
+                select_fields=["identifier", "catalog_name", "database_name", "schema_name", "table_name", "table_type", "definition"]
+            )
 
-        if not all_data or len(all_data) == 0:
-            logger.info("No existing data found in schema storage")
-            return 0
+            if not all_data or len(all_data) == 0:
+                logger.info("No existing data found in schema storage")
+                return 0
 
-        logger.info(f"Found {len(all_data)} records to migrate")
+            backup_records = all_data.to_pylist()
+            logger.info(f"Found {len(backup_records)} records to migrate")
 
-        # Step 2: Store table name and db reference
-        table_name = storage.table_name
-        db = storage.db
-
-        # Step 3: Drop the v0 table
-        logger.info(f"Dropping existing v0 table: {table_name}")
-        db.drop_table(table_name)
-        logger.info(f"Dropped table {table_name}")
-
-        # CRITICAL: Reset both the table reference and initialization flag
-        # This forces _ensure_table_ready() to create a fresh table with the v1 schema
+        # Step 2: Create fresh v1 table (assumes cleanup has been run)
+        # Reset initialization to force table creation with v1 schema
         storage.table = None
         storage._table_initialized = False
-
-        # Step 4: Create new v1 table
         storage._ensure_table_ready()
-        logger.info(f"Created new v1 table: {table_name}")
+        logger.info(f"Created fresh v1 table: {storage.table_name}")
 
         migrated_count = 0
         batch_size = 100
         batch_updates = []
 
-        for i, row in enumerate(all_data.to_pylist()):
+        for i, row in enumerate(backup_records):
             try:
                 identifier = row["identifier"]
                 catalog_name = row["catalog_name"]
@@ -290,7 +315,7 @@ def migrate_schema_storage(
                 # Batch insert (no delete needed since table was recreated)
                 if len(batch_updates) >= batch_size:
                     storage.table.add(batch_updates)
-                    logger.info(f"Migrated batch of {len(batch_updates)} records (total: {migrated_count}/{len(all_data)})")
+                    logger.info(f"Migrated batch of {len(batch_updates)} records (total: {migrated_count}/{len(backup_records)})")
                     batch_updates = []
 
             except Exception as e:
@@ -425,6 +450,7 @@ def main():
     parser.add_argument("--db-path", help="Override database path (default: from config)")
     parser.add_argument("--extract-statistics", type=str_to_bool, default=False, help="Extract column statistics (expensive)")
     parser.add_argument("--extract-relationships", type=str_to_bool, default=True, help="Extract relationship metadata")
+    parser.add_argument("--backup-path", help="Path to backup JSON file from cleanup script")
     parser.add_argument("--skip-backup", action="store_true", help="Skip backup creation")
     parser.add_argument("--force", action="store_true", help="Force migration even if v1 already exists")
 
@@ -520,6 +546,7 @@ def main():
         logger.info("Step 1/3: Migrating schema metadata...")
         migrated_schemas = migrate_schema_storage(
             schema_store,
+            backup_path=args.backup_path,
             extract_statistics=args.extract_statistics,
             extract_relationships=args.extract_relationships
         )
