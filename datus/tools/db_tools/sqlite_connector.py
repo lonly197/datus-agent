@@ -337,9 +337,19 @@ class SQLiteConnector(BaseSqlConnector):
         self, database_name: str = "", table_type: str = "table", filter_tables: Optional[List[str]] = None
     ) -> List[Dict[str, str]]:
         """Get schema with DDL for tables or views."""
+        from datus.utils.sql_utils import quote_identifier
+
         self.connect()
         cursor = self.connection.cursor()
-        cursor.execute(f"SELECT name, sql FROM sqlite_master WHERE type='{table_type}'")
+
+        # Validate table_type is safe (only 'table' or 'view' allowed)
+        valid_types = ['table', 'view', 'index', 'trigger']
+        if table_type not in valid_types:
+            raise ValueError(f"Invalid table_type '{table_type}'. Must be one of: {valid_types}")
+
+        # Use parameterized query for safety
+        safe_type = quote_identifier(table_type, "sqlite")
+        cursor.execute(f"SELECT name, sql FROM sqlite_master WHERE type={safe_type}")
 
         schema_list = []
         for row in cursor.fetchall():

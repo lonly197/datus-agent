@@ -371,7 +371,9 @@ def verify_table_removed(
 def cleanup_v0_table(
     db_path: str,
     table_name: str = "schema_metadata",
-    backup_path: str = "/tmp/schema_v0_backup.json"
+    backup_path: str = "/tmp/schema_v0_backup.json",
+    dry_run: bool = False,
+    skip_verification: bool = False
 ) -> bool:
     """
     Main cleanup function: export data and force-delete the v0 table.
@@ -380,52 +382,79 @@ def cleanup_v0_table(
         db_path: Path to LanceDB database directory
         table_name: Name of the table to clean up
         backup_path: Path where JSON backup will be saved
+        dry_run: If True, preview changes without executing
+        skip_verification: If True, skip post-cleanup verification
 
     Returns:
-        True if cleanup was successful
+        True if cleanup was successful (or dry-run completed)
     """
     logger.info("=" * 80)
-    logger.info("LanceDB v0 Table Cleanup")
+    logger.info("LanceDB v0 Table Cleanup" + (" [DRY-RUN]" if dry_run else ""))
     logger.info("=" * 80)
     logger.info(f"Database path: {db_path}")
     logger.info(f"Table name: {table_name}")
     logger.info(f"Backup path: {backup_path}")
     logger.info("")
 
-    # Step 1: Export data to JSON backup
-    logger.info("Step 1/4: Exporting v0 data to JSON backup...")
+    # Pre-cleanup checks
     db = lancedb.connect(db_path)
-    record_count = export_table_to_json(db, table_name, backup_path)
+    table_exists = table_name in db.table_names()
 
-    if record_count == 0:
-        if table_name in db.table_names():
-            logger.warning(f"Table '{table_name}' exists but is empty")
-        else:
-            logger.info(f"No table '{table_name}' found - this is normal for fresh installations or already migrated systems")
+    if not table_exists:
+        logger.info(f"✓ Table '{table_name}' does not exist - no cleanup needed")
+        logger.info("=" * 80)
+        return True
+
+    # Get record count
+    table = db.open_table(table_name)
+    record_count = len(table.to_arrow())
+    logger.info(f"✓ Table found with {record_count} records")
+
+    if dry_run:
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("DRY-RUN SUMMARY")
+        logger.info("=" * 80)
+        logger.info(f"Would export: {record_count} records")
+        logger.info(f"Backup location: {backup_path}")
+        logger.info(f"Would delete: {table_name}")
+        logger.info("")
+        logger.info("To execute cleanup, run without --dry-run flag")
+        logger.info("=" * 80)
+        return True
+
+    # Step 1: Export data to JSON backup
+    logger.info("Step 1/3: Exporting v0 data to JSON backup...")
+    exported_count = export_table_to_json(db, table_name, backup_path)
+
+    if exported_count == 0:
+        logger.warning(f"Table '{table_name}' exists but is empty")
     else:
-        logger.info(f"✅ Exported {record_count} records to {backup_path}")
+        logger.info(f"✅ Exported {exported_count} records to {backup_path}")
     logger.info("")
 
     # Step 2: Force drop the table
-    logger.info("Step 2/4: Force-deleting v0 table...")
+    logger.info("Step 2/3: Force-deleting v0 table...")
     if not force_drop_table(db_path, table_name):
         logger.error("Failed to drop table")
         return False
     logger.info("")
 
-    # Step 3: Verify removal
-    logger.info("Step 3/4: Verifying table removal...")
-    if not verify_table_removed(db_path, table_name):
-        logger.error("Table still exists after cleanup")
-        return False
+    # Step 3: Verify removal (optional)
+    if not skip_verification:
+        logger.info("Step 3/3: Verifying table removal...")
+        if not verify_table_removed(db_path, table_name):
+            logger.error("Table still exists after cleanup")
+            return False
+    else:
+        logger.info("Step 3/3: Skipping verification (--skip-verification)")
     logger.info("")
 
-    # Step 4: Summary
-    logger.info("Step 4/4: Cleanup summary")
+    # Summary
     logger.info("=" * 80)
     logger.info("✅ CLEANUP SUCCESSFUL")
     logger.info("=" * 80)
-    logger.info(f"Records exported: {record_count}")
+    logger.info(f"Records exported: {exported_count}")
     logger.info(f"Backup location: {backup_path}")
     logger.info(f"Table removed: {table_name}")
     logger.info("")
@@ -451,14 +480,31 @@ def str_to_bool(v):
 
 
 def main():
-    """Main cleanup function."""
-    parser = argparse.ArgumentParser(description="Cleanup v0 LanceDB table and export data to JSON")
+    """Main cleanup function with safety checks."""
+    parser = argparse.ArgumentParser(
+        description="Cleanup v0 LanceDB table and export data to JSON",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Preview cleanup changes (recommended first step)
+  python -m datus.storage.schema_metadata.cleanup_v0_table --config=config.yml --dry-run
+
+  # Run cleanup with confirmation prompt
+  python -m datus.storage.schema_metadata.cleanup_v0_table --config=config.yml --confirm
+
+  # Skip verification for faster cleanup
+  python -m datus.storage.schema_metadata.cleanup_v0_table --config=config.yml --skip-verification
+        """
+    )
     parser.add_argument("--config", required=True, help="Path to agent configuration file")
     parser.add_argument("--namespace", help="Namespace for the database (optional)")
     parser.add_argument("--db-path", help="Override database path (default: from config)")
     parser.add_argument("--table-name", default="schema_metadata", help="Table name to cleanup (default: schema_metadata)")
     parser.add_argument("--backup-path", default="/tmp/schema_v0_backup.json", help="Path for JSON backup file")
     parser.add_argument("--skip-verification", action="store_true", help="Skip verification step")
+    parser.add_argument("--dry-run", action="store_true", help="Preview changes without executing")
+    parser.add_argument("--confirm", action="store_true", help="Require confirmation before cleanup")
+    parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation (auto-confirm)")
 
     args = parser.parse_args()
 
@@ -470,39 +516,51 @@ def main():
         sys.exit(1)
 
     # Determine database path
-    if args.db_path:
-        db_path = args.db_path
-        namespace = None
-    else:
-        # Smart namespace selection (interactive or auto)
-        namespace = select_namespace_interactive(agent_config, args.namespace)
+    db_path = args.db_path or None
+    namespace = None
 
+    if not db_path:
+        namespace = select_namespace_interactive(agent_config, args.namespace)
         if namespace:
-            # Set namespace and get storage path
             agent_config.current_namespace = namespace
             db_path = agent_config.rag_storage_path()
         else:
-            # Use base storage path (Schema-only cleanup)
             db_path = os.path.join(agent_config.rag_base_path, "lancedb")
             logger.info("Using base storage path (Schema-only cleanup)")
 
     # Report current cleanup state (diagnostics)
     report_cleanup_state(db_path, args.table_name)
 
+    # Handle confirmation (unless --yes or --dry-run)
+    if args.confirm and not args.yes and not args.dry_run:
+        from rich.console import Console
+        from rich.prompt import Confirm
+
+        console = Console()
+        console.print("\n[bold yellow]⚠️  WARNING: This will permanently delete data![/]")
+        console.print(f"[yellow]Table: {args.table_name}[/]")
+        console.print(f"[yellow]Database: {db_path}[/]")
+        console.print("")
+
+        if not Confirm.ask("[bold red]Continue with cleanup?[/]", default=False):
+            console.print("[yellow]Cleanup cancelled by user[/]")
+            sys.exit(0)
+
     # Run cleanup
     try:
         success = cleanup_v0_table(
             db_path=db_path,
             table_name=args.table_name,
-            backup_path=args.backup_path
+            backup_path=args.backup_path,
+            dry_run=args.dry_run,
+            skip_verification=args.skip_verification
         )
 
-        if success:
-            sys.exit(0)
-        else:
-            logger.error("Cleanup failed")
-            sys.exit(1)
+        sys.exit(0 if success else 1)
 
+    except KeyboardInterrupt:
+        logger.info("\nCleanup cancelled by user (Ctrl+C)")
+        sys.exit(130)
     except Exception as e:
         logger.error(f"Cleanup failed: {e}")
         import traceback

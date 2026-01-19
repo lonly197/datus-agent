@@ -469,19 +469,30 @@ class DuckdbConnector(BaseSqlConnector, SchemaNamespaceMixin):
         filter_tables: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
         """Get metadata with DDL for tables or views."""
+        from datus.utils.sql_utils import quote_identifier
+
         self.connect()
         metadata_names = _metadata_names(_type)
         sql_field = "" if not metadata_names.has_sql_field else ', "sql"'
+
+        # Use quote_identifier for safety (defense-in-depth)
+        info_table = metadata_names.info_table
+        name_field = metadata_names.name_field
+
         query_sql = (
-            f"SELECT database_name, schema_name, {metadata_names.name_field}{sql_field}"
-            f" FROM {metadata_names.info_table}() WHERE database_name != 'system'"
+            f"SELECT database_name, schema_name, {name_field}{sql_field}"
+            f" FROM {info_table}() WHERE database_name != 'system'"
         )
+
         database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
+
         if database_name:
-            query_sql += f" AND database_name = '{database_name}'"
+            safe_db = quote_identifier(database_name, "duckdb")
+            query_sql += f" AND database_name = {safe_db}"
         if schema_name:
-            query_sql += f" AND schema_name = '{schema_name}'"
+            safe_schema = quote_identifier(schema_name, "duckdb")
+            query_sql += f" AND schema_name = {safe_schema}"
 
         result_set = self.connection.execute(query_sql)
         rows = result_set.fetchall()

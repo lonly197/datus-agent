@@ -82,277 +82,50 @@ class SchemaValidationNode(Node, LLMMixin):
             ActionHistory: Progress and result actions
         """
         try:
-            if not self.workflow or not self.workflow.task:
-                error_result = self.create_error_result(
-                    ErrorCode.NODE_EXECUTION_FAILED,
-                    "No workflow or task available for schema validation",
-                    "schema_validation",
-                    {"workflow_id": getattr(self.workflow, "id", "unknown") if self.workflow else "unknown"},
-                )
-                yield ActionHistory(
-                    action_id=f"{self.id}_error",
-                    role=ActionRole.TOOL,
-                    messages=f"Schema validation failed: {error_result.error}",
-                    action_type="schema_validation",
-                    input={},
-                    status=ActionStatus.FAILED,
-                    output={"error": error_result.error, "error_code": error_result.error_code},
-                )
-                return
+            # Pre-validation: Ensure workflow and task exist
+            async for action in self._validate_workflow_prerequisites():
+                yield action
+                if action.status == ActionStatus.FAILED:
+                    return
 
             task = self.workflow.task
             context = self.workflow.context
 
-            # Step 1: Check if schemas were discovered
+            # Step 1: Check if schemas were discovered (hard failure)
             if not context or not context.table_schemas:
-                # CRITICAL: No schemas available - this is a HARD failure
-                # Set last_action_status to FAILED (not SOFT_FAILED)
-                self.last_action_status = ActionStatus.FAILED
-
-                # Get database information for diagnostics
-                database_name = getattr(task, "database_name", "unknown")
-                namespace = getattr(self.agent_config, "current_namespace", "unknown") if self.agent_config else "unknown"
-
-                # Get candidate_tables from workflow metadata (not context)
-                candidate_tables = []
-                if self.workflow and hasattr(self.workflow, "metadata") and self.workflow.metadata:
-                    candidate_tables = self.workflow.metadata.get("discovered_tables", [])
-                candidate_tables_count = len(candidate_tables)
-
-                # Enhanced logging before hard termination
-                logger.error("")
-                logger.error("=" * 80)
-                logger.error("SCHEMA VALIDATION FAILED: NO SCHEMAS DISCOVERED")
-                logger.error("=" * 80)
-                logger.error("")
-                logger.error("Root Cause Analysis:")
-                logger.error("  • LanceDB schema storage is empty (no schema metadata found)")
-                logger.error("  • DDL fallback also failed to retrieve schemas from database")
-                logger.error(f"  • Found {candidate_tables_count} candidate tables, but none matched stored schemas")
-                logger.error("")
-                logger.error("Possible Causes:")
-                logger.error("  1. Schema import was not run after LanceDB v1 migration")
-                logger.error("  2. Database connection parameters are incorrect")
-                logger.error("  3. Database is empty (no tables exist)")
-                logger.error("  4. Namespace/database name mismatch")
-                logger.error("")
-                logger.error("Immediate Actions:")
-                logger.error("  1. Re-run migration with schema import:")
-                logger.error(f"     python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
-                logger.error(f"       --config=<config_path> --namespace={namespace} \\")
-                logger.error(f"       --import-schemas")
-                logger.error("")
-                logger.error("  2. Or run schema import separately:")
-                logger.error(f"     python -m datus.storage.schema_metadata.local_init \\")
-                logger.error(f"       --config=<config_path> --namespace={namespace}")
-                logger.error("")
-                logger.error("  3. Verify database connection:")
-                logger.error(f"     python -c \"")
-                logger.error(f"       from datus.tools.db_tools.db_manager import get_db_manager")
-                logger.error(f"       db = get_db_manager().get_conn('{namespace}', '{database_name}')")
-                logger.error(f"       print('Tables:', len(db.get_tables_with_ddl()))")
-                logger.error(f"     \"")
-                logger.error("=" * 80)
-                logger.error("")
-
-                # Generate diagnostic report before termination
-                diagnostic_report = {
-                    "report_type": "Schema Discovery Failure Report",
-                    "timestamp": datetime.now().isoformat(),
-                    "task": task.task if task else "unknown",
-                    "database_name": database_name,
-                    "namespace": namespace,
-                    "candidate_tables_count": candidate_tables_count,
-                    "sections": [
-                        {
-                            "title": "1. Schema Discovery Status",
-                            "status": "FAILED",
-                            "findings": {
-                                "lancedb_storage": "empty - no schema metadata found",
-                                "ddl_fallback": "returned 0 tables from database",
-                                "candidate_tables_found": candidate_tables_count,
-                            }
-                        },
-                        {
-                            "title": "2. Root Cause Analysis",
-                            "possible_causes": [
-                                "Schema import was not run after LanceDB v1 migration",
-                                "Database connection parameters are incorrect",
-                                "Database is empty (no tables exist)",
-                                "Namespace/database name mismatch"
-                            ]
-                        },
-                        {
-                            "title": "3. Immediate Actions Required",
-                            "steps": [
-                                "Re-run migration with --import-schemas flag",
-                                "Or run schema import separately",
-                                "Verify database connection and table existence"
-                            ],
-                            "commands": [
-                                f"python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config=<config> --namespace={namespace} --import-schemas",
-                                f"python -c \"from datus.tools.db_tools.db_manager import get_db_manager; db = get_db_manager().get_conn('{namespace}', '{database_name}'); print(f'Tables: {{len(db.get_tables_with_ddl())}}')\""
-                            ]
-                        },
-                        {
-                            "title": "4. SQL Generated (May Contain Hallucinated Tables)",
-                            # SQL query would be in workflow.metadata after generate_sql node
-                            # Since schema validation runs before SQL generation, there's no SQL yet
-                            "sql_query": "No SQL generated (validation failed before SQL generation)",
-                            "warning": "SQL was generated without schema context - table names may be incorrect"
-                        },
-                        {
-                            "title": "5. Next Steps",
-                            "recommendations": [
-                                "Import schema metadata using one of the commands above",
-                                "Re-run text2sql workflow after schema import completes",
-                                "Contact administrator if schema import fails"
-                            ]
-                        }
-                    ]
-                }
-
-                # Store report in workflow metadata for event converter
-                if self.workflow:
-                    if not hasattr(self.workflow, "metadata"):
-                        self.workflow.metadata = {}
-                    self.workflow.metadata["schema_discovery_failure_report"] = diagnostic_report
-
-                no_schemas_result = {
-                    "is_sufficient": False,
-                    "error": "No schemas discovered",
-                    "missing_tables": ["all"],
-                    "suggestions": [
-                        "Re-run migration with --import-schemas flag",
-                        "Or run: python -m datus.storage.schema_metadata.local_init",
-                    ],
-                    "allow_reflection": False,  # No reflection - this is unrecoverable
-                    "diagnostic_report": diagnostic_report,
-                    "diagnostics_provided": True
-                }
-                yield ActionHistory(
-                    action_id=f"{self.id}_no_schemas",
-                    role=ActionRole.TOOL,
-                    messages="Schema validation failed: No schemas discovered",
-                    action_type="schema_validation",
-                    input={"task": task.task[:50] if task else ""},
-                    status=ActionStatus.FAILED,  # Use FAILED (not SOFT_FAILED)
-                    output=no_schemas_result,
-                )
-                self.result = BaseResult(
-                    success=False,
-                    error="No schemas discovered for validation",
-                    data=no_schemas_result,
-                )
+                yield await self._handle_no_schemas_failure(task)
                 return
 
-            # Step 2: Validate schema completeness
-            table_count = len(context.table_schemas)
-            missing_definitions = []
-            for schema in context.table_schemas:
-                if not schema.definition or schema.definition.strip() == "":
-                    missing_definitions.append(schema.table_name)
+            # Step 2-4: Validate schemas and check coverage
+            validation_result = await self._validate_schema_coverage(task, context)
 
-            # Step 3: Check basic query-schema alignment
-            # Extract key terms from the query
-            query_lower = task.task.lower() if task else ""
-            query_terms = await self._extract_query_terms(query_lower)
-
-            # Check if schemas contain relevant columns/tables
-            schema_coverage = self._check_schema_coverage(context.table_schemas, query_terms)
-
-            # Step 4: Determine if schemas are sufficient using dynamic threshold
-            coverage_threshold = self._calculate_coverage_threshold(query_terms)
-            logger.info(
-                f"Using dynamic coverage threshold: {coverage_threshold:.2f} for {len(query_terms)} query terms"
+            # Set result based on validation
+            self.result = BaseResult(
+                success=validation_result["is_sufficient"],
+                error=None if validation_result["is_sufficient"] else "Schema validation failed: Insufficient coverage",
+                data=validation_result
             )
 
-            is_sufficient = (
-                table_count > 0
-                and len(missing_definitions) == 0
-                and schema_coverage["coverage_score"] > coverage_threshold
-            )
-
-            # Build validation result
-            validation_result = {
-                "is_sufficient": is_sufficient,
-                "table_count": table_count,
-                "missing_definitions": missing_definitions,
-                "query_terms": query_terms,
-                "coverage_score": schema_coverage["coverage_score"],
-                "covered_terms": schema_coverage["covered_terms"],
-                "uncovered_terms": schema_coverage["uncovered_terms"],
-            }
-
-            # Add recommendations if insufficient
-            if not is_sufficient:
-                if missing_definitions:
-                    validation_result["suggestions"] = [
-                        f"Load full DDL for tables: {', '.join(missing_definitions[:5])}"
-                    ]
-                elif schema_coverage["coverage_score"] < 0.3:
-                    validation_result["suggestions"] = [
-                        "Use enhanced schema_discovery (with progressive matching and LLM inference) to find matching tables",
-                        f"Consider tables matching terms: {', '.join(schema_coverage['uncovered_terms'][:5])}",
-                    ]
-                    validation_result["missing_tables"] = schema_coverage["uncovered_terms"][:5]
-
-                # Set allow_reflection flag to enable workflow continuation
-                validation_result["allow_reflection"] = True
-
-            # Emit result
-            if is_sufficient:
-                yield ActionHistory(
-                    action_id=f"{self.id}_validation",
-                    role=ActionRole.TOOL,
-                    messages=f"Schema validation passed: {table_count} tables with sufficient coverage",
-                    action_type="schema_validation",
-                    input={
-                        "task": task.task[:50] if task else "",
-                        "table_count": table_count,
-                    },
-                    status=ActionStatus.SUCCESS,
-                    output=validation_result,
-                )
-                self.result = BaseResult(success=True, data=validation_result)
-            else:
-                # Insufficient but some schemas exist - SOFT failure with reflection
-                self.last_action_status = ActionStatus.SOFT_FAILED
-
-                yield ActionHistory(
-                    action_id=f"{self.id}_validation",
-                    role=ActionRole.TOOL,
-                    messages=f"Schema validation failed: Insufficient schema coverage (score: {schema_coverage['coverage_score']:.2f})",
-                    action_type="schema_validation",
-                    input={
-                        "task": task.task[:50] if task else "",
-                        "table_count": table_count,
-                    },
-                    status=ActionStatus.SOFT_FAILED,  # Use SOFT_FAILED to allow reflection
-                    output=validation_result,
-                )
-                self.result = BaseResult(
-                    success=False, error="Schema validation failed: Insufficient coverage", data=validation_result
-                )
+            # Emit validation result
+            yield self._create_validation_action(validation_result, task)
 
             logger.info(
-                f"Schema validation completed: is_sufficient={is_sufficient}, "
-                f"table_count={table_count}, coverage_score={schema_coverage['coverage_score']:.2f}"
+                f"Schema validation completed: is_sufficient={validation_result['is_sufficient']}, "
+                f"table_count={validation_result['table_count']}, "
+                f"coverage_score={validation_result['coverage_score']:.2f}"
             )
 
         except Exception as e:
-            logger.error(f"Schema validation failed: {e}")
+            yield self._handle_execution_error(e)
+
+    async def _validate_workflow_prerequisites(self) -> AsyncGenerator[ActionHistory, None]:
+        """Check if workflow and task are available for validation."""
+        if not self.workflow or not self.workflow.task:
             error_result = self.create_error_result(
                 ErrorCode.NODE_EXECUTION_FAILED,
-                f"Schema validation execution failed: {str(e)}",
+                "No workflow or task available for schema validation",
                 "schema_validation",
-                {
-                    "task_id": (
-                        getattr(self.workflow.task, "id", "unknown")
-                        if self.workflow and self.workflow.task
-                        else "unknown"
-                    )
-                },
+                {"workflow_id": getattr(self.workflow, "id", "unknown") if self.workflow else "unknown"},
             )
             yield ActionHistory(
                 action_id=f"{self.id}_error",
@@ -363,7 +136,315 @@ class SchemaValidationNode(Node, LLMMixin):
                 status=ActionStatus.FAILED,
                 output={"error": error_result.error, "error_code": error_result.error_code},
             )
-            self.result = BaseResult(success=False, error=str(e))
+            return
+        # Yield a success marker to indicate validation passed
+        yield ActionHistory(
+            action_id=f"{self.id}_prereq_ok",
+            role=ActionRole.TOOL,
+            messages="Workflow prerequisites validated",
+            action_type="schema_validation",
+            input={},
+            status=ActionStatus.SUCCESS,
+            output={},
+        )
+
+    async def _handle_no_schemas_failure(self, task) -> ActionHistory:
+        """
+        Handle critical failure when no schemas are discovered.
+
+        This is a HARD failure - no reflection possible. Sets last_action_status
+        to FAILED and generates comprehensive diagnostic report.
+        """
+        self.last_action_status = ActionStatus.FAILED
+
+        # Gather diagnostic information
+        diagnostics = self._gather_diagnostics(task)
+
+        # Log enhanced error messages
+        self._log_schema_failure(diagnostics)
+
+        # Generate and store diagnostic report
+        diagnostic_report = self._create_diagnostic_report(diagnostics)
+        self._store_diagnostic_report(diagnostic_report)
+
+        # Build failure result
+        no_schemas_result = {
+            "is_sufficient": False,
+            "error": "No schemas discovered",
+            "missing_tables": ["all"],
+            "suggestions": [
+                "Re-run migration with --import-schemas flag",
+                "Or run: python -m datus.storage.schema_metadata.local_init",
+            ],
+            "allow_reflection": False,  # Unrecoverable - no reflection
+            "diagnostic_report": diagnostic_report,
+            "diagnostics_provided": True
+        }
+
+        self.result = BaseResult(
+            success=False,
+            error="No schemas discovered for validation",
+            data=no_schemas_result,
+        )
+
+        return ActionHistory(
+            action_id=f"{self.id}_no_schemas",
+            role=ActionRole.TOOL,
+            messages="Schema validation failed: No schemas discovered",
+            action_type="schema_validation",
+            input={"task": task.task[:50] if task else ""},
+            status=ActionStatus.FAILED,
+            output=no_schemas_result,
+        )
+
+    def _gather_diagnostics(self, task) -> Dict[str, Any]:
+        """Collect diagnostic information for schema failure."""
+        database_name = getattr(task, "database_name", "unknown")
+        namespace = getattr(self.agent_config, "current_namespace", "unknown") if self.agent_config else "unknown"
+
+        # Get candidate_tables from workflow metadata
+        candidate_tables = []
+        if self.workflow and hasattr(self.workflow, "metadata") and self.workflow.metadata:
+            candidate_tables = self.workflow.metadata.get("discovered_tables", [])
+
+        return {
+            "database_name": database_name,
+            "namespace": namespace,
+            "candidate_tables_count": len(candidate_tables),
+            "task": task.task if task else "unknown",
+        }
+
+    def _log_schema_failure(self, diagnostics: Dict[str, Any]) -> None:
+        """Log comprehensive schema failure diagnostics."""
+        logger.error("")
+        logger.error("=" * 80)
+        logger.error("SCHEMA VALIDATION FAILED: NO SCHEMAS DISCOVERED")
+        logger.error("=" * 80)
+        logger.error("")
+        logger.error("Root Cause Analysis:")
+        logger.error("  • LanceDB schema storage is empty (no schema metadata found)")
+        logger.error("  • DDL fallback also failed to retrieve schemas from database")
+        logger.error(f"  • Found {diagnostics['candidate_tables_count']} candidate tables, but none matched stored schemas")
+        logger.error("")
+        logger.error("Possible Causes:")
+        logger.error("  1. Schema import was not run after LanceDB v1 migration")
+        logger.error("  2. Database connection parameters are incorrect")
+        logger.error("  3. Database is empty (no tables exist)")
+        logger.error("  4. Namespace/database name mismatch")
+        logger.error("")
+        logger.error("Immediate Actions:")
+        logger.error(f"  1. Re-run migration with schema import:")
+        logger.error(f"     python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
+        logger.error(f"       --config=<config_path> --namespace={diagnostics['namespace']} \\")
+        logger.error(f"       --import-schemas")
+        logger.error("")
+        logger.error("  2. Or run schema import separately:")
+        logger.error(f"     python -m datus.storage.schema_metadata.local_init \\")
+        logger.error(f"       --config=<config_path> --namespace={diagnostics['namespace']}")
+        logger.error("")
+        logger.error("  3. Verify database connection:")
+        logger.error(f"     python -c \"")
+        logger.error(f"       from datus.tools.db_tools.db_manager import get_db_manager")
+        logger.error(f"       db = get_db_manager().get_conn('{diagnostics['namespace']}', '{diagnostics['database_name']}')")
+        logger.error(f"       print('Tables:', len(db.get_tables_with_ddl()))")
+        logger.error(f"     \"")
+        logger.error("=" * 80)
+        logger.error("")
+
+    def _create_diagnostic_report(self, diagnostics: Dict[str, Any]) -> Dict[str, Any]:
+        """Create structured diagnostic report for schema failure."""
+        return {
+            "report_type": "Schema Discovery Failure Report",
+            "timestamp": datetime.now().isoformat(),
+            "task": diagnostics["task"],
+            "database_name": diagnostics["database_name"],
+            "namespace": diagnostics["namespace"],
+            "candidate_tables_count": diagnostics["candidate_tables_count"],
+            "sections": [
+                {
+                    "title": "1. Schema Discovery Status",
+                    "status": "FAILED",
+                    "findings": {
+                        "lancedb_storage": "empty - no schema metadata found",
+                        "ddl_fallback": "returned 0 tables from database",
+                        "candidate_tables_found": diagnostics["candidate_tables_count"],
+                    }
+                },
+                {
+                    "title": "2. Root Cause Analysis",
+                    "possible_causes": [
+                        "Schema import was not run after LanceDB v1 migration",
+                        "Database connection parameters are incorrect",
+                        "Database is empty (no tables exist)",
+                        "Namespace/database name mismatch"
+                    ]
+                },
+                {
+                    "title": "3. Immediate Actions Required",
+                    "steps": [
+                        "Re-run migration with --import-schemas flag",
+                        "Or run schema import separately",
+                        "Verify database connection and table existence"
+                    ],
+                    "commands": [
+                        f"python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config=<config> --namespace={diagnostics['namespace']} --import-schemas",
+                        f"python -c \"from datus.tools.db_tools.db_manager import get_db_manager; db = get_db_manager().get_conn('{diagnostics['namespace']}', '{diagnostics['database_name']}'); print(f'Tables: {{len(db.get_tables_with_ddl())}}')\""
+                    ]
+                },
+                {
+                    "title": "4. SQL Generated (May Contain Hallucinated Tables)",
+                    "sql_query": "No SQL generated (validation failed before SQL generation)",
+                    "warning": "SQL was generated without schema context - table names may be incorrect"
+                },
+                {
+                    "title": "5. Next Steps",
+                    "recommendations": [
+                        "Import schema metadata using one of the commands above",
+                        "Re-run text2sql workflow after schema import completes",
+                        "Contact administrator if schema import fails"
+                    ]
+                }
+            ]
+        }
+
+    def _store_diagnostic_report(self, report: Dict[str, Any]) -> None:
+        """Store diagnostic report in workflow metadata."""
+        if self.workflow:
+            if not hasattr(self.workflow, "metadata"):
+                self.workflow.metadata = {}
+            self.workflow.metadata["schema_discovery_failure_report"] = report
+
+    async def _validate_schema_coverage(self, task, context) -> Dict[str, Any]:
+        """
+        Validate schema completeness and coverage against query terms.
+
+        Returns validation result with coverage score and recommendations.
+        """
+        # Check schema completeness
+        table_count = len(context.table_schemas)
+        missing_definitions = self._find_missing_definitions(context.table_schemas)
+
+        # Extract query terms and check coverage
+        query_lower = task.task.lower() if task else ""
+        query_terms = await self._extract_query_terms(query_lower)
+        schema_coverage = self._check_schema_coverage(context.table_schemas, query_terms)
+
+        # Calculate dynamic coverage threshold
+        coverage_threshold = self._calculate_coverage_threshold(query_terms)
+        logger.info(
+            f"Using dynamic coverage threshold: {coverage_threshold:.2f} for {len(query_terms)} query terms"
+        )
+
+        # Determine if schemas are sufficient
+        is_sufficient = (
+            table_count > 0
+            and len(missing_definitions) == 0
+            and schema_coverage["coverage_score"] > coverage_threshold
+        )
+
+        # Build validation result
+        validation_result = {
+            "is_sufficient": is_sufficient,
+            "table_count": table_count,
+            "missing_definitions": missing_definitions,
+            "query_terms": query_terms,
+            "coverage_score": schema_coverage["coverage_score"],
+            "covered_terms": schema_coverage["covered_terms"],
+            "uncovered_terms": schema_coverage["uncovered_terms"],
+        }
+
+        # Add recommendations if insufficient
+        if not is_sufficient:
+            self._add_insufficient_schema_recommendations(validation_result, schema_coverage)
+            self.last_action_status = ActionStatus.SOFT_FAILED
+
+        return validation_result
+
+    def _find_missing_definitions(self, schemas: List[TableSchema]) -> List[str]:
+        """Find tables with missing or empty DDL definitions."""
+        return [
+            schema.table_name
+            for schema in schemas
+            if not schema.definition or schema.definition.strip() == ""
+        ]
+
+    def _add_insufficient_schema_recommendations(
+        self, validation_result: Dict[str, Any], schema_coverage: Dict[str, Any]
+    ) -> None:
+        """Add actionable recommendations when schema validation fails."""
+        if validation_result["missing_definitions"]:
+            validation_result["suggestions"] = [
+                f"Load full DDL for tables: {', '.join(validation_result['missing_definitions'][:5])}"
+            ]
+        elif schema_coverage["coverage_score"] < 0.3:
+            validation_result["suggestions"] = [
+                "Use enhanced schema_discovery (with progressive matching and LLM inference) to find matching tables",
+                f"Consider tables matching terms: {', '.join(schema_coverage['uncovered_terms'][:5])}",
+            ]
+            validation_result["missing_tables"] = schema_coverage["uncovered_terms"][:5]
+
+        # Enable workflow reflection for recovery
+        validation_result["allow_reflection"] = True
+
+    def _create_validation_action(self, validation_result: Dict[str, Any], task) -> ActionHistory:
+        """Create appropriate action based on validation result."""
+        table_count = validation_result["table_count"]
+        coverage_score = validation_result["coverage_score"]
+
+        if validation_result["is_sufficient"]:
+            return ActionHistory(
+                action_id=f"{self.id}_validation",
+                role=ActionRole.TOOL,
+                messages=f"Schema validation passed: {table_count} tables with sufficient coverage",
+                action_type="schema_validation",
+                input={
+                    "task": task.task[:50] if task else "",
+                    "table_count": table_count,
+                },
+                status=ActionStatus.SUCCESS,
+                output=validation_result,
+            )
+        else:
+            return ActionHistory(
+                action_id=f"{self.id}_validation",
+                role=ActionRole.TOOL,
+                messages=f"Schema validation failed: Insufficient schema coverage (score: {coverage_score:.2f})",
+                action_type="schema_validation",
+                input={
+                    "task": task.task[:50] if task else "",
+                    "table_count": table_count,
+                },
+                status=ActionStatus.SOFT_FAILED,  # Allow reflection
+                output=validation_result,
+            )
+
+    def _handle_execution_error(self, error: Exception) -> ActionHistory:
+        """Handle unexpected execution errors."""
+        logger.error(f"Schema validation failed: {error}")
+        error_result = self.create_error_result(
+            ErrorCode.NODE_EXECUTION_FAILED,
+            f"Schema validation execution failed: {str(error)}",
+            "schema_validation",
+            {
+                "task_id": (
+                    getattr(self.workflow.task, "id", "unknown")
+                    if self.workflow and self.workflow.task
+                    else "unknown"
+                )
+            },
+        )
+
+        self.result = BaseResult(success=False, error=str(error))
+
+        return ActionHistory(
+            action_id=f"{self.id}_error",
+            role=ActionRole.TOOL,
+            messages=f"Schema validation failed: {error_result.error}",
+            action_type="schema_validation",
+            input={},
+            status=ActionStatus.FAILED,
+            output={"error": error_result.error, "error_code": error_result.error_code},
+        )
 
     async def _extract_query_terms(self, query: str) -> List[str]:
         """
