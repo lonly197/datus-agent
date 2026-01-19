@@ -32,54 +32,6 @@ from datus.utils.constants import DBType
 logger = get_logger(__name__)
 
 
-def ensure_v1_columns(storage: SchemaStorage) -> bool:
-    """
-    Ensure the schema_metadata table has all v1 columns.
-
-    Uses LanceDB's add_columns() API to add missing v1 fields to existing v0 tables.
-
-    Args:
-        storage: SchemaStorage instance
-
-    Returns:
-        True if columns were added or already exist, False on error
-    """
-    try:
-        existing_schema = storage.table.schema
-        existing_fields = {field.name for field in existing_schema}
-
-        # v1 columns that need to be added
-        import pyarrow as pa
-        v1_columns = {
-            "table_comment": pa.string(),
-            "column_comments": pa.string(),
-            "business_tags": pa.list_(pa.string()),
-            "row_count": pa.int64(),
-            "sample_statistics": pa.string(),
-            "relationship_metadata": pa.string(),
-            "metadata_version": pa.int32(),
-            "last_updated": pa.int64(),
-        }
-
-        # Find missing columns
-        missing_columns = {name: dtype for name, dtype in v1_columns.items() if name not in existing_fields}
-
-        if missing_columns:
-            logger.info(f"Adding {len(missing_columns)} missing v1 columns to schema_metadata table")
-            for col_name, col_type in missing_columns.items():
-                logger.debug(f"Adding column: {col_name} ({col_type})")
-            storage.table.add_columns(missing_columns)
-            logger.info("Successfully added v1 columns to schema_metadata table")
-            return True
-        else:
-            logger.info("All v1 columns already exist in schema_metadata table")
-            return True
-
-    except Exception as e:
-        logger.error(f"Failed to add v1 columns: {e}")
-        return False
-
-
 def select_namespace_interactive(agent_config: AgentConfig, specified_namespace: Optional[str] = None) -> Optional[str]:
     """
     智能选择 namespace：
@@ -222,6 +174,12 @@ def migrate_schema_storage(
     """
     Migrate schema metadata from v0 to v1 format.
 
+    This function:
+    1. Reads all existing v0 data into memory
+    2. Drops the v0 table
+    3. Creates a new v1 table
+    4. Inserts migrated v1 records
+
     Args:
         storage: SchemaStorage instance
         extract_statistics: Whether to extract column statistics (expensive)
@@ -231,17 +189,9 @@ def migrate_schema_storage(
         Number of records migrated
     """
     try:
+        # Step 1: Read all existing v0 data FIRST (before dropping table)
         storage._ensure_table_ready()
 
-        # Add v1 columns to existing v0 table
-        if not ensure_v1_columns(storage):
-            from datus.exceptions import DatusException, ErrorCode
-            raise DatusException(
-                ErrorCode.STORAGE_TABLE_OPERATION_FAILED,
-                message="Failed to add v1 columns to schema_metadata table"
-            )
-
-        # Get all existing records (v0 format)
         all_data = storage._search_all(
             where=None,
             select_fields=["identifier", "catalog_name", "database_name", "schema_name", "table_name", "table_type", "definition"]
@@ -251,11 +201,24 @@ def migrate_schema_storage(
             logger.info("No existing data found in schema storage")
             return 0
 
+        logger.info(f"Found {len(all_data)} records to migrate")
+
+        # Step 2: Store table name and db reference
+        table_name = storage.table_name
+        db = storage.db
+
+        # Step 3: Drop the v0 table
+        logger.info(f"Dropping existing v0 table: {table_name}")
+        db.drop_table(table_name)
+        logger.info(f"Dropped table {table_name}")
+
+        # Step 4: Create new v1 table
+        storage._ensure_table_ready()
+        logger.info(f"Created new v1 table: {table_name}")
+
         migrated_count = 0
         batch_size = 100
         batch_updates = []
-
-        logger.info(f"Found {len(all_data)} records to migrate")
 
         for i, row in enumerate(all_data.to_pylist()):
             try:
@@ -319,24 +282,8 @@ def migrate_schema_storage(
                 batch_updates.append(update_data)
                 migrated_count += 1
 
-                # Batch update
+                # Batch insert (no delete needed since table was recreated)
                 if len(batch_updates) >= batch_size:
-                    # Delete old records and insert new ones
-                    for data in batch_updates:
-                        from datus.storage.lancedb_conditions import build_where, eq, and_
-                        from datus.storage.schema_metadata.store import _build_where_clause
-
-                        where_clause = build_where(
-                            _build_where_clause(
-                                table_name=data["table_name"],
-                                catalog_name=data["catalog_name"],
-                                database_name=data["database_name"],
-                                schema_name=data["schema_name"],
-                                table_type=data["table_type"]
-                            )
-                        )
-                        storage.table.delete(where_clause)
-
                     storage.table.add(batch_updates)
                     logger.info(f"Migrated batch of {len(batch_updates)} records (total: {migrated_count}/{len(all_data)})")
                     batch_updates = []
@@ -347,21 +294,6 @@ def migrate_schema_storage(
 
         # Flush remaining records
         if batch_updates:
-            for data in batch_updates:
-                from datus.storage.lancedb_conditions import build_where
-                from datus.storage.schema_metadata.store import _build_where_clause
-
-                where_clause = build_where(
-                    _build_where_clause(
-                        table_name=data["table_name"],
-                        catalog_name=data["catalog_name"],
-                        database_name=data["database_name"],
-                        schema_name=data["schema_name"],
-                        table_type=data["table_type"]
-                    )
-                )
-                storage.table.delete(where_clause)
-
             storage.table.add(batch_updates)
             logger.info(f"Migrated final batch of {len(batch_updates)} records")
 
