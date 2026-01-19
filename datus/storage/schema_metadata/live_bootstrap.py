@@ -443,6 +443,31 @@ def print_bootstrap_results(results: Dict[str, Any]):
     logger.info("=" * 80)
 
 
+def str_to_bool(v):
+    """Convert string to boolean for argparse.
+
+    Accepts various boolean representations and converts them to bool.
+    Used as type converter for argparse arguments to support explicit true/false syntax.
+
+    Args:
+        v: Input value - can be bool, str, or any type
+
+    Returns:
+        bool: True for yes/true/t/y/1, False for no/false/f/n/0
+
+    Raises:
+        argparse.ArgumentTypeError: If string value is not a valid boolean representation
+    """
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError(f'Boolean value expected, got: {v}')
+
+
 async def main():
     """Main function for CLI usage."""
     import argparse
@@ -452,8 +477,8 @@ async def main():
     parser.add_argument("--catalog", default="", help="Catalog name filter")
     parser.add_argument("--database", default="", help="Database name filter")
     parser.add_argument("--schema", default="", help="Schema name filter")
-    parser.add_argument("--extract-statistics", action="store_true", help="Extract column statistics")
-    parser.add_argument("--no-relationships", action="store_true", help="Skip relationship extraction")
+    parser.add_argument("--extract-statistics", type=str_to_bool, default=False, help="Extract column statistics (default: false)")
+    parser.add_argument("--extract-relationships", type=str_to_bool, default=True, help="Extract relationship metadata (default: true)")
     parser.add_argument("--batch-size", type=int, default=100, help="Batch size for processing")
     parser.add_argument("--dialect", default="duckdb", help="Database type")
     parser.add_argument("--incremental", action="store_true", help="Incremental update mode")
@@ -511,7 +536,7 @@ async def main():
                 database_name=args.database,
                 schema_name=args.schema,
                 extract_statistics=args.extract_statistics,
-                extract_relationships=not args.no_relationships,
+                extract_relationships=args.extract_relationships,
                 batch_size=args.batch_size,
                 dialect=args.dialect
             )

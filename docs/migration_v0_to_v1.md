@@ -1,5 +1,22 @@
 # LanceDB Schema Migration: v0 → v1 (Enhanced Metadata)
 
+> **📌 重要提示**: 本文档中的所有命令都会自动从 `agent.yml` 配置文件读取 `storage.base_path`。迁移前请确认配置文件路径正确，脚本无需手动指定数据库路径。
+
+## Quick Start: 获取存储路径
+
+```bash
+# 查看当前配置的存储路径
+python3 -c "
+import yaml
+with open('conf/agent.yml', 'r') as f:
+    config = yaml.safe_load(f)
+    print('Storage path:', config['agent']['storage']['base_path'])
+"
+
+# 输出示例:
+# Storage path: /root/.datus/data
+```
+
 ## Executive Summary
 
 本文档描述了 Datus-Agent RAG 元数据系统从 v0 (基础版本) 到 v1 (增强版本) 的完整迁移流程。v1 版本通过持久化 COMMENT 信息、统计信息和关系元数据，预期可将模式发现精度提升 **30-50%**。
@@ -146,17 +163,41 @@ metadata_version = 1  # Enhanced record (v1)
 #### 1. 备份现有数据
 
 ```bash
+# 首先从配置文件获取实际存储路径
+# 方法 1: 从 agent.yml 读取 storage.base_path
+# 方法 2: 使用脚本自动获取（推荐）
+
+DB_PATH=$(python3 -c "
+import yaml
+with open('conf/agent.yml', 'r') as f:
+    config = yaml.safe_load(f)
+    print(config['agent']['storage']['base_path'])
+")
+
+echo "Detected storage path: $DB_PATH"
+
 # 自动备份（时间戳命名）
-cp -r /path/to/lancedb /path/to/lancedb.backup_v0_$(date +%Y%m%d_%H%M%S)
+cp -r "$DB_PATH" "$DB_PATH.backup_v0_$(date +%Y%m%d_%H%M%S)"
 
 # 示例输出
-# /path/to/lancedb.backup_v0_20250118_143052/
+# /root/.datus/data.backup_v0_20250118_143052/
+```
+
+**或者手动指定路径**（如果配置文件不在标准位置）：
+```bash
+# 根据实际配置路径修改
+cp -r ~/.datus/data ~/.datus/data.backup_v0_$(date +%Y%m%d_%H%M%S)
+# 或
+cp -r /root/.datus/data /root/.datus/data.backup_v0_$(date +%Y%m%d_%H%M%S)
 ```
 
 #### 2. 验证备份
 
 ```bash
-ls -lh /path/to/lancedb.backup_v0_*/
+# 根据实际路径验证
+ls -lh ~/.datus/data.backup_v0_*/
+# 或
+ls -lh /root/.datus/data.backup_v0_*/
 # 确认备份目录存在且有内容
 ```
 
@@ -166,30 +207,51 @@ ls -lh /path/to/lancedb.backup_v0_*/
 
 ```bash
 # 完整迁移（统计信息 + 关系元数据）
+# 方式 1: 显式指定 true/false 值
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
-    --config=config/agent_config.yaml \
-    --extract-statistics=True \
-    --extract-relationships=True \
+    --config=path/to/agent.yml \
+    --extract-statistics=true \
+    --extract-relationships=true \
+    --force
+
+# 方式 2: 使用简写（flags without values, 默认为 true）
+python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+    --config=path/to/agent.yml \
+    --extract-statistics=true \
     --force
 
 # 快速迁移（跳过统计信息）
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
-    --config=config/agent_config.yaml \
-    --extract-statistics=False \
-    --extract-relationships=True
+    --config=path/to/agent.yml \
+    --extract-statistics=false \
+    --extract-relationships=true
 
 # 仅关系元数据（最快，约 30-50 秒/1000 表）
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
-    --config=config/agent_config.yaml \
-    --skip-statistics
+    --config=path/to/agent.yml \
+    --extract-statistics=false
 ```
 
+**配置文件路径**:
+- 脚本会自动从 `agent.yml` 的 `storage.base_path` 配置读取存储路径
+- 无需手动指定 `--db-path` 参数（除非需要覆盖配置）
+- 常见配置文件位置：
+  - `conf/agent.yml` （标准配置）
+  - `~/.datus/config/agent.yml` （用户配置）
+  - `/path/to/your/project/agent.yml` （项目配置）
+
 **参数说明**:
-- `--config`: Agent 配置文件路径
-- `--extract-statistics`: 提取列统计（耗时长，需要数据库连接）
-- `--extract-relationships`: 提取外键关系（从 DDL 解析，无需连接 DB）
+- `--config`: Agent 配置文件路径（必填，用于读取 storage.base_path）
+- `--extract-statistics`: 提取列统计（耗时长，需要数据库连接）。支持: `true`, `false`, `yes`, `no`, `1`, `0`
+- `--extract-relationships`: 提取外键关系（从 DDL 解析，无需连接 DB）。支持: `true`, `false`, `yes`, `no`, `1`, `0`
 - `--skip-backup`: 跳过自动备份（已手动备份时使用）
 - `--force`: 强制重新迁移（即使已有 v1 记录）
+- `--db-path`: 可选，覆盖配置文件中的存储路径
+
+**注意**: 布尔参数支持多种格式：
+- 显式指定: `--extract-statistics=true` 或 `--extract-statistics=false`
+- 简写形式: `true`/`false`/`yes`/`no`/`1`/`0` (不区分大小写)
+- 默认值: `--extract-statistics` 默认为 `false`, `--extract-relationships` 默认为 `true`
 
 #### 方式 2: 手动迁移（开发环境）
 
@@ -217,9 +279,16 @@ print(f"Migration: {migrated_count} records, success={success}")
 #### 检查版本分布
 
 ```python
+from datus.configuration.agent_config import AgentConfig
 from datus.storage.schema_metadata import SchemaStorage
 
-storage = SchemaStorage(db_path="/path/to/lancedb")
+# 从配置文件加载，自动获取存储路径
+agent_config = AgentConfig.from_yaml("path/to/agent.yml")
+db_path = agent_config.rag_storage_path()
+
+print(f"Using storage path from config: {db_path}")
+
+storage = SchemaStorage(db_path=db_path)
 storage._ensure_table_ready()
 
 # 获取所有记录的 metadata_version
@@ -290,26 +359,39 @@ print(f"Foreign keys: {metadata['foreign_keys']}")
 如果需要从**活跃数据库**提取统计信息（row_count、列分布），使用 `live_bootstrap.py`:
 
 ```bash
-# DuckDB 示例
+# DuckDB 示例（使用配置文件中的命名空间）
 python -m datus.storage.schema_metadata.live_bootstrap \
-    --config=config/agent_config.yaml \
+    --config=conf/agent.yml \
     --catalog="" \
     --database=my_db \
     --schema=public \
-    --extract-statistics \
-    --extract-relationships \
+    --extract-statistics=true \
+    --extract-relationships=true \
     --dialect=duckdb
 
 # Snowflake 示例
 python -m datus.storage.schema_metadata.live_bootstrap \
-    --config=config/snowflake_config.yaml \
+    --config=conf/agent.yml \
     --catalog=snowflake \
     --database=analytics_db \
     --schema=public \
-    --extract-statistics \
-    --extract-relationships \
+    --extract-statistics=true \
+    --extract-relationships=true \
     --dialect=snowflake
+
+# 跳过统计信息（快速）
+python -m datus.storage.schema_metadata.live_bootstrap \
+    --config=conf/agent.yml \
+    --database=my_db \
+    --extract-statistics=false \
+    --extract-relationships=true
 ```
+
+**配置说明**：
+- `--config`: 指定 agent.yml 配置文件路径
+- 脚本会自动读取 `storage.base_path` 作为存储路径
+- `namespace` 下的数据库配置用于建立连接
+- 无需在命令行中重复指定数据库连接信息
 
 **性能指标** (1000 表):
 - 仅关系元数据: ~30-50 秒
@@ -346,12 +428,37 @@ print(f"Updated: {results['updated_tables']}, Unchanged: {results['unchanged_tab
 如果迁移后出现问题：
 
 ```bash
+# 方法 1: 使用配置文件路径（推荐）
+# 从配置获取实际存储路径
+DB_PATH=$(python3 -c "
+import yaml
+with open('conf/agent.yml', 'r') as f:
+    config = yaml.safe_load(f)
+    print(config['agent']['storage']['base_path'])
+")
+
 # 1. 停止应用服务
 systemctl stop datus-agent
 
 # 2. 恢复备份
-rm -rf /path/to/lancedb
-mv /path/to/lancedb.backup_v0_* /path/to/lancedb
+rm -rf "$DB_PATH"
+mv "$DB_PATH.backup_v0_"* "$DB_PATH"
+
+# 3. 重启服务
+systemctl start datus-agent
+```
+
+**方法 2: 手动指定路径**（如果配置文件不在标准位置）：
+```bash
+# 根据实际配置路径修改
+# 常见路径: ~/.datus/data 或 /root/.datus/data
+
+# 1. 停止应用服务
+systemctl stop datus-agent
+
+# 2. 恢复备份
+rm -rf /root/.datus/data
+mv /root/.datus/data.backup_v0_* /root/.datus/data
 
 # 3. 重启服务
 systemctl start datus-agent
@@ -672,9 +779,15 @@ print(f"Tables with FK metadata: {fk_count}/{len(all_data)}")
 
 1. **本地测试**
    ```bash
-   # 使用小数据集测试
+   # 方法 1: 使用测试配置文件（推荐）
+   # 创建测试配置 conf/agent.test.yml，设置测试路径
    python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
-       --config=config/agent_config.yaml \
+       --config=conf/agent.test.yml \
+       --force
+
+   # 方法 2: 使用 --db-path 覆盖（仅用于测试）
+   python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+       --config=conf/agent.yml \
        --db-path=/tmp/test_lancedb \
        --force
    ```
@@ -709,21 +822,58 @@ print(f"Tables with FK metadata: {fk_count}/{len(all_data)}")
 
 ### A. 配置文件示例
 
-#### agent_config.yaml
+#### agent.yml（实际配置结构）
 
 ```yaml
-rag_storage_path: /data/lancedb
+agent:
+  # 存储路径配置（迁移脚本会自动读取此路径）
+  storage:
+    base_path: /root/.datus/data          # LanceDB 存储根目录
+    workspace_root: /root/.datus/workspace # 工作空间目录
+    embedding_device_type: cpu             # Embedding 设备类型
 
-schema_discovery_config:
-  semantic_similarity_threshold: 0.5  # 相似度阈值
-  max_tables_per_round: 20
-  enable_enhanced_metadata: true  # 启用 v1 特性
+  # 命名空间配置（数据库连接）
+  namespace:
+    your_database:
+      name: your_database
+      type: starrocks          # 数据库类型: starrocks, mysql, postgres, duckdb 等
+      host: localhost
+      port: 9030
+      username: your_user
+      password: your_password
+      database: analytics_db
+      catalog: ""
 
-database_config:
-  dialect: snowflake
-  catalog: ""
-  database: analytics_db
+  # Schema 发现配置
+  schema_discovery:
+    base_matching_rate: fast              # 匹配速度: fast/medium/slow
+    progressive_matching_enabled: true    # 渐进式匹配
+    llm_matching_enabled: true            # 启用 LLM 匹配
+    external_knowledge_enabled: true      # 启用外部知识
+
+  # 模型配置
+  models:
+    deepseek:
+      api_key: ${DEEPSEEK_API_KEY}        # 环境变量
+      base_url: https://api.deepseek.com
+      model: deepseek-chat
+      type: deepseek
+      vendor: deepseek
+
+  target: deepseek                        # 默认使用的模型
 ```
+
+**存储路径说明**：
+- `storage.base_path` 定义了 LanceDB 数据的根目录
+- 迁移脚本会自动读取此配置，无需手动指定 `--db-path`
+- 常见路径：
+  - `/root/.datus/data` （生产环境）
+  - `~/.datus/data` （开发环境）
+  - `/path/to/your/custom/path` （自定义路径）
+
+**数据库命名空间配置**：
+- 在 `namespace` 下配置实际的数据库连接信息
+- 迁移脚本使用这些配置连接数据库提取元数据
 
 ### B. 相关文件清单
 
@@ -747,43 +897,62 @@ database_config:
 
 ```bash
 # ===== 迁移命令 =====
-# 完整迁移
+# 完整迁移（使用配置文件中的 storage.base_path）
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
-    --config=config/agent_config.yaml \
-    --extract-relationships=True
+    --config=conf/agent.yml \
+    --extract-relationships=true
 
 # 快速迁移（跳过统计）
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
-    --config=config/agent_config.yaml \
-    --extract-statistics=False
+    --config=conf/agent.yml \
+    --extract-statistics=false
 
 # 强制重新迁移
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
-    --config=config/agent_config.yaml \
+    --config=conf/agent.yml \
+    --force
+
+# 覆盖配置路径（不推荐，优先使用配置文件）
+python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+    --config=conf/agent.yml \
+    --db-path=/custom/path/to/lancedb \
     --force
 
 # ===== 实时数据库引导 =====
-# DuckDB
+# DuckDB（使用命名空间配置）
 python -m datus.storage.schema_metadata.live_bootstrap \
-    --config=config/agent_config.yaml \
+    --config=conf/agent.yml \
     --dialect=duckdb \
-    --extract-statistics
+    --extract-statistics=true
 
-# Snowflake
+# Snowflake（使用命名空间配置）
 python -m datus.storage.schema_metadata.live_bootstrap \
-    --config=config/snowflake_config.yaml \
+    --config=conf/agent.yml \
     --dialect=snowflake \
-    --extract-statistics
+    --extract-statistics=true
+
+# 跳过关系提取（仅统计信息）
+python -m datus.storage.schema_metadata.live_bootstrap \
+    --config=conf/agent.yml \
+    --dialect=duckdb \
+    --extract-statistics=true \
+    --extract-relationships=false
 
 # ===== 验证命令 =====
-# 检查版本分布
+# 检查版本分布（从配置文件读取路径）
 python -c "
+from datus.configuration.agent_config import AgentConfig
 from datus.storage.schema_metadata import SchemaStorage
-s = SchemaStorage('/data/lancedb')
+from collections import Counter
+
+config = AgentConfig.from_yaml('conf/agent.yml')
+db_path = config.rag_storage_path()
+print(f'Using storage path: {db_path}')
+
+s = SchemaStorage(db_path)
 s._ensure_table_ready()
 data = s._search_all(None, ['metadata_version'])
-from collections import Counter
-print(Counter(row.get('metadata_version', 0) for row in data.to_pylist()))
+print('Version distribution:', Counter(row.get('metadata_version', 0) for row in data.to_pylist()))
 "
 ```
 

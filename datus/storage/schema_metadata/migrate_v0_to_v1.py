@@ -327,13 +327,38 @@ def verify_migration(storage: SchemaWithValueRAG) -> bool:
         return False
 
 
+def str_to_bool(v):
+    """Convert string to boolean for argparse.
+
+    Accepts various boolean representations and converts them to bool.
+    Used as type converter for argparse arguments to support explicit true/false syntax.
+
+    Args:
+        v: Input value - can be bool, str, or any type
+
+    Returns:
+        bool: True for yes/true/t/y/1, False for no/false/f/n/0
+
+    Raises:
+        argparse.ArgumentTypeError: If string value is not a valid boolean representation
+    """
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError(f'Boolean value expected, got: {v}')
+
+
 def main():
     """Main migration function."""
     parser = argparse.ArgumentParser(description="Migrate LanceDB schema from v0 to v1")
     parser.add_argument("--config", required=True, help="Path to agent configuration file")
     parser.add_argument("--db-path", help="Override database path (default: from config)")
-    parser.add_argument("--extract-statistics", action="store_true", help="Extract column statistics (expensive)")
-    parser.add_argument("--extract-relationships", action="store_true", default=True, help="Extract relationship metadata")
+    parser.add_argument("--extract-statistics", type=str_to_bool, default=False, help="Extract column statistics (expensive)")
+    parser.add_argument("--extract-relationships", type=str_to_bool, default=True, help="Extract relationship metadata")
     parser.add_argument("--skip-backup", action="store_true", help="Skip backup creation")
     parser.add_argument("--force", action="store_true", help="Force migration even if v1 already exists")
 
