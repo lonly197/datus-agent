@@ -54,7 +54,7 @@ class DeepResearchEventConverter:
             "content": "发现数据库模式",
             "node_types": ["schema_discovery", "schema_validation"],
         },
-        {"id": "step_sql", "content": "生成SQL查询", "node_types": ["generate_sql"]},
+        {"id": "step_sql", "content": "生成SQL查询", "node_types": ["generate_sql", "sql_generation"]},
         {
             "id": "step_exec",
             "content": "执行SQL并验证结果",
@@ -1426,8 +1426,8 @@ class DeepResearchEventConverter:
                     sql_content = f"```sql\n{sql}\n```"
 
             if sql_content:
-                # SQL generation events usually don't have a specific planId unless tied to a todo
-                sql_plan_id = todo_id if todo_id else None
+                # Use unified planId strategy: maps sql_generation -> step_sql virtual step
+                sql_plan_id = self._get_unified_plan_id(action, force_associate=True)
                 events.append(
                     ChatEvent(
                         id=event_id,
