@@ -439,7 +439,17 @@ class StarRocksConnector(BaseSqlConnector):
         if not db_name:
             return []
 
-        cursor.execute(f"SHOW TABLES FROM `{db_name}`")
+        try:
+            # Ensure we have the correct database context
+            if self.database != db_name:
+                cursor.execute(f"USE `{db_name}`")
+                self.database = db_name
+                logger.debug(f"Switched to database context: {db_name}")
+        except Exception as e:
+            logger.warning(f"Failed to switch to database {db_name}: {e}")
+
+        # Fix: Remove FROM clause (database context already set)
+        cursor.execute("SHOW TABLES")
         return [row[0] for row in cursor.fetchall()]
 
     @override
@@ -510,14 +520,24 @@ class StarRocksConnector(BaseSqlConnector):
             return []
 
         try:
+            # Ensure we have the correct database context
+            try:
+                # Switch to the database context if not already there
+                if self.database != db_name:
+                    cursor.execute(f"USE `{db_name}`")
+                    self.database = db_name
+                    logger.debug(f"Switched to database context: {db_name}")
+            except Exception as e:
+                logger.warning(f"Failed to switch to database {db_name}: {e}")
+
             # Get table names
             if tables:
                 # Get DDL for specific tables
                 table_list = []
                 for table in tables:
                     try:
-                        # Try to get CREATE TABLE statement
-                        cursor.execute(f"SHOW CREATE TABLE `{db_name}`.`{table}`")
+                        # Fix: Remove database name from SHOW CREATE TABLE (database context already set)
+                        cursor.execute(f"SHOW CREATE TABLE `{table}`")
                         result = cursor.fetchone()
                         if result and len(result) >= 2:
                             create_statement = result[1]
@@ -537,17 +557,28 @@ class StarRocksConnector(BaseSqlConnector):
                     except Exception as e:
                         logger.warning(f"Failed to get DDL for table {table}: {e}")
 
+                # Log result count
+                if table_list:
+                    logger.debug(f"Retrieved DDL for {len(table_list)} tables from database")
+                else:
+                    logger.warning(
+                        f"get_tables_with_ddl returned 0 tables. "
+                        f"DB: {db_name}, "
+                        f"Filter: {tables}"
+                    )
+
                 return table_list
             else:
                 # Get all tables with DDL
                 # First, get all table names
-                cursor.execute(f"SHOW TABLES FROM `{db_name}`")
+                cursor.execute("SHOW TABLES")  # Fix: Remove FROM clause (database context already set)
                 all_tables = [row[0] for row in cursor.fetchall()]
 
                 table_list = []
                 for table in all_tables:
                     try:
-                        cursor.execute(f"SHOW CREATE TABLE `{db_name}`.`{table}`")
+                        # Fix: Remove database name from SHOW CREATE TABLE (database context already set)
+                        cursor.execute(f"SHOW CREATE TABLE `{table}`")
                         result = cursor.fetchone()
                         if result and len(result) >= 2:
                             create_statement = result[1]
@@ -566,6 +597,17 @@ class StarRocksConnector(BaseSqlConnector):
                             })
                     except Exception as e:
                         logger.warning(f"Failed to get DDL for table {table}: {e}")
+
+                # Log result count
+                if table_list:
+                    logger.debug(f"Retrieved DDL for {len(table_list)} tables from database")
+                else:
+                    logger.warning(
+                        f"get_tables_with_ddl returned 0 tables. "
+                        f"DB: {db_name}, "
+                        f"Schema: {schema_name}, "
+                        f"Filter: {tables}"
+                    )
 
                 return table_list
 
@@ -627,12 +669,22 @@ class StarRocksConnector(BaseSqlConnector):
         if not db_name:
             return []
 
+        try:
+            # Ensure we have the correct database context
+            if self.database != db_name:
+                cursor.execute(f"USE `{db_name}`")
+                self.database = db_name
+                logger.debug(f"Switched to database context: {db_name}")
+        except Exception as e:
+            logger.warning(f"Failed to switch to database {db_name}: {e}")
+
         samples = []
 
         if tables:
             for table_name in tables:
                 try:
-                    query = f"SELECT * FROM `{db_name}`.`{table_name}` LIMIT {top_n}"
+                    # Fix: Remove database name from query (database context already set)
+                    query = f"SELECT * FROM `{table_name}` LIMIT {top_n}"
                     cursor.execute(query)
 
                     if cursor.description:
@@ -659,12 +711,13 @@ class StarRocksConnector(BaseSqlConnector):
                     logger.warning(f"Failed to get sample rows for table {table_name}: {e}")
         else:
             # Get all tables
-            cursor.execute(f"SHOW TABLES FROM `{db_name}`")
+            cursor.execute("SHOW TABLES")  # Fix: Remove FROM clause (database context already set)
             all_tables = [row[0] for row in cursor.fetchall()]
 
             for table_name in all_tables:
                 try:
-                    query = f"SELECT * FROM `{db_name}`.`{table_name}` LIMIT {top_n}"
+                    # Fix: Remove database name from query (database context already set)
+                    query = f"SELECT * FROM `{table_name}` LIMIT {top_n}"
                     cursor.execute(query)
 
                     if cursor.description:

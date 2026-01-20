@@ -156,8 +156,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         f"Using clarified task for schema discovery: "
                         f"'{task.task[:50]}...' → '{clarified_task[:50]}...'"
                     )
-                    # Temporarily use clarified task for schema discovery
-                    original_task_text = task.task
+                    # ✅ Fix: Temporarily use clarified task for schema discovery with safe restoration
+                    # Store original task in instance variable for safe restoration
+                    self._original_task_text = task.task
                     task.task = clarified_task
 
                     # Store clarification metadata for logging
@@ -278,6 +279,16 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 status=ActionStatus.FAILED,
                 output={"error": error_result.error_message, "error_code": error_result.error_code},
             )
+
+        finally:
+            # ✅ Fix: Restore original task to prevent parameter pollution
+            # Check if we have the original_task_text from the clarified task modification
+            original_task_text = getattr(self, '_original_task_text', None)
+            if original_task_text is not None:
+                self.workflow.task.task = original_task_text
+                logger.info(f"Restored original task to prevent parameter pollution")
+                # Clear the stored original task
+                self._original_task_text = None
 
     async def _discover_candidate_tables(self, task, intent: str) -> List[str]:
         """
