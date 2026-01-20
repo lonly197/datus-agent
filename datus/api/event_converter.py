@@ -99,6 +99,12 @@ class DeepResearchEventConverter:
         # Fixed virtual plan ID for all PlanUpdateEvents (fixes event association issue)
         self.virtual_plan_id = str(uuid.uuid4())
 
+        # State for agentic workflow TodoItem tracking
+        # Tracks the currently executing TodoItem ID for proper event binding
+        self.active_todo_item_id: Optional[str] = None
+        # Maps action_id to todo_id for tracking which TodoItem each action belongs to
+        self.todo_item_action_map: Dict[str, str] = {}
+
     def _get_virtual_step_id(self, node_type: str) -> Optional[str]:
         """Map node type to virtual step ID."""
         for step in self.VIRTUAL_STEPS:
@@ -1248,9 +1254,10 @@ class DeepResearchEventConverter:
         Unified planId retrieval strategy to ensure consistent event association.
 
         This method implements a clear ID responsibility separation:
+        - active_todo_item_id: Currently executing TodoItem in agentic workflows (highest priority)
+        - todo_id: Specific task identifier from action metadata
         - virtual_plan_id: Stable event association identifier for Text2SQL workflow
         - active_virtual_step_id: Internal state tracking only (never exposed as planId)
-        - todo_id: Specific task identifier from action (highest priority)
 
         Args:
             action: The action to get planId for
@@ -1260,25 +1267,38 @@ class DeepResearchEventConverter:
                            (for general messages like ChatEvent that don't require association)
 
         Returns:
-            planId priority: todo_id > virtual_step_id > virtual_plan_id > None
+            planId priority: active_todo_item_id > todo_id > virtual_step_id > virtual_plan_id > None
         """
-        # 1. Priority: Extract todo_id from action (most specific)
+        # 1. Priority: Active TodoItem ID (agentic workflow execution)
+        # When a TodoItem is actively being executed, bind all events to it
+        if self.active_todo_item_id:
+            return self.active_todo_item_id
+
+        # 2. Priority: Extract todo_id from action metadata (explicit binding)
         todo_id = self._extract_todo_id_from_action(action)
         if todo_id:
             return todo_id
 
-        # 2. Map Text2SQL action_type to virtual step ID for Tool event binding
-        # This ensures ToolCallEvents bind to their corresponding TodoItems
+        # 3. Map Text2SQL action_type to virtual step ID for Tool event binding
+        # This ensures ToolCallEvents bind to their corresponding virtual steps
         virtual_step_id = self._get_virtual_step_id(action.action_type)
+
+        # Special handling for node_execution: extract node_type from input
+        if not virtual_step_id and action.action_type == "node_execution":
+            if action.input and isinstance(action.input, dict):
+                node_type = action.input.get("node_type")
+                if node_type:
+                    virtual_step_id = self._get_virtual_step_id(node_type)
+
         if virtual_step_id:
             self.logger.debug(f"Mapped action_type '{action.action_type}' to virtual_step_id '{virtual_step_id}'")
             return virtual_step_id
 
-        # 3. For events that require association, use virtual_plan_id (stable across workflow)
+        # 4. For events that require association, use virtual_plan_id (stable across workflow)
         if force_associate:
             return self.virtual_plan_id
 
-        # 4. For events that don't require association, return None
+        # 5. For events that don't require association, return None
         return None
 
     def _find_tool_call_id(self, action: ActionHistory) -> Optional[str]:
@@ -1772,6 +1792,22 @@ class DeepResearchEventConverter:
 
         # 2. Handle tool calls - ToolCallEvent / ToolCallResultEvent and PlanUpdateEvent for plan tools
         elif action.role == ActionRole.TOOL:
+            # Handle tool_call_result first - don't generate new tool_call_id, find the original
+            if action.action_type == "tool_call_result" and action.output:
+                tool_call_id = self._find_tool_call_id(action)
+                if tool_call_id:
+                    events.append(
+                        ToolCallResultEvent(
+                            id=event_id,
+                            planId=self._get_unified_plan_id(action, force_associate=True),
+                            timestamp=timestamp,
+                            toolCallId=str(tool_call_id),
+                            data=action.output,
+                            error=action.status == ActionStatus.FAILED,
+                        )
+                    )
+                return events
+
             # 过滤掉内部的todo_update状态管理调用
             if action.action_type == "todo_update" and self._is_internal_todo_update(action):
                 return []  # 不生成任何事件
@@ -1803,6 +1839,29 @@ class DeepResearchEventConverter:
             # Determine planId for tool events using unified strategy
             # This ensures proper binding for both plan tools and Text2SQL workflow tools
             tool_plan_id = self._get_unified_plan_id(action, force_associate=True)
+
+            # Track active TodoItem for agentic workflow event binding
+            # When todo_update changes status to "in_progress", track that TodoItem
+            # When status is "completed" or "failed", clear the active TodoItem
+            if is_plan_tool and action.action_type == "todo_update":
+                todo_id = None
+                # First try to get todo_id from normalized_input
+                if "todo_id" in normalized_input:
+                    todo_id = normalized_input["todo_id"]
+                # Then try to get todo_id from plan_data updated_item
+                elif "updated_item" in plan_data:
+                    ui = plan_data["updated_item"]
+                    if isinstance(ui, dict) and ui.get("id"):
+                        todo_id = ui["id"]
+                        # Check the status to update active_todo_item_id
+                        status = ui.get("status", "").lower()
+                        if status == "in_progress":
+                            self.active_todo_item_id = todo_id
+                            self.logger.debug(f"Tracking active TodoItem: {todo_id}")
+                        elif status in ("completed", "failed", "error"):
+                            if self.active_todo_item_id == todo_id:
+                                self.logger.debug(f"Clearing active TodoItem: {todo_id} (status={status})")
+                                self.active_todo_item_id = None
 
             # If this is a plan tool and we found plan data, emit PlanUpdateEvent first
             if is_plan_tool and plan_data:
@@ -1891,24 +1950,7 @@ class DeepResearchEventConverter:
                         )
                     )
 
-        # 3. Handle tool results (legacy support)
-        elif action.action_type == "tool_call_result" and action.output:
-            # Try to find a matching tool_call_id robustly
-            tool_call_id = self._find_tool_call_id(action)
-
-            if tool_call_id:
-                events.append(
-                    ToolCallResultEvent(
-                        id=event_id,
-                        planId=self._get_unified_plan_id(action, force_associate=True),
-                        timestamp=timestamp,
-                        toolCallId=str(tool_call_id),
-                        data=action.output,
-                        error=action.status == ActionStatus.FAILED,
-                    )
-                )
-
-        # 4. Handle plan updates
+        # 3. Handle plan updates
         elif action.action_type == "plan_update" and action.output:
             todos = []
             if isinstance(action.output, dict):

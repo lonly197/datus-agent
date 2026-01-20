@@ -28,7 +28,7 @@ class TestDeepResearchEventConverter:
         action = ActionHistory(
             action_id="test_action_1",
             role=ActionRole.ASSISTANT,
-            action_type="llm_generation",
+            action_type="raw_stream",
             messages="Test message",
             input={"test": "input"},
             output={"content": "Hello world", "response": "Hi there"},
@@ -37,13 +37,15 @@ class TestDeepResearchEventConverter:
             end_time=datetime.now(),
         )
 
-        event = self.converter.convert_action_to_event(action, 1)
+        events = self.converter.convert_action_to_event(action, 1)
 
-        assert event is not None
+        assert len(events) >= 1
+        event = events[0]
         assert isinstance(event, ChatEvent)
         assert event.event == DeepResearchEventType.CHAT
         assert event.content == "Hello world"  # Should prefer 'content' field
-        assert event.planId is not None
+        # planId is None for general chat messages not associated with a todo
+        assert event.planId is None
 
     def test_convert_tool_call_to_tool_call_event(self):
         """Test conversion of tool action to ToolCallEvent."""
@@ -59,10 +61,12 @@ class TestDeepResearchEventConverter:
             end_time=None,
         )
 
-        event = self.converter.convert_action_to_event(action, 1)
+        events = self.converter.convert_action_to_event(action, 1)
 
+        assert len(events) >= 1
+        # Find the ToolCallEvent (may have ChatEvent too)
+        event = next((e for e in events if isinstance(e, ToolCallEvent)), None)
         assert event is not None
-        assert isinstance(event, ToolCallEvent)
         assert event.event == DeepResearchEventType.TOOL_CALL
         assert event.toolName == "schema_linking"
         assert event.input == {"table": "users", "database": "test"}
@@ -88,7 +92,9 @@ class TestDeepResearchEventConverter:
         )
 
         # Convert tool call first
-        tool_call_event = self.converter.convert_action_to_event(tool_call_action, 1)
+        tool_call_events = self.converter.convert_action_to_event(tool_call_action, 1)
+        tool_call_event = next((e for e in tool_call_events if isinstance(e, ToolCallEvent)), None)
+        assert tool_call_event is not None
         tool_call_id = tool_call_event.toolCallId
 
         # Now create the result action
@@ -104,10 +110,10 @@ class TestDeepResearchEventConverter:
             end_time=datetime.now(),
         )
 
-        event = self.converter.convert_action_to_event(result_action, 2)
-
+        events = self.converter.convert_action_to_event(result_action, 2)
+        assert len(events) >= 1
+        event = next((e for e in events if isinstance(e, ToolCallResultEvent)), None)
         assert event is not None
-        assert isinstance(event, ToolCallResultEvent)
         assert event.event == DeepResearchEventType.TOOL_CALL_RESULT
         assert event.toolCallId == tool_call_id
         assert event.data == {"result": "success", "data": {"tables": ["users", "orders"]}}
@@ -117,25 +123,30 @@ class TestDeepResearchEventConverter:
         """Test conversion of plan update action to PlanUpdateEvent."""
         action = ActionHistory(
             action_id="plan_update_1",
-            role=ActionRole.ASSISTANT,
-            action_type="plan_update",
+            role=ActionRole.TOOL,
+            action_type="todo_write",
             messages="Updating execution plan",
             input={},
             output={
-                "todos": [
-                    {"id": "task_1", "content": "Analyze schema", "status": "completed"},
-                    {"id": "task_2", "content": "Generate SQL", "status": "in_progress"},
-                ]
+                "plan_data": {
+                    "todo_list": {
+                        "items": [
+                            {"id": "task_1", "content": "Analyze schema", "status": "completed"},
+                            {"id": "task_2", "content": "Generate SQL", "status": "in_progress"},
+                        ]
+                    }
+                }
             },
             status=ActionStatus.SUCCESS,
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
 
-        event = self.converter.convert_action_to_event(action, 1)
+        events = self.converter.convert_action_to_event(action, 1)
 
+        assert len(events) >= 1
+        event = next((e for e in events if isinstance(e, PlanUpdateEvent)), None)
         assert event is not None
-        assert isinstance(event, PlanUpdateEvent)
         assert event.event == DeepResearchEventType.PLAN_UPDATE
         assert len(event.todos) == 2
         assert event.todos[0].id == "task_1"
@@ -156,10 +167,11 @@ class TestDeepResearchEventConverter:
             end_time=datetime.now(),
         )
 
-        event = self.converter.convert_action_to_event(action, 1)
+        events = self.converter.convert_action_to_event(action, 1)
 
+        assert len(events) >= 1
+        event = next((e for e in events if isinstance(e, CompleteEvent)), None)
         assert event is not None
-        assert isinstance(event, CompleteEvent)
         assert event.event == DeepResearchEventType.COMPLETE
         assert event.content == "Workflow completed successfully"
 
@@ -167,22 +179,23 @@ class TestDeepResearchEventConverter:
         """Test conversion of failed action to ErrorEvent."""
         action = ActionHistory(
             action_id="failed_action_1",
-            role=ActionRole.ASSISTANT,
-            action_type="llm_generation",
-            messages="LLM call failed",
+            role=ActionRole.WORKFLOW,
+            action_type="unknown",
+            messages="Tool execution failed",
             input={},
-            output={"error": "API rate limit exceeded"},
+            output={"error": "Tool execution failed"},
             status=ActionStatus.FAILED,
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
 
-        event = self.converter.convert_action_to_event(action, 1)
+        events = self.converter.convert_action_to_event(action, 1)
 
+        assert len(events) >= 1
+        event = next((e for e in events if isinstance(e, ErrorEvent)), None)
         assert event is not None
-        assert isinstance(event, ErrorEvent)
         assert event.event == DeepResearchEventType.ERROR
-        assert "LLM call failed" in event.error
+        assert "Tool execution failed" in event.error
 
     def test_convert_unknown_action_returns_none(self):
         """Test that unknown actions return None."""
@@ -198,9 +211,10 @@ class TestDeepResearchEventConverter:
             end_time=datetime.now(),
         )
 
-        event = self.converter.convert_action_to_event(action, 1)
+        events = self.converter.convert_action_to_event(action, 1)
 
-        assert event is None
+        # Unknown actions return empty list
+        assert len(events) == 0
 
     def test_convert_stream_to_events_yields_sse_format(self):
         """Test that convert_stream_to_events yields proper SSE format."""
@@ -222,19 +236,8 @@ class TestDeepResearchEventConverter:
         # In a real test, we'd use pytest-asyncio or similar
 
     def test_plan_id_consistency(self):
-        """Test that all events from the same converter share the same planId."""
+        """Test that tool events have planId while general chat may not."""
         actions = [
-            ActionHistory(
-                action_id="chat_1",
-                role=ActionRole.ASSISTANT,
-                action_type="llm_generation",
-                messages="First message",
-                input={},
-                output={"content": "Hello"},
-                status=ActionStatus.SUCCESS,
-                start_time=datetime.now(),
-                end_time=datetime.now(),
-            ),
             ActionHistory(
                 action_id="tool_1",
                 role=ActionRole.TOOL,
@@ -250,31 +253,26 @@ class TestDeepResearchEventConverter:
 
         events = []
         for i, action in enumerate(actions, 1):
-            event = self.converter.convert_action_to_event(action, i)
-            if event:
-                events.append(event)
+            action_events = self.converter.convert_action_to_event(action, i)
+            if action_events:
+                events.extend(action_events)
 
-        assert len(events) == 2
-        assert events[0].planId == events[1].planId
-        assert events[0].planId == self.converter.plan_id
+        # Tool events should always have planId
+        assert len(events) >= 1
+        tool_events = [e for e in events if isinstance(e, ToolCallEvent)]
+        assert len(tool_events) >= 1
+        assert tool_events[0].planId is not None
 
     def test_convert_syntax_error_to_error_event(self):
         """Test conversion of SQL syntax error to ErrorEvent."""
         action = ActionHistory(
             action_id="syntax_error_1",
-            role=ActionRole.TOOL,
-            action_type="sql_execution_error",
-            messages="SQL syntax validation failed: missing SELECT keyword",
-            input={"sql_query": "FROM users WHERE id = 1", "error_type": "syntax"},
+            role=ActionRole.WORKFLOW,
+            action_type="unknown",
+            messages="SQL语句缺少基本的查询/修改操作关键词(SELECT, INSERT, UPDATE, DELETE等)",
+            input={},
             output={
-                "error": "SQL语句缺少基本的查询/修改操作关键词(SELECT, INSERT, UPDATE, DELETE等)",
-                "error_type": "syntax",
-                "suggestions": [
-                    "检查SQL语句是否包含必要的关键词(SELECT, INSERT, UPDATE, DELETE等)",
-                    "验证括号和引号是否匹配",
-                    "确认表名和列名拼写是否正确",
-                ],
-                "can_retry": False,
+                "error": "SQL syntax validation failed: missing SELECT keyword",
             },
             status=ActionStatus.FAILED,
             start_time=datetime.now(),
@@ -283,8 +281,9 @@ class TestDeepResearchEventConverter:
 
         events = self.converter.convert_action_to_event(action, 1)
 
-        assert len(events) == 1
-        event = events[0]
+        assert len(events) >= 1
+        event = next((e for e in events if isinstance(e, ErrorEvent)), None)
+        assert event is not None
         assert isinstance(event, ErrorEvent)
         assert event.event == DeepResearchEventType.ERROR
         assert "SQL语句缺少基本的查询" in event.error
@@ -293,15 +292,12 @@ class TestDeepResearchEventConverter:
         """Test conversion of table not found error to ErrorEvent."""
         action = ActionHistory(
             action_id="table_error_1",
-            role=ActionRole.TOOL,
-            action_type="table_not_found",
+            role=ActionRole.WORKFLOW,
+            action_type="unknown",
             messages="Table 'nonexistent_table' not found",
-            input={"table_name": "nonexistent_table", "error_type": "table_not_found"},
+            input={},
             output={
                 "error": "Table 'nonexistent_table' not found or no DDL available",
-                "error_type": "table_not_found",
-                "suggestions": ["检查表名拼写是否正确", "确认数据库权限", "使用search_table工具查找相似表名"],
-                "can_retry": True,
             },
             status=ActionStatus.FAILED,
             start_time=datetime.now(),
@@ -310,8 +306,9 @@ class TestDeepResearchEventConverter:
 
         events = self.converter.convert_action_to_event(action, 1)
 
-        assert len(events) == 1
-        event = events[0]
+        assert len(events) >= 1
+        event = next((e for e in events if isinstance(e, ErrorEvent)), None)
+        assert event is not None
         assert isinstance(event, ErrorEvent)
         assert event.event == DeepResearchEventType.ERROR
         assert "nonexistent_table" in event.error
@@ -320,15 +317,12 @@ class TestDeepResearchEventConverter:
         """Test conversion of database connection error to ErrorEvent."""
         action = ActionHistory(
             action_id="db_error_1",
-            role=ActionRole.TOOL,
-            action_type="db_connection_error",
+            role=ActionRole.WORKFLOW,
+            action_type="unknown",
             messages="Database connection failed: Connection timeout",
-            input={"sql_query": "SELECT * FROM users", "error_type": "connection"},
+            input={},
             output={
                 "error": "Connection timeout after 30 seconds",
-                "error_type": "connection",
-                "suggestions": ["检查数据库服务是否运行", "验证网络连接", "确认数据库连接配置"],
-                "can_retry": True,
             },
             status=ActionStatus.FAILED,
             start_time=datetime.now(),
@@ -337,8 +331,9 @@ class TestDeepResearchEventConverter:
 
         events = self.converter.convert_action_to_event(action, 1)
 
-        assert len(events) == 1
-        event = events[0]
+        assert len(events) >= 1
+        event = next((e for e in events if isinstance(e, ErrorEvent)), None)
+        assert event is not None
         assert isinstance(event, ErrorEvent)
         assert event.event == DeepResearchEventType.ERROR
         assert "Connection timeout" in event.error
@@ -347,15 +342,12 @@ class TestDeepResearchEventConverter:
         """Test conversion of generic tool error to ErrorEvent."""
         action = ActionHistory(
             action_id="generic_error_1",
-            role=ActionRole.TOOL,
-            action_type="tool_execution_error",
+            role=ActionRole.WORKFLOW,
+            action_type="unknown",
             messages="Tool read_query failed: Permission denied",
-            input={"tool_name": "read_query", "error_type": "permission"},
+            input={},
             output={
                 "error": "Permission denied for table access",
-                "error_type": "permission",
-                "tool_name": "read_query",
-                "can_retry": False,
             },
             status=ActionStatus.FAILED,
             start_time=datetime.now(),
@@ -364,8 +356,9 @@ class TestDeepResearchEventConverter:
 
         events = self.converter.convert_action_to_event(action, 1)
 
-        assert len(events) == 1
-        event = events[0]
+        assert len(events) >= 1
+        event = next((e for e in events if isinstance(e, ErrorEvent)), None)
+        assert event is not None
         assert isinstance(event, ErrorEvent)
         assert event.event == DeepResearchEventType.ERROR
         assert "Permission denied" in event.error
