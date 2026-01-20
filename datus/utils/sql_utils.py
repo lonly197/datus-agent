@@ -172,15 +172,16 @@ def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE
     """
     dialect = parse_dialect(dialect)
 
-    try:
-        result = {
-            "table": {"name": "", "schema_name": "", "database_name": ""},
-            "columns": [],
-            "primary_keys": [],
-            "foreign_keys": [],
-            "indexes": []
-        }
+    # First try sqlglot parsing
+    result = {
+        "table": {"name": "", "schema_name": "", "database_name": ""},
+        "columns": [],
+        "primary_keys": [],
+        "foreign_keys": [],
+        "indexes": []
+    }
 
+    try:
         # Parse SQL using sqlglot with error handling
         parsed = sqlglot.parse_one(sql.strip(), dialect=dialect, error_level=sqlglot.ErrorLevel.IGNORE)
 
@@ -264,22 +265,166 @@ def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE
 
                 result["indexes"].append(index_dict)
 
-        return result
+            # If we got here, sqlglot parsing was successful
+            # Check if we have basic information (table name and at least one column)
+            if result["table"]["name"] and result["columns"]:
+                return result
 
     except Exception as e:
         # Log the actual DDL snippet for debugging
         ddl_preview = sql[:200] if len(sql) > 200 else sql
-        logger.error(
-            f"Error parsing SQL for enhanced metadata (dialect={dialect}): {e}\n"
+        logger.warning(
+            f"Error parsing SQL with sqlglot (dialect={dialect}): {e}\n"
             f"DDL preview: {ddl_preview}..."
         )
-        return {
-            "table": {"name": "", "comment": ""},
-            "columns": [],
-            "primary_keys": [],
-            "foreign_keys": [],
-            "indexes": []
-        }
+
+    # Fallback: Use regex-based parsing for StarRocks/MySQL-style DDL
+    logger.info(f"Falling back to regex parsing for dialect: {dialect}")
+    regex_result = _parse_ddl_with_regex(sql, dialect)
+
+    # Merge regex result with sqlglot result (prefer sqlglot where available)
+    if regex_result["table"]["name"]:
+        result["table"]["name"] = regex_result["table"]["name"]
+    if regex_result["columns"]:
+        result["columns"] = regex_result["columns"]
+    if regex_result["table"].get("comment"):
+        result["table"]["comment"] = regex_result["table"]["comment"]
+
+    return result
+
+
+def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
+    """
+    Fallback regex-based DDL parser for when sqlglot fails.
+    Particularly useful for StarRocks and MySQL dialects.
+
+    Args:
+        sql: DDL statement
+        dialect: SQL dialect
+
+    Returns:
+        Dict with parsed metadata
+    """
+    result = {
+        "table": {"name": "", "schema_name": "", "database_name": "", "comment": ""},
+        "columns": [],
+        "primary_keys": [],
+        "foreign_keys": [],
+        "indexes": []
+    }
+
+    try:
+        # Extract table name
+        # Match: CREATE TABLE `table_name` or CREATE TABLE table_name
+        table_match = re.search(r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"]?([\w.]+)[`"]?\s*\(', sql, re.IGNORECASE)
+        if table_match:
+            table_name = table_match.group(1).strip('"`')
+            result["table"]["name"] = table_name
+
+        # Extract table comment (MySQL/StarRocks style)
+        # Use simple pattern to find all COMMENT= patterns and take the last one (table comment)
+        comment_matches = re.findall(r'COMMENT\s*=\s*["\']([^"\']+)["\']', sql, re.IGNORECASE)
+        if comment_matches:
+            # The table comment is typically the last one
+            result["table"]["comment"] = comment_matches[-1]
+            logger.debug(f"Table comment extracted: {comment_matches[-1]}")
+
+        # Extract column definitions
+        # Match column definitions between the outer parentheses
+        # This is a simplified parser that handles common cases
+
+        # Find the content between the first ( and the matching )
+        paren_count = 0
+        start_idx = -1
+        end_idx = -1
+
+        for i, char in enumerate(sql):
+            if char == '(':
+                if paren_count == 0:
+                    start_idx = i + 1
+                paren_count += 1
+            elif char == ')':
+                paren_count -= 1
+                if paren_count == 0:
+                    end_idx = i
+                    break
+
+        if start_idx > 0 and end_idx > start_idx:
+            columns_text = sql[start_idx:end_idx]
+
+            # Split by comma, but be careful of commas inside parentheses
+            column_defs = []
+            current_def = ""
+            paren_depth = 0
+
+            for char in columns_text:
+                if char == '(':
+                    paren_depth += 1
+                    current_def += char
+                elif char == ')':
+                    paren_depth -= 1
+                    current_def += char
+                elif char == ',' and paren_depth == 0:
+                    if current_def.strip():
+                        column_defs.append(current_def.strip())
+                    current_def = ""
+                else:
+                    current_def += char
+
+            if current_def.strip():
+                column_defs.append(current_def.strip())
+
+            # Parse each column definition
+            for col_def in column_defs:
+                # Skip constraint definitions (PRIMARY KEY, FOREIGN KEY, etc.)
+                if re.match(r'^(PRIMARY\s+KEY|FOREIGN\s+KEY|CONSTRAINT|INDEX|UNIQUE|KEY)\s', col_def, re.IGNORECASE):
+                    continue
+
+                # Extract column name, type, and comment
+                # Pattern: column_name TYPE [NULL|NOT NULL] [DEFAULT value] [COMMENT 'comment']
+                col_match = re.match(r'`?([\w]+)`?\s+(\w+(?:\([^)]+\))?)\s*(NULL|NOT\s+NULL)?\s*(?:DEFAULT\s+[^,\s]+)?\s*(?:COMMENT\s+["\']([^"\']+)["\'])?', col_def, re.IGNORECASE)
+
+                if col_match:
+                    col_name = col_match.group(1).strip('"`')
+                    col_type = col_match.group(2)
+                    is_nullable = col_match.group(3) is None or (col_match.group(3) and 'NULL' in col_match.group(3).upper())
+                    col_comment = col_match.group(4) if col_match.group(4) else ""
+
+                    col_dict = {
+                        "name": col_name,
+                        "type": col_type,
+                        "nullable": is_nullable,
+                        "comment": col_comment
+                    }
+                    result["columns"].append(col_dict)
+
+        # Extract primary key
+        pk_match = re.search(r'PRIMARY\s+KEY\s*\(([^)]+)\)', sql, re.IGNORECASE)
+        if pk_match:
+            pk_columns = [col.strip().strip('"`') for col in pk_match.group(1).split(',')]
+            result["primary_keys"] = pk_columns
+
+        # Extract foreign keys (simplified)
+        for fk_match in re.finditer(r'FOREIGN\s+KEY\s*\(`?([^`)]+)`?\)\s*REFERENCES\s+[`"]?([\w.]+)[`"]?\s*\(([^)]+)\)', sql, re.IGNORECASE):
+            fk_dict = {
+                "from_column": fk_match.group(1).strip('"`'),
+                "to_table": fk_match.group(2).strip('"`'),
+                "to_column": fk_match.group(3).strip('"`')
+            }
+            result["foreign_keys"].append(fk_dict)
+
+        # Extract indexes (simplified)
+        for idx_match in re.finditer(r'(?:UNIQUE\s+)?(?:KEY|INDEX)\s+[`"]?([\w]+)[`"]?\s*\(([^)]+)\)', sql, re.IGNORECASE):
+            index_dict = {
+                "name": idx_match.group(1),
+                "columns": [col.strip().strip('"`') for col in idx_match.group(2).split(',')]
+            }
+            result["indexes"].append(index_dict)
+
+    except Exception as e:
+        logger.warning(f"Error in regex DDL parsing: {e}")
+
+    return result
 
 
 def extract_table_names(sql, dialect=DBType.SNOWFLAKE, ignore_empty=False) -> List[str]:
