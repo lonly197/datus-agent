@@ -463,12 +463,17 @@ class SchemaValidationNode(Node, LLMMixin):
             # ✅ Use LLMMixin with retry and caching
             cache_key = f"llm_term_extraction:{hash(query)}"
             max_retries = LLM_TERM_EXTRACTION_CONFIG.get("max_retries", 3)
+            cache_enabled = LLM_TERM_EXTRACTION_CONFIG.get("cache_enabled", True)
+            cache_ttl_seconds = (
+                LLM_TERM_EXTRACTION_CONFIG.get("cache_ttl_seconds") if cache_enabled else None
+            )
 
             response = await self.llm_call_with_retry(
                 prompt=prompt,
                 operation_name="term_extraction",
-                cache_key=cache_key,
+                cache_key=cache_key if cache_enabled else None,
                 max_retries=max_retries,
+                cache_ttl_seconds=cache_ttl_seconds,
             )
 
             terms = response.get("terms", [])

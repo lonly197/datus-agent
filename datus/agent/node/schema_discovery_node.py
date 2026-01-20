@@ -311,8 +311,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     logger.info(f"[LLM Matching] Found {len(llm_tables)} tables via LLM inference")
 
             # --- Stage 1: Fast Cache/Keyword & Semantic (Hybrid Search) ---
-            # Adjust top_n based on matching rate
-            top_n = {"fast": 5, "medium": 10, "slow": 20, "from_llm": 20}.get(final_matching_rate, 5)
+            # Align with design: semantic search uses top_n=20 by default.
+            top_n = 20
 
             # 1. Semantic Search (High Priority)
             semantic_tables = await self._semantic_table_discovery(task.task, top_n=top_n)
@@ -703,12 +703,17 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             # ✅ Use LLMMixin with retry and caching
             cache_key = f"llm_table_discovery:{hash(query)}"
             max_retries = LLM_TABLE_DISCOVERY_CONFIG.get("max_retries", 3)
+            cache_enabled = LLM_TABLE_DISCOVERY_CONFIG.get("cache_enabled", True)
+            cache_ttl_seconds = (
+                LLM_TABLE_DISCOVERY_CONFIG.get("cache_ttl_seconds") if cache_enabled else None
+            )
 
             response = await self.llm_call_with_retry(
                 prompt=prompt,
                 operation_name="table_discovery",
-                cache_key=cache_key,
+                cache_key=cache_key if cache_enabled else None,
                 max_retries=max_retries,
+                cache_ttl_seconds=cache_ttl_seconds,
             )
 
             tables = response.get("tables", [])
@@ -788,14 +793,20 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     # get_table_schemas() returns pa.Table, iterating directly yields ChunkedArray (columns)
                     # to_pylist() converts to list of dicts where each dict represents a row
                     schema_dicts = current_schemas.to_pylist()
-                    for i, schema in enumerate(schema_dicts):
-                        definition = schema.get("definition")
-                        if not definition or not definition.strip():
-                            missing_tables.append(candidate_tables[i])
+                    definition_by_table = {
+                        str(schema.get("table_name", "")): schema.get("definition")
+                        for schema in schema_dicts
+                    }
+                    for table_name in candidate_tables:
+                        definition = definition_by_table.get(table_name)
+                        if not definition or not str(definition).strip():
+                            missing_tables.append(table_name)
 
                     if missing_tables:
                         logger.info(f"Found {len(missing_tables)} tables with missing metadata. Attempting repair...")
                         await self._repair_metadata(missing_tables, schema_storage, task)
+                        logger.info("Retrying DDL fallback for tables with missing metadata...")
+                        await self._ddl_fallback_and_retry(missing_tables, task)
 
                 except Exception as e:
                     logger.warning(f"Metadata repair pre-check failed: {e}")
@@ -854,21 +865,35 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             if not connector:
                 return 0
 
-            for table in table_names:
-                try:
-                    # Try to fetch DDL using connector
-                    ddl = None
-                    if hasattr(connector, "get_table_ddl"):
-                        ddl = connector.get_table_ddl(table)
-                    elif hasattr(connector, "get_ddl"):
-                        ddl = connector.get_ddl(table)
-
+            if hasattr(connector, "get_tables_with_ddl"):
+                tables_with_ddl = connector.get_tables_with_ddl()
+                ddl_by_table = {}
+                for tbl_info in tables_with_ddl:
+                    table_name = tbl_info.get("table_name") or tbl_info.get("name")
+                    if table_name:
+                        ddl_by_table[str(table_name)] = tbl_info.get("ddl", "")
+                for table in table_names:
+                    ddl = ddl_by_table.get(table)
                     if ddl:
                         schema_storage.update_table_schema(table, ddl)
                         repaired_count += 1
                         logger.info(f"Repaired metadata for table: {table}")
-                except Exception as e:
-                    logger.debug(f"Failed to repair metadata for table {table}: {e}")
+            else:
+                for table in table_names:
+                    try:
+                        # Try to fetch DDL using connector
+                        ddl = None
+                        if hasattr(connector, "get_table_ddl"):
+                            ddl = connector.get_table_ddl(table)
+                        elif hasattr(connector, "get_ddl"):
+                            ddl = connector.get_ddl(table)
+
+                        if ddl:
+                            schema_storage.update_table_schema(table, ddl)
+                            repaired_count += 1
+                            logger.info(f"Repaired metadata for table: {table}")
+                    except Exception as e:
+                        logger.debug(f"Failed to repair metadata for table {table}: {e}")
 
         except Exception as e:
             logger.error(f"Metadata repair process failed: {e}")

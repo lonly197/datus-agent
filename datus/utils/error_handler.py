@@ -155,7 +155,7 @@ class LLMMixin:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._llm_call_cache = {}  # Simple LRU cache for LLM calls
+        self._llm_call_cache = {}  # {cache_key: (expires_at, value)}
 
     async def llm_call_with_retry(
         self,
@@ -163,6 +163,7 @@ class LLMMixin:
         operation_name: str = "llm_call",
         max_retries: int = 3,
         cache_key: Optional[str] = None,
+        cache_ttl_seconds: Optional[int] = None,
         **llm_kwargs,
     ) -> Dict[str, Any]:
         """
@@ -183,8 +184,11 @@ class LLMMixin:
         """
         # Check cache first
         if cache_key and cache_key in self._llm_call_cache:
-            logger.debug(f"LLM cache hit for operation: {operation_name}")
-            return self._llm_call_cache[cache_key]
+            expires_at, cached_value = self._llm_call_cache[cache_key]
+            if expires_at is None or expires_at > time.time():
+                logger.debug(f"LLM cache hit for operation: {operation_name}")
+                return cached_value
+            del self._llm_call_cache[cache_key]
 
         # Get model from instance
         if not hasattr(self, "model"):
@@ -253,7 +257,9 @@ class LLMMixin:
 
             # Cache successful results
             if cache_key:
-                self._llm_call_cache[cache_key] = result
+                ttl = cache_ttl_seconds if cache_ttl_seconds and cache_ttl_seconds > 0 else None
+                expires_at = time.time() + ttl if ttl else None
+                self._llm_call_cache[cache_key] = (expires_at, result)
 
             return result
 
