@@ -900,6 +900,152 @@ def print_recovery_suggestions(db_path: str, table_name: str = "schema_metadata"
     logger.info("=" * 80)
 
 
+def print_final_migration_report(migration_results: dict, db_path: str, args):
+    """
+    Print a comprehensive final migration report.
+
+    This function is called in the finally block to ensure that users always receive
+    a clear summary of the migration results, even if the script exits unexpectedly.
+
+    Args:
+        migration_results: Dictionary containing migration results
+        db_path: Path to LanceDB database directory
+        args: Command-line arguments
+    """
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("FINAL MIGRATION REPORT")
+    logger.info("=" * 80)
+    logger.info("")
+    logger.info(f"Database Path: {db_path}")
+    logger.info(f"Namespace: {migration_results.get('namespace', 'None')}")
+    logger.info("")
+
+    # Schema Migration Results
+    logger.info("Schema Metadata Migration:")
+    schemas_migrated = migration_results.get("schemas_migrated", 0)
+    logger.info(f"  - Records migrated: {schemas_migrated}")
+    if schemas_migrated > 0:
+        logger.info(f"  - Status: ✅ SUCCESS")
+    else:
+        logger.info(f"  - Status: ⚠️  No records to migrate (empty database or already migrated)")
+    logger.info("")
+
+    # Schema Value Storage Results
+    if migration_results.get('namespace'):
+        logger.info("Schema Value Storage:")
+        values_migrated = migration_results.get("values_migrated", 0)
+        logger.info(f"  - Records checked: {values_migrated}")
+        logger.info(f"  - Status: ✅ V1 compatible")
+        logger.info("")
+    else:
+        logger.info("Schema Value Storage:")
+        logger.info(f"  - Status: ⏭️  SKIPPED (requires --namespace)")
+        logger.info("")
+
+    # Verification Results
+    logger.info("Migration Verification:")
+    if migration_results.get('namespace'):
+        if migration_results.get("verification_passed"):
+            logger.info(f"  - Status: ✅ PASSED")
+        else:
+            logger.info(f"  - Status: ⚠️  SKIPPED or FAILED")
+    else:
+        logger.info(f"  - Status: ⏭️  SKIPPED (requires --namespace)")
+    logger.info("")
+
+    # Schema Import Results
+    if args.import_schemas and migration_results.get('namespace'):
+        imported_count = migration_results.get("schemas_imported", 0)
+        logger.info("Schema Import from Database:")
+        logger.info(f"  - Records imported: {imported_count}")
+        if imported_count > 0:
+            logger.info(f"  - Status: ✅ SUCCESS")
+        else:
+            logger.info(f"  - Status: ⚠️  FAILED (check database connection)")
+        logger.info("")
+    else:
+        logger.info("Schema Import from Database:")
+        logger.info(f"  - Status: ⏭️  SKIPPED (not requested)")
+        logger.info("")
+
+    # Overall Status
+    logger.info("=" * 80)
+    logger.info("OVERALL STATUS")
+    logger.info("=" * 80)
+
+    # Determine overall success
+    if migration_results.get("success"):
+        if args.import_schemas and migration_results.get('namespace'):
+            if migration_results.get("schemas_imported", 0) > 0:
+                logger.info("✅ MIGRATION + IMPORT: COMPLETE SUCCESS")
+                logger.info("")
+                logger.info("Your LanceDB schema has been successfully upgraded to v1!")
+                logger.info("The system is now ready for enhanced text2sql queries.")
+            else:
+                logger.info("✅ MIGRATION: SUCCESSFUL")
+                logger.info("⚠️  IMPORT: FAILED (but migration completed)")
+                logger.info("")
+                logger.info("Your LanceDB schema has been successfully upgraded to v1,")
+                logger.info("but schema import from database failed.")
+                logger.info("You can re-run the import separately if needed.")
+        else:
+            logger.info("✅ MIGRATION: SUCCESSFUL")
+            logger.info("")
+            logger.info("Your LanceDB schema has been successfully upgraded to v1!")
+    else:
+        logger.info("❌ MIGRATION: FAILED")
+        logger.info("")
+        logger.info("The migration did not complete successfully.")
+        logger.info("Please check the logs above for details.")
+
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("NEXT STEPS")
+    logger.info("=" * 80)
+    logger.info("")
+
+    if migration_results.get("success"):
+        logger.info("To verify the migration:")
+        logger.info(f"  1. Check version distribution:")
+        logger.info(f"     python -c \"")
+        logger.info(f"       import lancedb")
+        logger.info(f"       from collections import Counter")
+        logger.info(f"       t = lancedb.connect('{db_path}').open_table('schema_metadata')")
+        logger.info(f"       data = t.search().select(['metadata_version']).to_arrow()")
+        logger.info(f"       versions = [r.get('metadata_version', 0) for r in data.to_pylist()]")
+        logger.info(f"       print('Version distribution:', dict(Counter(versions)))")
+        logger.info(f"     \"")
+        logger.info("")
+
+        if migration_results.get('namespace') and not args.import_schemas:
+            logger.info("To import schema metadata from your database:")
+            logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
+            logger.info(f"    --config={args.config} --namespace={migration_results.get('namespace')} \\")
+            logger.info(f"    --import-schemas --force")
+            logger.info("")
+
+        logger.info("To test the enhanced schema discovery:")
+        logger.info("  1. Start the Datus agent")
+        logger.info("  2. Try a text2sql query")
+        logger.info("  3. Verify improved accuracy with enhanced metadata")
+        logger.info("")
+    else:
+        logger.info("To troubleshoot:")
+        logger.info("  1. Check the error messages above")
+        logger.info("  2. Verify your configuration file")
+        logger.info("  3. Ensure database connections are working")
+        logger.info("  4. Re-run with --force if needed")
+        logger.info("")
+        logger.info("To restore from backup:")
+        logger.info(f"  rm -rf {db_path}")
+        logger.info(f"  mv {db_path}.backup_v0_* {db_path}")
+        logger.info("")
+
+    logger.info("=" * 80)
+    logger.info("")
+
+
 def main():
     """Main migration function."""
     parser = argparse.ArgumentParser(description="Migrate LanceDB schema from v0 to v1")
@@ -1004,6 +1150,16 @@ def main():
     logger.info("")
 
     try:
+        # Initialize result tracking
+        migration_results = {
+            "schemas_migrated": 0,
+            "values_migrated": 0,
+            "schemas_imported": 0,
+            "success": False,
+            "verification_passed": False,
+            "namespace": namespace
+        }
+
         # Migrate schema storage (always done)
         logger.info("Step 1/3: Migrating schema metadata...")
         migrated_schemas = migrate_schema_storage(
@@ -1012,6 +1168,7 @@ def main():
             extract_statistics=args.extract_statistics,
             extract_relationships=args.extract_relationships
         )
+        migration_results["schemas_migrated"] = migrated_schemas
         logger.info(f"✅ Migrated {migrated_schemas} schema records")
         logger.info("")
 
@@ -1020,12 +1177,15 @@ def main():
             # Migrate schema value storage
             logger.info("Step 2/3: Checking schema value storage...")
             migrated_values = migrate_schema_value_storage(storage)
+            migration_results["values_migrated"] = migrated_values
             logger.info(f"✅ Schema value storage: {migrated_values} records (v1 compatible)")
             logger.info("")
 
             # Verify migration
             logger.info("Step 3/3: Verifying migration...")
             success = verify_migration(storage)
+            migration_results["verification_passed"] = success
+            migration_results["success"] = success
 
             if success:
                 logger.info("")
@@ -1040,6 +1200,7 @@ def main():
                 if args.import_schemas:
                     logger.info("Step 4/4: Importing schema metadata from database...")
                     imported_count = import_schema_metadata(agent_config, namespace)
+                    migration_results["schemas_imported"] = imported_count
 
                     if imported_count > 0:
                         logger.info("")
@@ -1111,6 +1272,9 @@ def main():
             logger.info("")
             logger.info("Step 3/3: Skipped (verification requires --namespace)")
             logger.info("")
+            migration_results["success"] = True  # Schema migration succeeded
+            migration_results["verification_passed"] = False  # But verification was skipped
+
             logger.info("=" * 80)
             logger.info("✅ SCHEMA METADATA MIGRATION SUCCESSFUL")
             logger.info("=" * 80)
@@ -1143,6 +1307,10 @@ def main():
         print_recovery_suggestions(db_path, "schema_metadata")
 
         sys.exit(1)
+
+    finally:
+        # Always print final migration report
+        print_final_migration_report(migration_results, db_path, args)
 
 
 if __name__ == "__main__":
