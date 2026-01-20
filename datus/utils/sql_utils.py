@@ -106,6 +106,12 @@ def parse_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[s
             result["table"]["database_name"] = tb_info.catalog
             if tb_info.comments:
                 result["table"]["comment"] = tb_info.comments
+            else:
+                # Fallback: extract table comment using regex
+                # This handles StarRocks DDL where COMMENT is at the end: ... COMMENT='table comment'
+                table_comment_matches = re.findall(r"COMMENT\s*=\s*['\"]([^'\"]+)['\"]\s*$", sql, re.IGNORECASE)
+                if table_comment_matches:
+                    result["table"]["comment"] = table_comment_matches[-1]
 
             # Get column definitions
             for column in parsed.this.expressions:
@@ -265,6 +271,13 @@ def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE
 
                 result["indexes"].append(index_dict)
 
+            # Fallback: extract table comment if not already set by sqlglot
+            # This handles StarRocks DDL where COMMENT is at the end: ... COMMENT='table comment'
+            if not result["table"].get("comment"):
+                table_comment_matches = re.findall(r"COMMENT\s*=\s*['\"]([^'\"]+)['\"]\s*$", sql, re.IGNORECASE)
+                if table_comment_matches:
+                    result["table"]["comment"] = table_comment_matches[-1]
+
             # If we got here, sqlglot parsing was successful
             # Check if we have basic information (table name and at least one column)
             if result["table"]["name"] and result["columns"]:
@@ -293,6 +306,49 @@ def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE
     return result
 
 
+def _clean_ddl(sql: str) -> str:
+    """
+    Clean corrupted DDL by removing common error message fragments.
+
+    Args:
+        sql: Potentially corrupted DDL
+
+    Returns:
+        Cleaned DDL
+    """
+    if not sql or not isinstance(sql, str):
+        return sql
+
+    cleaned = sql
+
+    # Remove common sqlglot error message fragments
+    error_patterns = [
+        r"\s*'?\s*contains unsupported syntax.*",  # 'contains unsupported syntax'
+        r"\s*'?\s*is not valid at this position.*",  # 'is not valid at this position'
+        r"\s*'?\s*unexpected token.*",  # 'unexpected token'
+        r"\s*'?\s*missing.*",  # 'missing ...'
+        r"\s*'?\s*found.*",  # 'found ...'
+        r"\s*Falling back to parsing as.*",  # 'Falling back to parsing as ...'
+    ]
+
+    for pattern in error_patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+
+    # Fix unclosed quotes in comments
+    # If a comment starts with " or ' but doesn't have a matching closing quote, remove it
+    # Pattern: COMMENT "text without closing quote
+    cleaned = re.sub(r'COMMENT\s*["\'][^"\']*$', "", cleaned, flags=re.IGNORECASE)
+
+    # Remove trailing incomplete column definitions
+    # Pattern: incomplete column name or type at the end
+    cleaned = re.sub(r'[,\s]\s*$', "", cleaned)  # Remove trailing commas/spaces
+
+    # Clean up multiple spaces
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+
+    return cleaned.strip()
+
+
 def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
     """
     Fallback regex-based DDL parser for when sqlglot fails.
@@ -312,6 +368,12 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
         "foreign_keys": [],
         "indexes": []
     }
+
+    # Clean the DDL first to handle corrupted data
+    original_sql = sql
+    sql = _clean_ddl(sql)
+    if sql != original_sql:
+        logger.debug(f"Cleaned corrupted DDL: {len(original_sql)} -> {len(sql)} chars")
 
     try:
         # Extract table name
