@@ -610,6 +610,15 @@ return StreamingResponse(_generate_chat_research_stream(...))   # Generator with
 - Event.planId must match TodoItem.id for proper frontend binding
 - Use unified plan ID strategy for preflight tools and error events
 
+## Schema Discovery & DDL Retrieval Fixes
+
+- Fix StarRocksConnector SQL syntax errors by removing duplicate database name specifications:
+  * SHOW TABLES FROM `{db}` → USE `{db}` + SHOW TABLES
+  * SHOW CREATE TABLE `{db}`.`{table}` → SHOW CREATE TABLE `{table}`
+  * Add proper database context switching with USE statements
+- Implement safe task restoration in SchemaDiscoveryNode using instance variables and finally blocks to prevent parameter pollution in downstream nodes
+- Enhance error logging and debugging capabilities for better troubleshooting
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
