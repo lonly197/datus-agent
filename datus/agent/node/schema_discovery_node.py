@@ -733,7 +733,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             List of all table names (limited to top N)
         """
         try:
-            db_manager = db_manager_instance(self.agent_config.namespaces)
+            # ✅ Fixed: Use correct function name (get_db_manager not db_manager_instance)
+            db_manager = get_db_manager()
             connector = db_manager.get_conn(self.agent_config.current_namespace, task.database_name)
 
             if not connector:
@@ -782,8 +783,14 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     # Check for missing definitions
                     current_schemas = schema_storage.get_table_schemas(candidate_tables)
                     missing_tables = []
-                    for i, schema in enumerate(current_schemas):
-                        if not schema or not schema.definition or not schema.definition.strip():
+
+                    # ✅ Fixed: Convert PyArrow Table to list of dicts for proper iteration
+                    # get_table_schemas() returns pa.Table, iterating directly yields ChunkedArray (columns)
+                    # to_pylist() converts to list of dicts where each dict represents a row
+                    schema_dicts = current_schemas.to_pylist()
+                    for i, schema in enumerate(schema_dicts):
+                        definition = schema.get("definition")
+                        if not definition or not definition.strip():
                             missing_tables.append(candidate_tables[i])
 
                     if missing_tables:

@@ -107,3 +107,101 @@ class TestSchemaDiscoveryNodeV3:
 
         # Stage 2 should NOT have been called because 5 >= 3
         schema_node._context_based_discovery.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fallback_get_all_tables_uses_correct_db_manager(self, schema_node, mock_workflow):
+        """Verify that _fallback_get_all_tables uses get_db_manager() not db_manager_instance()."""
+        import pyarrow as pa
+        from unittest.mock import patch
+        from datus.tools.db_tools.db_manager import get_db_manager
+
+        schema_node.workflow = mock_workflow
+
+        # Mock the database connector and get_db_manager
+        mock_connector = MagicMock()
+        mock_connector.get_all_table_names.return_value = ["table1", "table2", "table3"]
+
+        mock_db_manager = MagicMock()
+        mock_db_manager.get_conn.return_value = mock_connector
+
+        with patch("datus.agent.node.schema_discovery_node.get_db_manager", return_value=mock_db_manager):
+            result = await schema_node._fallback_get_all_tables(mock_workflow.task)
+
+        # Verify correct function was called and results are returned
+        mock_db_manager.get_conn.assert_called_once()
+        mock_connector.get_all_table_names.assert_called_once()
+        assert result == ["table1", "table2", "table3"]
+
+    @pytest.mark.asyncio
+    async def test_load_table_schemas_handles_pyarrow_table_correctly(self, schema_node, mock_workflow, mock_agent_config):
+        """Verify that _load_table_schemas correctly converts PyArrow Table to list of dicts."""
+        import pyarrow as pa
+
+        schema_node.workflow = mock_workflow
+
+        # Mock the storage cache to return a PyArrow Table (simulating real behavior)
+        mock_schema_storage = MagicMock()
+
+        # Create a PyArrow Table with definition column
+        arrow_table = pa.table({
+            "table_name": ["table1", "table2", "table3"],
+            "definition": ["CREATE TABLE table1...", "", None]  # One empty, one None
+        })
+
+        mock_schema_storage.get_table_schemas.return_value = arrow_table
+
+        mock_storage_cache = MagicMock()
+        mock_storage_cache.schema_storage.return_value = mock_schema_storage
+
+        with patch("datus.agent.node.schema_discovery_node.get_storage_cache_instance", return_value=mock_storage_cache):
+            # Mock SchemaWithValueRAG to avoid actual schema loading
+            with patch("datus.agent.node.schema_discovery_node.SchemaWithValueRAG") as mock_rag:
+                mock_rag.return_value.search_tables.return_value = ([], [])
+
+                # This should not raise an AttributeError
+                await schema_node._load_table_schemas(mock_workflow.task, ["table1", "table2", "table3"])
+
+        # Verify get_table_schemas was called
+        mock_schema_storage.get_table_schemas.assert_called_once_with(["table1", "table2", "table3"])
+
+    @pytest.mark.asyncio
+    async def test_load_table_schemas_identifies_missing_definitions(self, schema_node, mock_workflow, mock_agent_config):
+        """Verify that _load_table_schemas correctly identifies tables with missing DDL definitions."""
+        import pyarrow as pa
+
+        schema_node.workflow = mock_workflow
+
+        # Mock the storage cache
+        mock_schema_storage = MagicMock()
+
+        # Create a PyArrow Table with some missing definitions
+        arrow_table = pa.table({
+            "table_name": ["table1", "table2", "table3", "table4"],
+            "definition": ["CREATE TABLE table1...", "", None, "   "]  # table2, table3, table4 missing
+        })
+
+        mock_schema_storage.get_table_schemas.return_value = arrow_table
+
+        mock_storage_cache = MagicMock()
+        mock_storage_cache.schema_storage.return_value = mock_schema_storage
+
+        # Mock _repair_metadata to verify it gets called with correct tables
+        schema_node._repair_metadata = AsyncMock()
+
+        with patch("datus.agent.node.schema_discovery_node.get_storage_cache_instance", return_value=mock_storage_cache):
+            with patch("datus.agent.node.schema_discovery_node.SchemaWithValueRAG") as mock_rag:
+                mock_rag.return_value.search_tables.return_value = ([], [])
+
+                await schema_node._load_table_schemas(mock_workflow.task, ["table1", "table2", "table3", "table4"])
+
+        # Verify _repair_metadata was called with tables that have missing definitions
+        schema_node._repair_metadata.assert_called_once()
+        repair_call_args = schema_node._repair_metadata.call_args[0]
+        missing_tables = repair_call_args[0]  # First positional argument
+
+        # Should include table2 (empty string), table3 (None), and table4 (whitespace only)
+        # But NOT table1 (has valid definition)
+        assert "table2" in missing_tables
+        assert "table3" in missing_tables
+        assert "table4" in missing_tables
+        assert "table1" not in missing_tables
