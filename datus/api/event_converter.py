@@ -94,7 +94,9 @@ class DeepResearchEventConverter:
         # State for virtual plan management
         self.virtual_plan_emitted = False
         self.active_virtual_step_id = None
-        self.completed_virtual_steps = set()
+        self.completed_virtual_steps: set[str] = set()
+        # Track failed virtual steps for proper ERROR status in PlanUpdateEvent
+        self.failed_virtual_steps: set[str] = set()
 
         # Fixed virtual plan ID for all PlanUpdateEvents (fixes event association issue)
         self.virtual_plan_id = str(uuid.uuid4())
@@ -113,41 +115,54 @@ class DeepResearchEventConverter:
         return None
 
     def _generate_virtual_plan_update(self, current_node_type: Optional[str] = None) -> Optional[PlanUpdateEvent]:
-        """Generate PlanUpdateEvent based on current progress."""
-        todos = []
-        current_step_id = self._get_virtual_step_id(current_node_type) if current_node_type else None
+        """Generate PlanUpdateEvent based on current progress.
 
-        # If we found a new active step, update our state
+        Status priority: ERROR > COMPLETED > IN_PROGRESS > PENDING
+        This ensures failed steps are never incorrectly marked as COMPLETED.
+        """
+        current_step_id = self._get_virtual_step_id(current_node_type) if current_node_type else None
         if current_step_id:
             self.active_virtual_step_id = current_step_id
 
-        # Determine the index of the current active step
+        # Find active step index
         active_index = -1
         if self.active_virtual_step_id:
-            for i, step in enumerate(self.VIRTUAL_STEPS):
-                if str(step["id"]) == self.active_virtual_step_id:
-                    active_index = i
-                    break
+            active_index = next(
+                (i for i, step in enumerate(self.VIRTUAL_STEPS)
+                 if str(step["id"]) == self.active_virtual_step_id),
+                -1
+            )
 
+        # Build todos with status priority
+        todos = []
         for i, step in enumerate(self.VIRTUAL_STEPS):
-            status = TodoStatus.PENDING
+            step_id = str(step["id"])
 
-            # Robust state machine logic based on linear order
-            if active_index != -1:
-                if i < active_index:
-                    status = TodoStatus.COMPLETED
-                elif i == active_index:
-                    status = TodoStatus.IN_PROGRESS
-                else:
-                    status = TodoStatus.PENDING
+            if step_id in self.failed_virtual_steps:
+                status = TodoStatus.ERROR
+            elif step_id in self.completed_virtual_steps:
+                status = TodoStatus.COMPLETED
+            elif active_index != -1:
+                status = (
+                    TodoStatus.COMPLETED if i < active_index else
+                    TodoStatus.IN_PROGRESS if i == active_index else
+                    TodoStatus.PENDING
+                )
             else:
-                # If no active step yet (initialization), check completed set or default to pending
-                if step["id"] in self.completed_virtual_steps:
-                    status = TodoStatus.COMPLETED
+                status = TodoStatus.PENDING
 
-            todos.append(TodoItem(id=str(step["id"]), content=str(step["content"]), status=status))
+            todos.append(TodoItem(
+                id=step_id,
+                content=str(step["content"]),
+                status=status
+            ))
 
-        return PlanUpdateEvent(id=self.virtual_plan_id, planId=None, timestamp=int(time.time() * 1000), todos=todos)
+        return PlanUpdateEvent(
+            id=self.virtual_plan_id,
+            planId=None,
+            timestamp=int(time.time() * 1000),
+            todos=todos
+        )
 
     def _hash_text(self, s: str) -> str:
         try:
@@ -1395,6 +1410,23 @@ class DeepResearchEventConverter:
                 return False
         return True
 
+    def _extract_node_type_from_action(self, action: ActionHistory) -> Optional[str]:
+        """Extract node_type from action for failure tracking.
+
+        Uses VIRTUAL_STEPS as single source of truth for valid node types.
+        """
+        # Case 1: node_execution wrapper - extract nested node_type
+        if action.action_type == "node_execution" and action.input:
+            return action.input.get("node_type")
+
+        # Case 2: Direct action_type - check if it's a valid virtual step node_type
+        for step in self.VIRTUAL_STEPS:
+            if action.action_type in step["node_types"]:
+                return action.action_type
+
+        # Case 3: Not a recognized node type
+        return None
+
     def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
         """Convert ActionHistory to DeepResearchEvent list."""
 
@@ -1404,6 +1436,25 @@ class DeepResearchEventConverter:
 
         # Debug logging: track action conversion
         self.logger.debug(f"Converting action: {action.action_type}, role: {action.role}, status: {action.status}")
+
+        # Track failed virtual steps for proper ERROR status in PlanUpdateEvent
+        # When a node fails, mark its corresponding virtual step as failed
+        if action.status == ActionStatus.FAILED:
+            node_type = self._extract_node_type_from_action(action)
+            virtual_step_id = self._get_virtual_step_id(node_type) if node_type else None
+
+            if virtual_step_id:
+                # Check if already marked (avoid duplicates)
+                if virtual_step_id not in self.failed_virtual_steps:
+                    self.failed_virtual_steps.add(virtual_step_id)
+                    self.logger.warning(
+                        f"🚨 Marking virtual step as FAILED: {virtual_step_id} (from node_type: {node_type})"
+                    )
+
+                    # Immediately emit updated PlanUpdateEvent to notify frontend of status change
+                    plan_update = self._generate_virtual_plan_update()
+                    if plan_update:
+                        events.append(plan_update)
 
         # Extract todo_id if present (for plan-related events)
         # Note: _get_unified_plan_id() will handle fallback logic properly
