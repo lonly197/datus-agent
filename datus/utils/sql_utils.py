@@ -210,7 +210,7 @@ def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE
                     if hasattr(column, "constraints") and column.constraints:
                         # Check for NOT NULL constraint
                         for constraint in column.constraints:
-                            if isinstance(constraint, sqlglot.exp.NotNull):
+                            if isinstance(constraint, sqlglot.exp.NotNullColumnConstraint):
                                 col_dict["nullable"] = False
 
                     if hasattr(column, "comments") and column.comments:
