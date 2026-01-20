@@ -815,8 +815,13 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 logger.warning(f"Could not get database connector for {task.database_name}")
                 return []
 
-            # Get all tables from database
-            all_tables = connector.get_all_table_names()
+            # Get all tables from database using the correct method name
+            # BaseSqlConnector defines get_tables() as the abstract method
+            all_tables = connector.get_tables(
+                catalog_name=task.catalog_name or "",
+                database_name=task.database_name or "",
+                schema_name=task.schema_name or ""
+            )
             logger.debug(f"Retrieved {len(all_tables)} tables from database")
             return all_tables
 
@@ -842,10 +847,13 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             if not connector:
                 return []
 
-            # Get all tables
-            # Note: get_all_table_names might be expensive for large DBs
-            # We should probably limit this or cache it
-            all_tables = connector.get_all_table_names()
+            # Get all tables using the correct method name
+            # BaseSqlConnector defines get_tables() as the abstract method
+            all_tables = connector.get_tables(
+                catalog_name=task.catalog_name or "",
+                database_name=task.database_name or "",
+                schema_name=task.schema_name or ""
+            )
 
             # Limit to reasonable number to avoid context overflow
             MAX_TABLES = 50
