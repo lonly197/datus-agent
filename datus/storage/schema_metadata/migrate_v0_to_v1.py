@@ -262,16 +262,16 @@ def detect_dialect_from_ddl(ddl: str) -> str:
         ddl: DDL statement to analyze
 
     Returns:
-        Detected dialect (defaults to "mysql" for StarRocks-like syntax)
+        Detected dialect (defaults to "starrocks" for StarRocks-like syntax)
     """
     ddl_upper = ddl.upper()
 
-    # StarRocks-specific patterns (MySQL-compatible with backticks)
+    # StarRocks-specific patterns (MySQL-compatible with backticks + bigint(20) + Chinese comments)
     if "`" in ddl and ("BIGINT(" in ddl_upper or "TINYINT" in ddl_upper or "MEDIUMINT" in ddl_upper):
-        return "mysql"  # StarRocks uses MySQL syntax
+        return "starrocks"  # Use native starrocks dialect
 
     # Snowflake-specific patterns
-    if "VARIANT" in ddl_upper or "OBJECT" in ddl_upper or "ARRAY" in ddl_upper:
+    if "VARIANT" in ddl_upper or ("OBJECT" in ddl_upper and "`" not in ddl) or ("ARRAY" in ddl_upper and "`" not in ddl):
         return "snowflake"
 
     # DuckDB-specific patterns
@@ -290,9 +290,9 @@ def detect_dialect_from_ddl(ddl: str) -> str:
     if "STRUCT" in ddl_upper or "INT64" in ddl_upper or "FLOAT64" in ddl_upper:
         return "bigquery"
 
-    # Default to mysql for StarRocks-like syntax (backtick identifiers)
+    # Default to starrocks for StarRocks-like syntax (backtick identifiers)
     # This is safer than snowflake as it's more permissive
-    return "mysql"
+    return "starrocks"
 
 
 def backup_database(db_path: str) -> str:

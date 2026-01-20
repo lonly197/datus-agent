@@ -20,8 +20,9 @@ def parse_read_dialect(dialect: str = DBType.SNOWFLAKE) -> str:
     db = (dialect or "").strip().lower()
     if db in (DBType.POSTGRES, DBType.POSTGRESQL, "redshift", "greenplum"):
         return DBType.POSTGRES
-    if db in ("spark", "databricks", DBType.HIVE, DBType.STARROCKS):
+    if db in ("spark", "databricks", DBType.HIVE):
         return DBType.HIVE
+    # StarRocks has native dialect support in sqlglot, pass through directly
     if db in (DBType.MSSQL, DBType.SQLSERVER):
         return "tsql"
     return dialect
@@ -29,15 +30,8 @@ def parse_read_dialect(dialect: str = DBType.SNOWFLAKE) -> str:
 
 def parse_dialect(dialect: str = DBType.SNOWFLAKE) -> str:
     """Map SQL dialect to the dialect for sqlglot parsing."""
-    db = (dialect or "").strip().lower()
-    if db in (DBType.POSTGRES, DBType.POSTGRESQL):
-        return DBType.POSTGRES
-    if db in (DBType.MSSQL, DBType.SQLSERVER):
-        return "tsql"
-    # StarRocks is MySQL-compatible, map to mysql dialect
-    if db == DBType.STARROCKS:
-        return "mysql"
-    return dialect
+    # sqlglot has native dialect support, pass through directly
+    return (dialect or DBType.SNOWFLAKE).strip().lower()
 
 
 def quote_identifier(name: str, dialect: str = "duckdb") -> str:
