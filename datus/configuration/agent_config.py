@@ -93,6 +93,11 @@ class SchemaDiscoveryConfig:
     context_search_threshold: int = 10
     fallback_table_limit: int = 50
 
+    # Chinese query processing (v2.5.1)
+    # Dynamic similarity threshold adjustment for Chinese queries
+    chinese_query_threshold_reduction: float = 0.6  # Apply 40% reduction (0.6 multiplier) for Chinese queries
+    enable_chinese_detection: bool = True  # Enable automatic Chinese text detection
+
 
 @dataclass
 class DbConfig:

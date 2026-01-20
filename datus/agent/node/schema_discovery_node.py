@@ -35,6 +35,28 @@ from datus.utils.sql_utils import extract_table_names
 logger = get_logger(__name__)
 
 
+def _contains_chinese(text: str) -> bool:
+    """
+    Detect if text contains Chinese characters.
+
+    Args:
+        text: Input text to check
+
+    Returns:
+        True if text contains Chinese characters (CJK Unified Ideographs),
+        False otherwise
+    """
+    if not text:
+        return False
+    # CJK Unified Ideographs range: U+4E00 to U+9FFF
+    # Also includes CJK Extension A: U+3400 to U+4DBF
+    for char in text:
+        code_point = ord(char)
+        if (0x4E00 <= code_point <= 0x9FFF) or (0x3400 <= code_point <= 0x4DBF):
+            return True
+    return False
+
+
 class SchemaDiscoveryNode(Node, LLMMixin):
     """
     Node for discovering relevant schema and tables for a query.
@@ -507,9 +529,27 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             # Get similarity threshold from configuration (with backward compatibility)
             if hasattr(self.agent_config, 'schema_discovery_config'):
-                similarity_threshold = self.agent_config.schema_discovery_config.semantic_similarity_threshold
+                base_similarity_threshold = self.agent_config.schema_discovery_config.semantic_similarity_threshold
             else:
-                similarity_threshold = 0.5  # Default threshold for backward compatibility
+                base_similarity_threshold = 0.5  # Default threshold for backward compatibility
+
+            # ✅ Dynamic Similarity Threshold: Use lower threshold for Chinese queries
+            # Chinese queries often have lower semantic similarity with English table names
+            # due to cross-lingual embedding mismatch. Lower threshold improves recall.
+            if _contains_chinese(task_text):
+                # Get reduction factor from configuration (with backward compatibility)
+                if hasattr(self.agent_config, 'schema_discovery_config'):
+                    reduction_factor = self.agent_config.schema_discovery_config.chinese_query_threshold_reduction
+                else:
+                    reduction_factor = 0.6  # Default: apply 40% reduction for Chinese queries
+
+                similarity_threshold = base_similarity_threshold * reduction_factor
+                logger.info(
+                    f"Chinese query detected, using reduced similarity threshold: "
+                    f"{similarity_threshold:.2f} (base: {base_similarity_threshold}, factor: {reduction_factor})"
+                )
+            else:
+                similarity_threshold = base_similarity_threshold
 
             # ✅ NEW: Detect query domain for business tag filtering
             query_tags = infer_business_tags(task_text, [])

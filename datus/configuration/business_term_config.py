@@ -14,13 +14,18 @@ These mappings can be customized per deployment without modifying core code.
 # Schema Discovery: Business term to table name mappings
 BUSINESS_TERM_TO_TABLE_MAPPING = {
     # Test drive related
-    "试驾": ["dwd_assign_dlr_clue_fact_di", "test_drive", "trial_drive", "testdrive"],
+    "试驾": ["dwd_testdrv_test_drive_fact", "dwd_assign_dlr_clue_fact_di", "test_drive", "trial_drive", "testdrive", "testdrive"],
     "首次": ["first", "initial", "first_time"],
-    "线索": ["dwd_assign_dlr_clue_fact_di", "clue", "clue_id", "lead", "lead_id"],
+    "首次试驾": ["dwd_testdrv_test_drive_fact", "first_test_drive", "test_drive_fact"],
+    "试乘试驾": ["dwd_testdrv_test_drive_fact", "test_drive", "trial_drive", "testdrive"],
     # Order related
-    "下定": ["order", "order_date", "booking", "book"],
-    "订单": ["order", "order_id", "orders"],
-    "转化": ["conversion", "convert", "transform", "conversions"],
+    "下定": ["dwd_testdrv_tsd_order_relation_fact", "order", "order_date", "booking", "book"],
+    "订单": ["dwd_testdrv_tsd_order_relation_fact", "order", "order_id", "orders"],
+    "转化": ["dwd_testdrv_tsd_order_relation_fact", "conversion", "convert", "transform", "conversions"],
+    "转化订单": ["dwd_testdrv_tsd_order_relation_fact", "conversion_order", "tsd_order_relation"],
+    # Clue related (production tables)
+    "线索": ["dim_cust_clue_customer", "dwd_clue_clue_fact", "dwd_assign_dlr_clue_fact_di", "clue", "clue_id", "lead", "lead_id"],
+    "客户线索": ["dim_cust_clue_customer", "customer_clue", "clue_customer"],
     # Time related
     "周期": ["cycle", "period", "duration"],
     "天数": ["days", "date_diff", "day_count"],
@@ -30,7 +35,7 @@ BUSINESS_TERM_TO_TABLE_MAPPING = {
     "平均": ["avg", "average", "mean"],
     # Common business tables (default mappings)
     "用户": ["users", "user"],
-    "客户": ["customers", "customer"],
+    "客户": ["customers", "customer", "dim_customer"],
     "产品": ["products", "product"],
     "销售": ["sales", "sale"],
     "交易": ["transactions", "transaction"],
@@ -42,13 +47,18 @@ BUSINESS_TERM_TO_TABLE_MAPPING = {
 # Schema Validation: Chinese to English schema term mappings
 BUSINESS_TERM_TO_SCHEMA_MAPPING = {
     # Test drive related
-    "试驾": ["test_drive", "test_drive_date", "trial_drive", "testdrive"],
+    "试驾": ["test_drive", "test_drive_date", "trial_drive", "testdrive", "first_test_drive_finish_time"],
     "首次": ["first", "initial", "first_time"],
-    "线索": ["clue", "clue_id", "lead", "lead_id"],
+    "首次试驾": ["first_test_drive", "test_drive_finish_time", "first_test_drive_finish_time"],
+    "试乘试驾": ["test_drive", "trial_drive", "testdrive"],
     # Order related
-    "下定": ["order", "order_date", "booking", "book"],
-    "订单": ["order", "order_id", "orders"],
-    "转化": ["conversion", "convert", "transform"],
+    "下定": ["order", "order_date", "booking", "book", "sales_date", "order_dealer_code"],
+    "订单": ["order", "order_id", "orders", "tsd_order_relation_flag"],
+    "转化": ["conversion", "convert", "transform", "tsd_order_relation"],
+    "转化订单": ["conversion_order", "tsd_order_relation", "tsd_order_relation_flag"],
+    # Clue related (production columns)
+    "线索": ["clue", "clue_id", "lead", "lead_id", "clue_create_time", "customer_phone"],
+    "客户线索": ["customer_clue", "clue_customer", "customer_phone"],
     # Time related
     "周期": ["cycle", "period", "duration"],
     "天数": ["days", "date_diff", "day_count"],
@@ -61,7 +71,7 @@ BUSINESS_TERM_TO_SCHEMA_MAPPING = {
 
 # Keyword extraction patterns for table discovery
 TABLE_KEYWORD_PATTERNS = {
-    # Direct mappings
+    # Direct mappings (general)
     "用户": "users",
     "user": "users",
     "客户": "customers",
@@ -78,9 +88,15 @@ TABLE_KEYWORD_PATTERNS = {
     "employee": "employees",
     "部门": "departments",
     "department": "departments",
-    "试驾": "dwd_assign_dlr_clue_fact_di",
-    "线索": "dwd_assign_dlr_clue_fact_di",
-    "转化": "conversions",
+    # Production-specific mappings (automotive domain)
+    "试驾": "dwd_testdrv_test_drive_fact",
+    "首次试驾": "dwd_testdrv_test_drive_fact",
+    "试乘试驾": "dwd_testdrv_test_drive_fact",
+    "线索": "dim_cust_clue_customer",
+    "客户线索": "dim_cust_clue_customer",
+    "下定": "dwd_testdrv_tsd_order_relation_fact",
+    "转化": "dwd_testdrv_tsd_order_relation_fact",
+    "转化订单": "dwd_testdrv_tsd_order_relation_fact",
 }
 
 
