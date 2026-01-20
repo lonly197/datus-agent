@@ -11,7 +11,6 @@ from datetime import datetime
 
 from datus.cli.namespace_manager import NamespaceManager
 from datus.cli.tutorial import BenchmarkTutorial
-from datus.utils.async_utils import setup_windows_policy
 
 # Add path fixing to ensure proper imports
 if __package__ is None:
@@ -431,5 +430,4 @@ def main():
 
 
 if __name__ == "__main__":
-    setup_windows_policy()
     sys.exit(main())
