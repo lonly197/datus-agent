@@ -34,6 +34,9 @@ def parse_dialect(dialect: str = DBType.SNOWFLAKE) -> str:
         return DBType.POSTGRES
     if db in (DBType.MSSQL, DBType.SQLSERVER):
         return "tsql"
+    # StarRocks is MySQL-compatible, map to mysql dialect
+    if db == DBType.STARROCKS:
+        return "mysql"
     return dialect
 
 
@@ -270,9 +273,14 @@ def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE
         return result
 
     except Exception as e:
-        logger.error(f"Error parsing SQL for enhanced metadata: {e}")
+        # Log the actual DDL snippet for debugging
+        ddl_preview = sql[:200] if len(sql) > 200 else sql
+        logger.error(
+            f"Error parsing SQL for enhanced metadata (dialect={dialect}): {e}\n"
+            f"DDL preview: {ddl_preview}..."
+        )
         return {
-            "table": {"name": ""},
+            "table": {"name": "", "comment": ""},
             "columns": [],
             "primary_keys": [],
             "foreign_keys": [],

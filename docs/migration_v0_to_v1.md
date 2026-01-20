@@ -212,6 +212,7 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --config=path/to/agent.yml \
     --extract-statistics=true \
     --extract-relationships=true \
+    --import-schemas \
     --force
 
 # 方式 2: 使用简写（flags without values, 默认为 true）
