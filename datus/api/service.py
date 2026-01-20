@@ -12,13 +12,12 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from datus.agent.agent import Agent
 from datus.configuration.agent_config_loader import load_agent_config
 from datus.schemas.action_history import (
     ActionHistory,
@@ -29,6 +28,9 @@ from datus.schemas.action_history import (
 from datus.schemas.node_models import SqlTask
 from datus.storage.task import TaskStore
 from datus.utils.loggings import get_logger
+
+if TYPE_CHECKING:
+    from datus.agent.agent import Agent
 
 from ..utils.json_utils import to_str
 from .auth import auth_service, get_current_client
@@ -70,7 +72,7 @@ class DatusAPIService:
     """Main service class for Datus Agent API."""
 
     def __init__(self, args: argparse.Namespace):
-        self.agents: Dict[str, Agent] = {}
+        self.agents: Dict[str, "Agent"] = {}
         self.agent_config = None
         self.args = args
         self.task_store = None
@@ -412,20 +414,22 @@ class DatusAPIService:
                                 detail=f"Task {task_id} was recently executed by client {current_client}. Please use a different task_id.",
                             )
 
-    def get_agent(self, namespace: str) -> Agent:
+    def get_agent(self, namespace: str) -> "Agent":
         """Get or create an agent for the specified namespace."""
         if namespace not in self.agents:
             if not self.agent_config:
                 raise HTTPException(status_code=500, detail="Agent configuration not available")
 
             self.agent_config.current_namespace = namespace
+            # Import Agent locally to avoid circular import
+            from datus.agent.agent import Agent
             # Create agent instance
             self.agents[namespace] = Agent(self.args, self.agent_config)
             logger.info(f"Created new agent for namespace: {namespace}")
 
         return self.agents[namespace]
 
-    async def _create_sql_task(self, request: RunWorkflowRequest, task_id: str, agent: Agent) -> SqlTask:
+    async def _create_sql_task(self, request: RunWorkflowRequest, task_id: str, agent: "Agent") -> SqlTask:
         """Create SQL task from request parameters."""
         # Load default metric_meta (will return default values if not configured)
         metric_meta = agent.global_config.current_metric_meta("default")
@@ -1022,6 +1026,8 @@ class DatusAPIService:
             llm_status = "unknown"
 
             if self.agent_config:
+                # Import Agent locally to avoid circular import
+                from datus.agent.agent import Agent
                 # Create a temporary agent for health check using service configuration
                 temp_agent = Agent(self.args, self.agent_config)
 
