@@ -1720,6 +1720,10 @@ class DeepResearchEventConverter:
             if not tool_call_id:
                 tool_call_id = str(uuid.uuid4())
 
+            # Use unified plan ID strategy for proper virtual step binding
+            # This ensures preflight tools map to their parent virtual step (e.g., "step_schema")
+            preflight_plan_id = self._get_unified_plan_id(action, force_associate=True)
+
             # Create ToolCallEvent for processing status
             if action.status == ActionStatus.PROCESSING:
                 tool_input = {}
@@ -1729,7 +1733,7 @@ class DeepResearchEventConverter:
                 events.append(
                     ToolCallEvent(
                         id=f"{event_id}_call",
-                        planId=todo_id,  # Use plan_id from _extract_todo_id_from_action
+                        planId=preflight_plan_id,
                         timestamp=timestamp,
                         toolCallId=tool_call_id,
                         toolName=tool_name,
@@ -1742,7 +1746,7 @@ class DeepResearchEventConverter:
                 events.append(
                     ToolCallResultEvent(
                         id=f"{event_id}_result",
-                        planId=todo_id,  # Use plan_id from _extract_todo_id_from_action
+                        planId=preflight_plan_id,
                         timestamp=timestamp,
                         toolCallId=tool_call_id,
                         data=action.output,
@@ -2006,8 +2010,9 @@ class DeepResearchEventConverter:
 
         # 8. Handle errors
         elif action.status == ActionStatus.FAILED:
-            # ErrorEvent should use todo_id if the error is related to a specific todo
-            error_plan_id = todo_id if todo_id else None
+            # Use unified plan ID strategy for error events
+            # This ensures errors are associated with virtual steps when appropriate
+            error_plan_id = self._get_unified_plan_id(action, force_associate=False)
 
             error_msg = action.messages or "Unknown error"
 
