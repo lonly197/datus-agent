@@ -524,6 +524,8 @@ class SchemaValidationNode(Node, LLMMixin):
         ✅ Fixed: Uses centralized business term mapping from config for semantic matching.
         Also uses External Knowledge for terminology lookup.
 
+        ✅ Enhanced: Extracts and uses Chinese DDL comments for better Chinese query matching.
+
         Uses semantic matching via business term mapping to enable Chinese-to-English
         schema matching. This allows queries with Chinese business terminology to
         match English database schema names.
@@ -546,8 +548,9 @@ class SchemaValidationNode(Node, LLMMixin):
         covered = []
         uncovered = []
 
-        # Build a set of all schema terms (table names, column names)
+        # Build a set of all schema terms (table names, column names, AND comments)
         schema_terms = set()
+        comment_terms = {}  # Track which schema provided each comment term
         for schema in schemas:
             # Add table name
             schema_terms.add(schema.table_name.lower())
@@ -558,13 +561,50 @@ class SchemaValidationNode(Node, LLMMixin):
                 columns = re.findall(r"`(\w+)`", schema.definition)
                 schema_terms.update([c.lower() for c in columns])
 
+                # ✅ ENHANCED: Extract Chinese comments from DDL using sqlglot
+                try:
+                    from sqlglot import parse_one
+                    from sqlglot.errors import ParseError
+
+                    parsed = parse_one(schema.definition, dialect="starrocks")
+
+                    # Extract table comment
+                    if hasattr(parsed, 'comment') and parsed.comment:
+                        table_comment = str(parsed.comment).strip()
+                        if table_comment:
+                            schema_terms.add(table_comment.lower())
+                            comment_terms[table_comment.lower()] = f"table:{schema.table_name}"
+                            logger.debug(f"Extracted table comment '{table_comment}' from {schema.table_name}")
+
+                    # Extract column comments
+                    if hasattr(parsed, 'columns'):
+                        for column in parsed.columns:
+                            if hasattr(column, 'comment') and column.comment:
+                                col_comment = str(column.comment).strip()
+                                if col_comment:
+                                    schema_terms.add(col_comment.lower())
+                                    col_name = column.name if hasattr(column, 'name') else "unknown"
+                                    comment_terms[col_comment.lower()] = f"column:{schema.table_name}.{col_name}"
+                                    logger.debug(f"Extracted column comment '{col_comment}' from {schema.table_name}.{col_name}")
+
+                except ImportError:
+                    logger.warning("sqlglot not available, skipping comment extraction")
+                except (ParseError, Exception) as e:
+                    logger.debug(f"Failed to parse DDL for comments: {e}")
+
         logger.debug(f"Built schema terms set with {len(schema_terms)} unique terms from {len(schemas)} schemas")
 
         # Check each query term with semantic mapping
         for term in query_terms:
-            # Direct match (case-insensitive)
-            if term.lower() in schema_terms:
-                logger.debug(f"Term '{term}' matched directly (case-insensitive)")
+            term_lower = term.lower()
+
+            # Direct match (case-insensitive) - including comments
+            if term_lower in schema_terms:
+                # Log if matched via comment
+                if term_lower in comment_terms:
+                    logger.debug(f"Term '{term}' matched via {comment_terms[term_lower]} comment")
+                else:
+                    logger.debug(f"Term '{term}' matched directly (case-insensitive)")
                 covered.append(term)
                 continue
 

@@ -181,6 +181,44 @@ class SchemaStorage(BaseMetadataStorage):
             return words[2].strip("()").strip()
         return ""
 
+    def _enhance_definition_with_comments(
+        self,
+        definition: str,
+        table_comment: str = "",
+        column_comments: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """
+        Enhance DDL definition with Chinese comments for better semantic search.
+
+        This prepends Chinese comments to the DDL so that when embeddings are
+        created, the Chinese terminology is included in the vector representation.
+        This improves semantic search for Chinese queries.
+
+        Args:
+            definition: Original DDL statement
+            table_comment: Table-level Chinese comment
+            column_comments: Dict mapping column names to Chinese comments
+
+        Returns:
+            Enhanced DDL with Chinese comments prepended
+        """
+        enhanced_parts = []
+
+        # Add table comment if available (with Chinese identifier for embedding context)
+        if table_comment and table_comment.strip():
+            enhanced_parts.append(f"-- 表注释: {table_comment}")
+
+        # Add column comments if available
+        if column_comments:
+            for col_name, col_comment in column_comments.items():
+                if col_comment and col_comment.strip():
+                    enhanced_parts.append(f"-- 列 {col_name}: {col_comment}")
+
+        # Add original DDL
+        enhanced_parts.append(definition)
+
+        return "\n".join(enhanced_parts)
+
     def search_all_schemas(self, database_name: str = "", catalog_name: str = "") -> Set[str]:
         search_result = self._search_all(
             where=_build_where_clause(database_name=database_name, catalog_name=catalog_name),
@@ -360,6 +398,13 @@ class SchemaStorage(BaseMetadataStorage):
             )
 
             # Prepare data with enhanced fields
+            # ✅ ENHANCED: Use definition with Chinese comments prepended for better semantic search
+            enhanced_definition = self._enhance_definition_with_comments(
+                definition=definition,
+                table_comment=table_comment or "",
+                column_comments=column_comments or {},
+            )
+
             data = {
                 "identifier": identifier,
                 "catalog_name": catalog_name or "",
@@ -367,8 +412,8 @@ class SchemaStorage(BaseMetadataStorage):
                 "schema_name": schema_name or "",
                 "table_name": table_name,
                 "table_type": table_type,
-                "definition": definition,
-                # Enhanced metadata fields
+                "definition": enhanced_definition,  # Enhanced with Chinese comments
+                # Enhanced metadata fields (stored separately for reference)
                 "table_comment": table_comment or "",
                 "column_comments": json.dumps(column_comments or {}, ensure_ascii=False),
                 "business_tags": business_tags or [],
