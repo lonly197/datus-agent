@@ -255,7 +255,7 @@ class Node(ErrorHandlerMixin, ABC):
         node_id: str,
         description: str,
         node_type: str,
-        input_data: BaseInput = None,
+        input_data: Optional[BaseInput] = None,
         agent_config: Optional[AgentConfig] = None,
         tools: Optional[List[Tool]] = None,
     ):

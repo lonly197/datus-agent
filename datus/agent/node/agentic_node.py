@@ -80,7 +80,7 @@ class AgenticNode(Node):
 
         # Initialize model: use node-specific model if configured, otherwise use default from agent_config
         if agent_config:
-            model_name = self.node_config.get("model")  # Can be None, which will use active_model()
+            model_name: Optional[str] = self.node_config.get("model")  # Can be None, which will use active_model()
             self.model = LLMBaseModel.create_model(model_name=model_name, agent_config=agent_config)
             self.context_length = self.model.context_length() if self.model else None
 
@@ -121,12 +121,10 @@ class AgenticNode(Node):
         """
         # Get prompt version from parameter, fallback to agent config, then use default
         version = prompt_version
-        if version is None and self.agent_config and hasattr(self.agent_config, "prompt_version"):
-            version = self.agent_config.prompt_version
+        if version is None and self.agent_config:
+            version = getattr(self.agent_config, "prompt_version", None)
 
-        root_path = "."
-        if self.agent_config and hasattr(self.agent_config, "workspace_root"):
-            root_path = self.agent_config.workspace_root
+        root_path = getattr(self.agent_config, "workspace_root", ".") if self.agent_config else "."
 
         # Construct template name: {template_name}_system_{version}
         template_name = f"{self.get_node_name()}_system"

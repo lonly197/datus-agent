@@ -53,7 +53,7 @@ class LLMBaseModel(ABC):  # Changed from BaseModel to LLMBaseModel
         self._session_manager = None
 
     @classmethod
-    def create_model(cls, agent_config: AgentConfig, model_name: str = None, **kwargs) -> "LLMBaseModel":
+    def create_model(cls, agent_config: AgentConfig, model_name: Optional[str] = None, **kwargs) -> "LLMBaseModel":
         if not model_name or model_name == "default":
             target_config = agent_config.active_model()
         elif model_name in agent_config.models:
