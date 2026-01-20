@@ -52,15 +52,36 @@ class DeepResearchEventConverter:
         {
             "id": "step_schema",
             "content": "发现数据库模式",
-            "node_types": ["schema_discovery", "schema_validation"],
+            "node_types": [
+                "schema_discovery",
+                "schema_validation",
+                # Preflight tools for schema discovery
+                "preflight_search_table",
+                "preflight_describe_table",
+                "preflight_get_table_ddl",
+                "preflight_search_reference_sql",
+                "preflight_parse_temporal_expressions",
+                "preflight_check_table_exists",
+            ],
         },
         {"id": "step_sql", "content": "生成SQL查询", "node_types": ["generate_sql", "sql_generation"]},
         {
             "id": "step_exec",
             "content": "执行SQL并验证结果",
-            "node_types": ["execute_sql", "sql_execution", "sql_validate", "result_validation"],
+            "node_types": [
+                "execute_sql",
+                "sql_execution",
+                "sql_validate",
+                "result_validation",
+                # Preflight tools for SQL execution and validation
+                "preflight_validate_sql_syntax",
+                "preflight_analyze_query_plan",
+                "preflight_check_table_conflicts",
+                "preflight_validate_partitioning",
+            ],
         },
-        {"id": "step_reflect", "content": "自我纠正与优化", "node_types": ["reflect", "reflection_analysis", "output", "output_generation"]},
+        {"id": "step_reflect", "content": "自我纠正与优化", "node_types": ["reflect", "reflection_analysis"]},
+        {"id": "step_output", "content": "生成结果报告", "node_types": ["output", "output_generation"]},
     ]
 
     def __init__(self):
@@ -1250,6 +1271,7 @@ class DeepResearchEventConverter:
         # This ensures ToolCallEvents bind to their corresponding TodoItems
         virtual_step_id = self._get_virtual_step_id(action.action_type)
         if virtual_step_id:
+            self.logger.debug(f"Mapped action_type '{action.action_type}' to virtual_step_id '{virtual_step_id}'")
             return virtual_step_id
 
         # 3. For events that require association, use virtual_plan_id (stable across workflow)

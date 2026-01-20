@@ -159,3 +159,104 @@ def test_event_flow_validation():
     # Test with chat action (should pass validation)
     result = converter.validate_event_flow("chat", [MagicMock(event="chat")])
     assert result is True, "Validation should pass for non-critical actions"
+
+
+def test_preflight_tool_binding():
+    """Verify preflight tools bind to correct virtual step ID."""
+    converter = DeepResearchEventConverter()
+    converter.virtual_plan_emitted = True
+
+    # Test preflight_describe_table should bind to step_schema
+    action = ActionHistory(
+        action_id="test_preflight_describe",
+        role=ActionRole.TOOL,
+        action_type="preflight_describe_table",
+        status=ActionStatus.SUCCESS,
+        input={"table_name": "test_table"},
+        output={"columns": [{"name": "id", "type": "int"}]},
+    )
+
+    events = converter.convert_action_to_event(action, 1)
+
+    # Verify event types
+    tool_call = next((e for e in events if e.event == "tool_call"), None)
+    assert tool_call is not None, "Should generate ToolCallEvent"
+    assert tool_call.planId == "step_schema", f"planId should be 'step_schema', got {tool_call.planId}"
+
+    # Test preflight_analyze_query_plan should bind to step_exec
+    action2 = ActionHistory(
+        action_id="test_preflight_analyze",
+        role=ActionRole.TOOL,
+        action_type="preflight_analyze_query_plan",
+        status=ActionStatus.SUCCESS,
+        input={"sql": "SELECT * FROM users"},
+        output={"plan_text": "Seq Scan on users"},
+    )
+
+    events2 = converter.convert_action_to_event(action2, 2)
+
+    # Verify event types
+    tool_call2 = next((e for e in events2 if e.event == "tool_call"), None)
+    assert tool_call2 is not None, "Should generate ToolCallEvent"
+    assert tool_call2.planId == "step_exec", f"planId should be 'step_exec', got {tool_call2.planId}"
+
+
+def test_output_node_binding_to_step_output():
+    """Verify output and output_generation nodes bind to step_output virtual step."""
+    converter = DeepResearchEventConverter()
+    converter.virtual_plan_emitted = True
+
+    # Test output node binds to step_output
+    action = ActionHistory(
+        action_id="test_output",
+        role=ActionRole.ASSISTANT,
+        action_type="output",
+        status=ActionStatus.SUCCESS,
+        input={"task": "test query"},
+        output={"result": "test result"},
+    )
+
+    events = converter.convert_action_to_event(action, 1)
+
+    # Verify planId binding
+    chat_events = [e for e in events if e.event == "chat"]
+    assert len(chat_events) > 0, "Should generate ChatEvent"
+    assert chat_events[0].planId == "step_output", f"planId should be 'step_output', got {chat_events[0].planId}"
+
+    # Test output_generation also binds to step_output
+    action2 = ActionHistory(
+        action_id="test_output_generation",
+        role=ActionRole.ASSISTANT,
+        action_type="output_generation",
+        status=ActionStatus.SUCCESS,
+        input={"task": "test query"},
+        output={"generated_output": "test output"},
+    )
+
+    events2 = converter.convert_action_to_event(action2, 2)
+    chat_events2 = [e for e in events2 if e.event == "chat"]
+    assert len(chat_events2) > 0, "Should generate ChatEvent"
+    assert chat_events2[0].planId == "step_output", f"planId should be 'step_output', got {chat_events2[0].planId}"
+
+
+def test_reflect_node_binding_to_step_reflect():
+    """Verify reflect node binds to step_reflect (not step_output after separation)."""
+    converter = DeepResearchEventConverter()
+    converter.virtual_plan_emitted = True
+
+    # Test reflect node binds to step_reflect
+    action = ActionHistory(
+        action_id="test_reflect",
+        role=ActionRole.ASSISTANT,
+        action_type="reflect",
+        status=ActionStatus.SUCCESS,
+        input={"task": "test query"},
+        output={"reflection": "test reflection"},
+    )
+
+    events = converter.convert_action_to_event(action, 1)
+
+    # Verify planId binding
+    chat_events = [e for e in events if e.event == "chat"]
+    assert len(chat_events) > 0, "Should generate ChatEvent"
+    assert chat_events[0].planId == "step_reflect", f"planId should be 'step_reflect', got {chat_events[0].planId}"
