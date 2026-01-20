@@ -221,11 +221,16 @@ def llm_result2json(llm_str: str, expected_type: type[Dict | List] = dict) -> Un
                     return len(v) > 0
                 return True
 
-            sql_content = result.get("sql")
-            output_content = result.get("output")
+            # Check if result has ANY meaningful content (field-agnostic)
+            # Exclude metadata fields that don't represent actual content
+            metadata_fields = {"fallback", "error", "traceback", "raw_response"}
+            has_any_content = any(
+                _has_content(result.get(key))
+                for key in result.keys()
+                if key not in metadata_fields
+            )
 
-            # Return None only if BOTH sql and output are empty/absent
-            if not _has_content(sql_content) and not _has_content(output_content):
+            if not has_any_content:
                 return None
 
         return result
