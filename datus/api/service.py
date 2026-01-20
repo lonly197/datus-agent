@@ -519,6 +519,9 @@ class DatusAPIService:
             except Exception as e:
                 logger.warning(f"Intent detection failed: {e}")
 
+        # Debug logging: Log the task value being used to create SqlTask
+        logger.info(f"DEBUG _create_sql_task: Creating SqlTask with task='{request.task[:100]}...'")
+
         return SqlTask(
             id=task_id,
             task=request.task,
@@ -892,6 +895,12 @@ class DatusAPIService:
         try:
             # Get agent for the namespace
             agent = self.get_agent(request.namespace)
+
+            # Debug logging: Log request.task and request.prompt to diagnose issue
+            logger.info(
+                f"DEBUG chat_research: request.task='{request.task[:100]}...', "
+                f"request.prompt='{request.prompt[:100] if request.prompt else None}...'"
+            )
 
             # 处理执行模式覆盖 (优先级高于自动识别)
             execution_mode = getattr(request, "execution_mode", None)

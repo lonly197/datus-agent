@@ -106,12 +106,18 @@ LLM_TABLE_DISCOVERY_CONFIG = {
     "cache_enabled": True,
     "cache_ttl_seconds": 3600,  # 1 hour
     "prompt_template": """
-Analyze the user query and list potential database table names or business entities.
-The query might be in Chinese, but the database schema uses English table names.
-Translate business concepts into English database terms (e.g., "试驾" -> "test_drive", "lead", "clue").
-Return a JSON object with a single key "tables" containing a list of strings (potential English table names).
+Given these actual database tables:
+{tables_list}
 
-Query: {query}
+Select the most relevant tables for this query: {query}
+
+Rules:
+1. Return ONLY table names that exist in the list above
+2. Do not hallucinate or invent table names
+3. The query might be in Chinese, but the database schema uses English table names
+4. Translate business concepts into English database terms (e.g., "试驾" -> "test_drive", "lead", "clue")
+
+Return a JSON object with a single key "tables" containing a list of strings (table names from the list above).
 """,
 }
 

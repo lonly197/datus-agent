@@ -725,23 +725,42 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         # Simple regex for potential table names (snake_case, at least one underscore)
         return re.findall(r"\b[a-z]+_[a-z0-9_]+\b", text)
 
-    async def _llm_based_table_discovery(self, query: str) -> List[str]:
+    async def _llm_based_table_discovery(self, query: str, all_tables: List[str] = None) -> List[str]:
         """
-        Stage 1.5: Use LLM to infer potential English table names from Chinese query.
+        Stage 1.5: Use LLM to select relevant tables from actual database tables.
 
-        ✅ Fixed: Uses LLMMixin for automatic retry with exponential backoff
-        and configured prompt template from business_term_config.py
+        ✅ Fixed: LLM selects from real DB tables instead of hallucinating.
+        The LLM is given the actual list of database tables and asked to select
+        the most relevant ones for the query. This prevents hallucination of
+        non-existent table names.
+
+        Args:
+            query: User query text
+            all_tables: Optional list of actual database tables (fetched if not provided)
+
+        Returns:
+            List of table names that exist in the database
         """
         if not query:
             return []
 
-        # ✅ Use configured prompt template
+        # Get all actual tables from database if not provided
+        if all_tables is None:
+            all_tables = await self._get_all_database_tables()
+
+        if not all_tables:
+            logger.debug("No database tables available for LLM-based discovery")
+            return []
+
+        # ✅ Use configured prompt template with actual table list
         prompt_template = LLM_TABLE_DISCOVERY_CONFIG.get("prompt_template", "")
-        prompt = prompt_template.format(query=query)
+        # Format table list for prompt (limit to prevent token overflow)
+        tables_list = "\n".join(f"- {t}" for t in all_tables[:100])
+        prompt = prompt_template.format(tables_list=tables_list, query=query)
 
         try:
             # ✅ Use LLMMixin with retry and caching
-            cache_key = f"llm_table_discovery:{hash(query)}"
+            cache_key = f"llm_table_discovery:{hash(query)}:{hash(tuple(all_tables))}"
             max_retries = LLM_TABLE_DISCOVERY_CONFIG.get("max_retries", 3)
             cache_enabled = LLM_TABLE_DISCOVERY_CONFIG.get("cache_enabled", True)
             cache_ttl_seconds = (
@@ -757,14 +776,52 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             )
 
             tables = response.get("tables", [])
-            cleaned_tables = list(set([str(t) for t in tables if isinstance(t, (str, int, float))]))
-            logger.info(f"LLM inferred potential tables: {cleaned_tables}")
-            return cleaned_tables
+            # ✅ Fixed: Validate that returned tables actually exist in database
+            all_tables_set = set(all_tables)
+            validated_tables = [str(t) for t in tables if isinstance(t, (str, int, float)) and str(t) in all_tables_set]
+            unique_tables = list(set(validated_tables))
+
+            if len(tables) != len(validated_tables):
+                invalid_tables = set(str(t) for t in tables if isinstance(t, (str, int, float))) - all_tables_set
+                logger.warning(
+                    f"LLM returned {len(invalid_tables)} invalid table(s) that don't exist: {invalid_tables}"
+                )
+
+            logger.info(f"LLM selected {len(unique_tables)} tables from actual database: {unique_tables}")
+            return unique_tables
         except NodeExecutionResult as e:
             logger.warning(f"LLM table discovery failed after retries: {e.error_message}")
             return []
         except Exception as e:
             logger.warning(f"LLM table discovery failed with unexpected error: {e}")
+            return []
+
+    async def _get_all_database_tables(self) -> List[str]:
+        """
+        Fetch all table names from the database.
+
+        Returns:
+            List of all table names in the database
+        """
+        try:
+            if not self.workflow or not self.workflow.task:
+                return []
+
+            task = self.workflow.task
+            db_manager = get_db_manager()
+            connector = db_manager.get_conn(self.agent_config.current_namespace, task.database_name)
+
+            if not connector:
+                logger.warning(f"Could not get database connector for {task.database_name}")
+                return []
+
+            # Get all tables from database
+            all_tables = connector.get_all_table_names()
+            logger.debug(f"Retrieved {len(all_tables)} tables from database")
+            return all_tables
+
+        except Exception as e:
+            logger.warning(f"Failed to retrieve database tables: {e}")
             return []
 
     async def _fallback_get_all_tables(self, task) -> List[str]:
