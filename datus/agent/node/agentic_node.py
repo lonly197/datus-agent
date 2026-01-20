@@ -45,7 +45,7 @@ class AgenticNode(Node):
         node_id: str,
         description: str,
         node_type: str,
-        input_data: BaseInput = None,
+        input_data: Optional[BaseInput] = None,
         agent_config: Optional[AgentConfig] = None,
         tools: Optional[List[Tool]] = None,
         mcp_servers: Optional[Dict[str, MCPServerStdio]] = None,
@@ -162,7 +162,7 @@ class AgenticNode(Node):
         """Generate a unique session ID."""
         return f"{self.get_node_name()}_session_{str(uuid.uuid4())[:8]}"
 
-    def _get_or_create_session(self) -> tuple[SQLiteSession, Optional[str]]:
+    def _get_or_create_session(self) -> tuple[Optional[SQLiteSession], Optional[str]]:
         """
         Get or create the session for this node.
 
@@ -227,7 +227,7 @@ class AgenticNode(Node):
         if self.model and hasattr(self.model, "session_manager") and self.session_id:
             self.model.session_manager.update_session_tokens(self.session_id, self._session_tokens)
 
-    async def _manual_compact(self) -> dict:
+    async def _manual_compact(self) -> Dict[str, Any]:
         """
         Manually compact the session by summarizing conversation history.
         This clears the session and stores summary for next session creation.

@@ -26,6 +26,10 @@ class BaseInput(BaseModel):
 
     # context: Optional[List[str]] = Field(default=[], description="Optional context information for the input")
 
+    # Allow dynamic attributes for flexible node inputs (catalog, database, schema, etc.)
+    class Config:
+        extra = "allow"  # Allow extra fields for flexible node inputs
+
     def get(self, key: str, default: Any = None) -> Any:
         """Get a value by key with an optional default value."""
         return getattr(self, key, default)
@@ -49,9 +53,6 @@ class BaseInput(BaseModel):
     def from_dict(cls, data: Dict[str, Any]) -> "BaseInput":
         """Create SqlTask instance from dictionary."""
         return cls.model_validate(data)
-
-    class Config:
-        extra = "forbid"  # Prevent extra fields not defined in the model
 
 
 class BaseResult(BaseModel):
