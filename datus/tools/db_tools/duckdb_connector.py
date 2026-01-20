@@ -450,16 +450,50 @@ class DuckdbConnector(BaseSqlConnector, SchemaNamespaceMixin):
     def get_tables_with_ddl(
         self, catalog_name: str = "", database_name: str = "", schema_name: str = "", tables: Optional[List[str]] = None
     ) -> List[Dict[str, str]]:
-        """Get tables with DDL definitions."""
-        filter_tables = self._reset_filter_tables(
-            tables, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
-        )
-        return self._get_meta_with_ddl(
-            database_name=database_name,
-            schema_name=schema_name,
-            _type="table",
-            filter_tables=filter_tables,
-        )
+        """
+        Get tables with DDL definitions.
+
+        This method is critical for DDL RAG retrieval and schema discovery.
+        It retrieves table schemas with their DDL definitions from the database.
+
+        Args:
+            catalog_name: Optional catalog name
+            database_name: Optional database name
+            schema_name: Optional schema name
+            tables: Optional list of specific table names to retrieve
+
+        Returns:
+            List of dictionaries containing table schema information with DDL
+        """
+        try:
+            filter_tables = self._reset_filter_tables(
+                tables, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+            )
+            result = self._get_meta_with_ddl(
+                database_name=database_name,
+                schema_name=schema_name,
+                _type="table",
+                filter_tables=filter_tables,
+            )
+
+            # Log result for debugging DDL RAG issues
+            if result:
+                logger.debug(f"Retrieved DDL for {len(result)} tables from database")
+            else:
+                logger.warning(
+                    f"get_tables_with_ddl returned 0 tables. "
+                    f"DB: {database_name or self.database_name}, "
+                    f"Schema: {schema_name or self.schema_name}, "
+                    f"Filter: {tables}"
+                )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to get tables with DDL: {e}")
+            # Return empty list instead of raising exception
+            # This allows fallback mechanisms to handle the error
+            return []
 
     def _get_meta_with_ddl(
         self,

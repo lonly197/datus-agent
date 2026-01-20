@@ -384,12 +384,45 @@ class SQLiteConnector(BaseSqlConnector):
     def get_tables_with_ddl(
         self, catalog_name: str = "", database_name: str = "", schema_name: str = "", tables: Optional[List[str]] = None
     ) -> List[Dict[str, str]]:
-        """Get tables with DDL definitions."""
-        return self._get_schema_with_ddl(
-            database_name=database_name or self.database_name,
-            table_type="table",
-            filter_tables=tables,
-        )
+        """
+        Get tables with DDL definitions.
+
+        This method is critical for DDL RAG retrieval and schema discovery.
+        It retrieves table schemas with their DDL definitions from the database.
+
+        Args:
+            catalog_name: Optional catalog name
+            database_name: Optional database name
+            schema_name: Optional schema name
+            tables: Optional list of specific table names to retrieve
+
+        Returns:
+            List of dictionaries containing table schema information with DDL
+        """
+        try:
+            result = self._get_schema_with_ddl(
+                database_name=database_name or self.database_name,
+                table_type="table",
+                filter_tables=tables,
+            )
+
+            # Log result for debugging DDL RAG issues
+            if result:
+                logger.debug(f"Retrieved DDL for {len(result)} tables from database")
+            else:
+                logger.warning(
+                    f"get_tables_with_ddl returned 0 tables. "
+                    f"DB: {database_name or self.database_name}, "
+                    f"Filter: {tables}"
+                )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to get tables with DDL: {e}")
+            # Return empty list instead of raising exception
+            # This allows fallback mechanisms to handle the error
+            return []
 
     @override
     def get_views_with_ddl(

@@ -31,6 +31,7 @@ def get_sql_prompt(
     database_docs: str = "",
     current_date: str = None,
     date_ranges: str = "",
+    include_schema_ddl: bool = False,
 ) -> List[Dict[str, str]]:
     if context is None:
         context = []
@@ -38,7 +39,11 @@ def get_sql_prompt(
     if isinstance(table_schemas, str):
         processed_schemas = table_schemas
     else:
-        processed_schemas = "\n".join(schema.to_prompt(database_type) for schema in table_schemas)
+        # 根据include_schema_ddl参数决定是否包含DDL
+        processed_schemas = "\n".join(
+            schema.to_prompt(database_type, include_ddl=include_schema_ddl)
+            for schema in table_schemas
+        )
 
     if data_details:
         processed_details = "\n---\n".join(

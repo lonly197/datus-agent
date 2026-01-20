@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 import json
+import os
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 from agents import Tool
@@ -23,6 +24,10 @@ from datus.utils.traceable_utils import optional_traceable
 
 logger = get_logger(__name__)
 
+# 配置选项：控制智能DDL包含策略
+ENABLE_SMART_DDL_SELECTION = os.getenv("ENABLE_SMART_DDL_SELECTION", "true").lower() == "true"
+DEFAULT_INCLUDE_SCHEMA_DDL = os.getenv("DEFAULT_INCLUDE_SCHEMA_DDL", "false").lower() == "true"
+
 
 class GenerateSQLNode(Node):
     def __init__(
@@ -43,6 +48,63 @@ class GenerateSQLNode(Node):
             self._metadata_rag = SchemaWithValueRAG(self.agent_config)
         return self._metadata_rag
 
+    def _should_include_ddl(self, query: str, table_count: int) -> bool:
+        """
+        决定是否需要包含DDL信息的智能策略。
+
+        Args:
+            query: 用户查询文本
+            table_count: 涉及的表数量
+
+        Returns:
+            True表示需要包含DDL，False表示只需要表名和注释
+        """
+        # 如果禁用了智能选择，使用默认设置
+        if not ENABLE_SMART_DDL_SELECTION:
+            return DEFAULT_INCLUDE_SCHEMA_DDL
+
+        if not query:
+            return DEFAULT_INCLUDE_SCHEMA_DDL
+
+        query_lower = query.lower().strip()
+
+        # 简单查询：单表，简单条件 - 不需要DDL
+        simple_indicators = [
+            # 显示/查询类
+            query_lower.startswith(("显示", "show", "select", "查询", "find", "search")),
+            # 简单条件
+            " where " in query_lower and table_count <= 1,
+            # 前N条记录
+            any(phrase in query_lower for phrase in ["前", "top", "limit", "前10", "前5"]),
+        ]
+
+        if any(simple_indicators) and table_count <= 1:
+            return False
+
+        # 复杂查询：多表，复杂条件，聚合等 - 需要DDL
+        complex_keywords = [
+            # 连接操作
+            " join ", " inner join ", " left join ", " right join ", " full join ",
+            # 聚合操作
+            " group by ", " having ", " count(", " sum(", " avg(", " max(", " min(",
+            # 子查询
+            " subquery", " exists ", " in (select", " (select", " cte ", " with ",
+            # 排序和窗口函数
+            " order by ", " over ", " partition by ",
+            # 分析函数
+            " rank()", " dense_rank()", " row_number()", " lag(", " lead(",
+        ]
+
+        if any(keyword in query_lower for keyword in complex_keywords):
+            return True
+
+        # 多表查询通常需要DDL
+        if table_count > 1:
+            return True
+
+        # 默认不包含DDL，节省token
+        return DEFAULT_INCLUDE_SCHEMA_DDL
+
     def execute(self):
         self.result = self._execute_generate_sql()
 
@@ -60,6 +122,14 @@ class GenerateSQLNode(Node):
                 database_docs += "\n".join(docs) + "\n"
         else:
             database_docs = ""
+
+        # 使用智能策略决定是否包含DDL
+        query = workflow.task.task if hasattr(workflow.task, 'task') else ""
+        table_count = len(workflow.context.table_schemas) if workflow.context.table_schemas else 0
+        include_ddl = self._should_include_ddl(query, table_count)
+
+        logger.debug(f"Query complexity analysis: table_count={table_count}, include_ddl={include_ddl}")
+
         # irrelevant to current node
         next_input = GenerateSQLInput(
             database_type=workflow.task.database_type,
@@ -70,6 +140,7 @@ class GenerateSQLNode(Node):
             contexts=workflow.context.sql_contexts,
             external_knowledge=workflow.task.external_knowledge,
             database_docs=database_docs,
+            include_schema_ddl=include_ddl,
         )
         self.input = next_input
         return {"success": True, "message": "Schema appears valid", "suggestions": [next_input]}
@@ -262,6 +333,7 @@ def generate_sql(model: LLMBaseModel, input_data: GenerateSQLInput) -> GenerateS
             database_docs=input_data.database_docs,
             current_date=get_default_current_date(input_data.sql_task.current_date),
             date_ranges=getattr(input_data.sql_task, "date_ranges", ""),
+            include_schema_ddl=input_data.include_schema_ddl,
         )
 
         logger.debug(f"Generated SQL prompt:  {type(model)}, {prompt}")

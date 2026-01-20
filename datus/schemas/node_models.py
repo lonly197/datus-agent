@@ -100,22 +100,29 @@ class TableSchema(BaseTableSchema):
     definition: str = Field(..., description="DDL schema text of the table")
     table_type: str = Field("table", description="Type of the schema")
 
-    def to_prompt(self, dialect: str = "snowflake") -> str:
+    def to_prompt(self, dialect: str = "snowflake", include_ddl: bool = True) -> str:
         """
-        Convert the schema to a concise string representation for LLM prompt.
-        Simplifies the schema by:
-        - Removing redundant whitespace and newlines
-        - Converting verbose type definitions to simple types (e.g., VARCHAR(16777216) -> VARCHAR)
-        - Removing redundant SQL keywords
-        - Formatting as: database.schema.table: TABLE definition
+        Convert the schema to a string representation for LLM prompt.
+
+        Args:
+            dialect: Database dialect (e.g., "snowflake", "sqlite", "postgres")
+            include_ddl: Whether to include full DDL definition. If False, returns only table name and comment.
 
         Returns:
-            A simplified string representation of the table schema
+            String representation of the table schema (DDL or table info only)
         """
-
-        schema_text = " ".join(self.definition.split())
-        # TODO: improve the schema compact for all databases
-        return schema_text.replace("VARCHAR(16777216)", "VARCHAR")
+        if include_ddl:
+            # Full DDL for column/metric selection phase
+            schema_text = " ".join(self.definition.split())
+            # TODO: improve the schema compact for all databases
+            return schema_text.replace("VARCHAR(16777216)", "VARCHAR")
+        else:
+            # Only table name for table selection phase (matches schema_discovery_node pattern)
+            result = f"Table: {self.table_name}"
+            # Add table comment if available (look for table_comment attribute)
+            if hasattr(self, 'table_comment') and self.table_comment:
+                result += f" - {self.table_comment}"
+            return result
 
     @classmethod
     def table_names_to_prompt(cls, schemas: List[TableSchema]) -> str:
@@ -368,6 +375,7 @@ class GenerateSQLInput(BaseInput):
     max_value_length: int = Field(default=500, description="Max value length")
     max_text_mark_length: int = Field(default=16, description="Max text mark length")
     database_docs: Optional[str] = Field(default="", description="Database documentation")
+    include_schema_ddl: bool = Field(default=False, description="Whether to include full DDL definition in prompt (False = only table names and comments)")
 
 
 class GenerateSQLResult(BaseResult):

@@ -1015,6 +1015,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         3. Populates SchemaStorage with the retrieved DDL
         4. Retries schema search with populated storage
 
+        Enhanced with better diagnostics and fallback strategies for cases where get_tables_with_ddl
+        returns 0 tables.
+
         Args:
             candidate_tables: List of table names to search for
             task: The current task with database connection info
@@ -1208,44 +1211,170 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 else:
                     logger.warning(f"DDL fallback retrieved schemas but still no match for candidates: {candidate_tables}")
             else:
-                logger.warning("")
-                logger.warning("=" * 60)
-                logger.warning("NO SCHEMAS RETRIEVED FROM DATABASE FOR FALLBACK")
-                logger.warning("=" * 60)
-                logger.warning("")
-                logger.warning("This indicates that the database connector returned 0 tables.")
-                logger.warning("")
-                logger.warning("Possible causes:")
-                logger.warning("  1. Database is empty (no tables exist)")
-                logger.warning("  2. Namespace/database name mismatch")
-                logger.warning("  3. Insufficient permissions to read schema")
-                logger.warning("  4. Database connection failure")
-                logger.warning("")
-                logger.warning(f"Connector type: {type(connector).__name__}")
-                logger.warning(f"Database name: {task.database_name}")
-                logger.warning(f"Namespace: {self.agent_config.current_namespace}")
-                logger.warning("")
-                logger.warning("Immediate actions:")
-                logger.warning("  1. Verify database connection and table count:")
-                logger.warning(f"     python -c \"")
-                logger.warning(f"       from datus.tools.db_tools.db_manager import get_db_manager")
-                logger.warning(f"       db = get_db_manager().get_conn('{self.agent_config.current_namespace}', '{task.database_name}')")
-                logger.warning(f"       tables = db.get_tables_with_ddl()")
-                logger.warning(f"       print(f'Table count: {{len(tables)}}')")
-                logger.warning(f"       for t in tables[:5]:")
-                logger.warning(f"         print(f'  - {{t.get(\"table_name\")}}')")
-                logger.warning(f"     \"")
-                logger.warning("")
-                logger.warning("  2. Re-run migration with schema import:")
-                logger.warning(f"     python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
-                logger.warning(f"       --config=<config_path> --namespace={self.agent_config.current_namespace} \\")
-                logger.warning(f"       --import-schemas --force")
-                logger.warning("")
-                logger.warning("=" * 60)
-                logger.warning("")
+                # Enhanced fallback when get_tables_with_ddl returns 0 tables
+                await self._enhanced_ddl_fallback(candidate_tables, task, connector)
 
         except Exception as e:
             logger.warning(f"DDL fallback failed: {e}")
+
+    async def _enhanced_ddl_fallback(self, candidate_tables: List[str], task, connector) -> None:
+        """
+        Enhanced fallback strategy when get_tables_with_ddl returns 0 tables.
+
+        This method implements a multi-tier fallback:
+        1. Use get_tables() to get all table names
+        2. Try to get DDL for each candidate table individually
+        3. Try get_table_schema() to build DDL from column info
+        4. Store minimal schema entries as last resort
+
+        Args:
+            candidate_tables: List of table names to search for
+            task: The current task
+            connector: The database connector instance
+        """
+        try:
+            logger.info("Attempting enhanced DDL fallback strategy...")
+
+            # Strategy 1: Get all tables and try individual DDL retrieval
+            try:
+                all_tables = connector.get_tables(
+                    catalog_name=task.catalog_name or "",
+                    database_name=task.database_name or "",
+                    schema_name=task.schema_name or ""
+                )
+
+                if all_tables:
+                    logger.info(f"Found {len(all_tables)} tables in database, trying individual DDL retrieval...")
+
+                    rag = SchemaWithValueRAG(agent_config=self.agent_config)
+                    schemas_to_store = []
+                    retrieved_count = 0
+
+                    # Try to get DDL for each table
+                    for table_name in all_tables:
+                        try:
+                            # Try different DDL retrieval methods
+                            ddl = None
+
+                            # Method 1: get_table_ddl
+                            if hasattr(connector, "get_table_ddl"):
+                                try:
+                                    ddl = connector.get_table_ddl(table_name)
+                                except Exception as e:
+                                    logger.debug(f"get_table_ddl failed for {table_name}: {e}")
+
+                            # Method 2: get_ddl
+                            if not ddl and hasattr(connector, "get_ddl"):
+                                try:
+                                    ddl = connector.get_ddl(table_name)
+                                except Exception as e:
+                                    logger.debug(f"get_ddl failed for {table_name}: {e}")
+
+                            # Method 3: Build DDL from schema
+                            if not ddl and hasattr(connector, "get_schema"):
+                                try:
+                                    schema_info = connector.get_schema(table_name=table_name)
+                                    if schema_info:
+                                        ddl = self._build_ddl_from_schema(table_name, schema_info)
+                                except Exception as e:
+                                    logger.debug(f"get_schema failed for {table_name}: {e}")
+
+                            if ddl:
+                                schemas_to_store.append({
+                                    "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
+                                    "catalog_name": task.catalog_name or "",
+                                    "database_name": task.database_name or "",
+                                    "schema_name": task.schema_name or "",
+                                    "table_name": table_name,
+                                    "table_type": "table",
+                                    "definition": ddl,
+                                })
+                                retrieved_count += 1
+
+                        except Exception as e:
+                            logger.debug(f"Failed to get DDL for table {table_name}: {e}")
+
+                    if retrieved_count > 0:
+                        logger.info(f"Enhanced fallback retrieved DDL for {retrieved_count} tables")
+                        rag.store_batch(schemas_to_store, [])
+
+                        # Retry schema search
+                        schemas, values = rag.search_tables(
+                            tables=candidate_tables,
+                            catalog_name=task.catalog_name or "",
+                            database_name=task.database_name or "",
+                            schema_name=task.schema_name or "",
+                            dialect=task.database_type if hasattr(task, "database_type") else None,
+                        )
+
+                        if schemas:
+                            logger.info(f"Schema search successful after enhanced fallback: found {len(schemas)} schemas")
+                            return
+
+            except Exception as e:
+                logger.warning(f"Enhanced DDL fallback strategy failed: {e}")
+
+            # Strategy 2: Final fallback - store just table names for LLM reference
+            if all_tables and candidate_tables:
+                logger.warning("All DDL retrieval attempts failed, storing table names for LLM reference")
+                rag = SchemaWithValueRAG(agent_config=self.agent_config)
+
+                # Create minimal schema entries with just table names
+                minimal_schemas = []
+                for table_name in all_tables:
+                    if table_name in candidate_tables:
+                        minimal_schemas.append({
+                            "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
+                            "catalog_name": task.catalog_name or "",
+                            "database_name": task.database_name or "",
+                            "schema_name": task.schema_name or "",
+                            "table_name": table_name,
+                            "table_type": "table",
+                            "definition": f"CREATE TABLE {table_name} (-- DDL retrieval failed, table name only)",
+                        })
+
+                if minimal_schemas:
+                    rag.store_batch(minimal_schemas, [])
+                    logger.info(f"Stored {len(minimal_schemas)} minimal schema entries")
+
+        except Exception as e:
+            logger.error(f"Enhanced DDL fallback failed: {e}")
+
+    def _build_ddl_from_schema(self, table_name: str, schema_info: List[Dict[str, Any]]) -> str:
+        """
+        Build a basic DDL statement from schema information.
+
+        Args:
+            table_name: Name of the table
+            schema_info: List of column information dictionaries
+
+        Returns:
+            A basic CREATE TABLE DDL statement
+        """
+        try:
+            columns = []
+            for col in schema_info:
+                col_name = col.get("name", "")
+                col_type = col.get("type", "")
+                nullable = col.get("nullable", True)
+                default = col.get("default_value")
+
+                column_def = f"`{col_name}` {col_type}"
+                if not nullable:
+                    column_def += " NOT NULL"
+                if default is not None and default != "":
+                    column_def += f" DEFAULT {default}"
+
+                columns.append(column_def)
+
+            if columns:
+                return f"CREATE TABLE `{table_name}` (\n  " + ",\n  ".join(columns) + "\n)"
+            else:
+                return f"CREATE TABLE `{table_name}` (-- Schema retrieval incomplete)"
+
+        except Exception as e:
+            logger.warning(f"Failed to build DDL from schema: {e}")
+            return f"CREATE TABLE `{table_name}` (-- DDL reconstruction failed)"
 
     def execute(self) -> BaseResult:
         """

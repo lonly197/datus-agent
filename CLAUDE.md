@@ -603,6 +603,13 @@ return StreamingResponse(_generate_chat_research_stream(...))   # Generator with
 
 **Key insight:** `asyncio.create_task()` creates independent Tasks that don't control generators consumed by framework components like `StreamingResponse`. Use cooperative cancellation patterns when these need to coordinate.
 
+## Text2SQL Schema Discovery Fixes
+
+- Use `get_tables()` not `get_all_table_names()` for database connector API
+- LLM should select from actual database tables, not hallucinate names
+- Event.planId must match TodoItem.id for proper frontend binding
+- Use unified plan ID strategy for preflight tools and error events
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.

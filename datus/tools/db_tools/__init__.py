@@ -10,6 +10,7 @@ __all__ = [
     "BaseSqlConnector",
     "SQLiteConnector",
     "DuckdbConnector",
+    "StarRocksConnector",
     "connector_registry",
     "ConnectorRegistry",
     "AdapterMetadata",
@@ -17,7 +18,7 @@ __all__ = [
 
 
 def _register_builtin_connectors():
-    """Register built-in connectors (SQLite and DuckDB only)"""
+    """Register built-in connectors (SQLite, DuckDB, and StarRocks)"""
     # SQLite (0 dependencies)
     try:
         from .builtin_configs import SQLiteConfig
@@ -37,6 +38,23 @@ def _register_builtin_connectors():
         if "DuckdbConnector" not in __all__:
             __all__.append("DuckdbConnector")
         globals()["DuckdbConnector"] = DuckdbConnector
+    except ImportError:
+        pass
+
+    # StarRocks (requires mysql-connector-python)
+    try:
+        from .starrocks_connector import StarRocksConnector
+
+        connector_registry.register(
+            "starrocks",
+            StarRocksConnector,
+            display_name="StarRocks",
+            # StarRocks uses dict config, no specific config class needed
+        )
+        # Add to __all__ dynamically
+        if "StarRocksConnector" not in __all__:
+            __all__.append("StarRocksConnector")
+        globals()["StarRocksConnector"] = StarRocksConnector
     except ImportError:
         pass
 
