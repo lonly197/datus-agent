@@ -21,7 +21,9 @@ logger = get_logger(__name__)
 # This is crucial for production systems processing large numbers of DDL statements.
 
 # Maximum lengths for ReDoS prevention and input validation
-MAX_SQL_LENGTH = 1000000  # 1MB max DDL size
+# Production-optimized limits: 500KB for DDL is sufficient for typical table definitions
+# (Most real-world DDLs are under 100KB; 500KB provides safety margin)
+MAX_SQL_LENGTH = 512000  # 500KB max DDL size
 MAX_COLUMN_NAME_LENGTH = 128
 MAX_TABLE_NAME_LENGTH = 256
 MAX_COMMENT_LENGTH = 4000
@@ -101,6 +103,15 @@ _STARROCKS_PROPERTIES_RE = re.compile(
     r'PROPERTIES\s*\(\s*"([^"]+)"\s*=\s*"([^"]+)"',
     re.IGNORECASE
 )
+
+# DDL cleanup patterns for _clean_ddl()
+_UNCLOSED_COMMENT_RE = re.compile(r"COMMENT\s*['\"]([^'\"]*)$", re.IGNORECASE | re.MULTILINE)
+
+# Comment sanitization patterns for validate_comment()
+_SCRIPT_TAG_RE = re.compile(r'<script[^>]*>.*?</script>', re.IGNORECASE | re.DOTALL)
+_HTML_TAG_RE = re.compile(r'<[^>]+>')
+_JAVASCRIPT_PROTOCOL_RE = re.compile(r'javascript\s*:', re.IGNORECASE)
+_EVENT_HANDLER_RE = re.compile(r'\s*on\w+\s*=\s*[^>\s]*', re.IGNORECASE)
 
 # =============================================================================
 # INPUT VALIDATION FUNCTIONS
@@ -205,19 +216,17 @@ def validate_comment(comment: Any) -> Tuple[bool, str, Optional[str]]:
     # Check for potentially dangerous patterns and sanitize
     sanitized = comment
 
-    # Remove HTML/Script tags and their content
-    sanitized = re.sub(r'<script[^>]*>.*?</script>', '', sanitized, flags=re.IGNORECASE | re.DOTALL)
-    sanitized = re.sub(r'<[^>]+>', '', sanitized)  # Remove remaining HTML tags
+    # Remove HTML/Script tags and their content using pre-compiled patterns
+    sanitized = _SCRIPT_TAG_RE.sub('', sanitized)
+    sanitized = _HTML_TAG_RE.sub('', sanitized)  # Remove remaining HTML tags
 
-    # Remove JavaScript protocol
-    sanitized = re.sub(r'javascript\s*:', '', sanitized, flags=re.IGNORECASE)
-
-    # Remove event handlers (onclick, onerror, etc.)
-    sanitized = re.sub(r'\s*on\w+\s*=\s*[^>\s]*', '', sanitized, flags=re.IGNORECASE)
+    # Remove JavaScript protocol and event handlers
+    sanitized = _JAVASCRIPT_PROTOCOL_RE.sub('', sanitized)
+    sanitized = _EVENT_HANDLER_RE.sub('', sanitized)
 
     # If significant content was removed, flag it as potentially unsafe
     # but still allow the sanitized version
-    tag_count = len(re.findall(r'<[^>]*>', comment))
+    tag_count = len(_HTML_TAG_RE.findall(comment))
     if tag_count > 0:
         logger.debug(f"Comment contained {tag_count} HTML tags, sanitized version returned")
 
@@ -249,8 +258,7 @@ def _clean_ddl(sql: str) -> str:
     # Step 1: First, try to fix unclosed quotes by finding COMMENT without closing quote
     # Pattern: COMMENT followed by quote but no closing quote before end of line or error message
     # This needs to be done BEFORE error message cleanup to preserve table comments
-    unclosed_comment_pattern = re.compile(r"COMMENT\s*['\"]([^'\"]*)$", re.IGNORECASE | re.MULTILINE)
-    cleaned = unclosed_comment_pattern.sub("", cleaned)
+    cleaned = _UNCLOSED_COMMENT_RE.sub("", cleaned)
 
     # Step 2: Apply pre-compiled error message patterns
     for pattern in _ERROR_MESSAGE_PATTERNS:
