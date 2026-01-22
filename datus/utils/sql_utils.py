@@ -853,3 +853,173 @@ def extract_table_names(sql, dialect=DBType.SNOWFLAKE, ignore_empty=False) -> Li
         table_names.append(".".join(full_name))
 
     return list(set(table_names))
+
+
+def metadata_identifier(
+    dialect: str,
+    catalog_name: str = "",
+    database_name: str = "",
+    schema_name: str = "",
+    table_name: str = ""
+) -> str:
+    """
+    Create a unique identifier for a database table.
+
+    This function creates a fully-qualified table identifier in the format:
+    catalog.database.schema.table
+
+    Empty components are represented by empty strings, which results in
+    consecutive dots (e.g., "catalog.database..table").
+
+    Args:
+        dialect: SQL dialect (e.g., 'snowflake', 'mysql', 'postgresql')
+        catalog_name: Catalog name (optional, depends on dialect)
+        database_name: Database name (optional, depends on dialect)
+        schema_name: Schema name (optional, depends on dialect)
+        table_name: Table name (required)
+
+    Returns:
+        A fully-qualified table identifier string
+
+    Examples:
+        >>> metadata_identifier("snowflake", "", "db", "schema", "table")
+        'db.schema.table'
+        >>> metadata_identifier("starrocks", "cat", "db", "", "table")
+        'cat.db..table'
+    """
+    # Ensure table_name is provided
+    if not table_name:
+        raise ValueError("table_name is required")
+
+    # Build the identifier from right to left (table is always present)
+    parts = []
+
+    # Add table name
+    parts.append(table_name)
+
+    # Add schema name (if present)
+    if schema_name:
+        parts.insert(0, schema_name)
+
+    # Add database name (if present)
+    if database_name:
+        parts.insert(0, database_name)
+
+    # Add catalog name (if present)
+    if catalog_name:
+        parts.insert(0, catalog_name)
+
+    # Join with dots - empty components will create consecutive dots
+    return ".".join(parts)
+
+
+def parse_sql_type(sql: str, dialect: str = DBType.SNOWFLAKE) -> SQLType:
+    """
+    Parse SQL statement and determine its type.
+
+    This function analyzes a SQL query and returns its type based on the first keyword.
+    It handles various SQL statement types including SELECT, INSERT, UPDATE, DELETE,
+    DDL statements, metadata queries, and more.
+
+    Args:
+        sql: SQL query string to analyze
+        dialect: SQL dialect (used for dialect-specific parsing if needed)
+
+    Returns:
+        SQLType enum value representing the statement type
+
+    Examples:
+        >>> parse_sql_type("SELECT * FROM users")
+        <SQLType.SELECT: 'select'>
+        >>> parse_sql_type("INSERT INTO users VALUES (1, 'John')")
+        <SQLType.INSERT: 'insert'>
+        >>> parse_sql_type("CREATE TABLE users (id INT)")
+        <SQLType.DDL: 'ddl'>
+        >>> parse_sql_type("SHOW TABLES")
+        <SQLType.METADATA_SHOW: 'metadata'>
+    """
+    if not sql or not sql.strip():
+        return SQLType.UNKNOWN
+
+    # Clean the SQL: remove leading/trailing whitespace and comments
+    sql_clean = sql.strip()
+
+    # Remove leading SQL comments (-- and /* */ style)
+    # Handle multi-line comments
+    sql_clean = re.sub(r'/\*.*?\*/', '', sql_clean, flags=re.DOTALL)
+    # Handle single-line comments
+    sql_clean = re.sub(r'--.*$', '', sql_clean, flags=re.MULTILINE)
+    # Clean up extra whitespace
+    sql_clean = sql_clean.strip()
+
+    if not sql_clean:
+        return SQLType.UNKNOWN
+
+    # Get the first meaningful keyword
+    # Find the first word that is not whitespace or parentheses
+    first_word_match = re.match(r'^\s*([A-Za-z]+)', sql_clean, re.IGNORECASE)
+    if not first_word_match:
+        return SQLType.UNKNOWN
+
+    first_keyword = first_word_match.group(1).upper()
+
+    # Map of SQL keywords to SQLType
+    keyword_map = {
+        # Data Query Language (DQL)
+        'SELECT': SQLType.SELECT,
+        'WITH': SQLType.SELECT,  # CTEs are part of SELECT
+
+        # Data Manipulation Language (DML)
+        'INSERT': SQLType.INSERT,
+        'UPDATE': SQLType.UPDATE,
+        'DELETE': SQLType.DELETE,
+        'MERGE': SQLType.MERGE,
+        'UPSERT': SQLType.INSERT,  # UPSERT is essentially INSERT with ON CONFLICT
+
+        # Data Definition Language (DDL)
+        'CREATE': SQLType.DDL,
+        'ALTER': SQLType.DDL,
+        'DROP': SQLType.DDL,
+        'TRUNCATE': SQLType.DDL,
+        'RENAME': SQLType.DDL,
+
+        # Metadata/Utility Commands
+        'SHOW': SQLType.METADATA_SHOW,
+        'DESCRIBE': SQLType.METADATA_SHOW,
+        'DESC': SQLType.METADATA_SHOW,
+        'EXPLAIN': SQLType.EXPLAIN,
+        'USE': SQLType.CONTENT_SET,  # Database/schema selection
+
+        # Control Commands
+        'GRANT': SQLType.DDL,
+        'REVOKE': SQLType.DDL,
+    }
+
+    # Direct keyword match
+    if first_keyword in keyword_map:
+        return keyword_map[first_keyword]
+
+    # Special handling for complex queries
+    # Check for EXPLAIN with SELECT
+    if first_keyword == 'EXPLAIN':
+        # Check what comes after EXPLAIN
+        after_explain = sql_clean[7:].strip()
+        explain_match = re.match(r'^\s*([A-Za-z]+)', after_explain, re.IGNORECASE)
+        if explain_match:
+            next_keyword = explain_match.group(1).upper()
+            if next_keyword == 'SELECT':
+                return SQLType.EXPLAIN
+            # Other EXPLAIN variants (ANALYZE, FORMAT, etc.) are still EXPLAIN type
+            return SQLType.EXPLAIN
+
+    # Check for SELECT after WITH (CTE)
+    if first_keyword == 'WITH':
+        # This is a CTE which is part of a SELECT statement
+        return SQLType.SELECT
+
+    # For Snowflake-specific MERGE syntax
+    if 'MERGE' in sql_clean.upper():
+        return SQLType.MERGE
+
+    # If we can't determine the type, return UNKNOWN
+    return SQLType.UNKNOWN
