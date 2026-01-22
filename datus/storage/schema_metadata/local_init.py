@@ -6,13 +6,20 @@ import json
 from typing import Any, Dict, List, Optional, Set
 
 from datus.configuration.agent_config import AgentConfig, DbConfig
+from datus.models.base import LLMBaseModel
 from datus.schemas.base import TABLE_TYPE
 from datus.storage.schema_metadata.store import SchemaWithValueRAG
 from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.db_manager import DBManager
 from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, extract_enum_values_from_comment, parse_dialect
+from datus.utils.sql_utils import (
+    extract_enhanced_metadata_from_ddl,
+    extract_enum_values_from_comment,
+    parse_dialect,
+    validate_comment,
+    validate_table_name,
+)
 
 from .init_utils import exists_table_value
 
@@ -29,6 +36,8 @@ def init_local_schema(
     init_database_name: str = "",
     pool_size: int = 4,  # TODO: support multi-threading
     prune_missing: bool = False,
+    llm_fallback: bool = False,
+    llm_model: Optional[LLMBaseModel] = None,
 ):
     """Initialize local schema from the configured database."""
     logger.info(f"Initializing local schema for namespace: {agent_config.current_namespace}")
@@ -48,6 +57,8 @@ def init_local_schema(
                 table_type=table_type,
                 build_mode=build_mode,
                 prune_missing=prune_missing,
+                llm_fallback=llm_fallback,
+                llm_model=llm_model,
             )
         elif db_configs.type == DBType.DUCKDB:
             init_duckdb_schema(
@@ -59,6 +70,8 @@ def init_local_schema(
                 table_type=table_type,
                 build_mode=build_mode,
                 prune_missing=prune_missing,
+                llm_fallback=llm_fallback,
+                llm_model=llm_model,
             )
         elif db_configs.type == DBType.MYSQL:
             init_mysql_schema(
@@ -70,6 +83,8 @@ def init_local_schema(
                 table_type=table_type,
                 build_mode=build_mode,
                 prune_missing=prune_missing,
+                llm_fallback=llm_fallback,
+                llm_model=llm_model,
             )
         elif db_configs.type == DBType.STARROCKS:
             init_starrocks_schema(
@@ -82,6 +97,8 @@ def init_local_schema(
                 table_type=table_type,
                 build_mode=build_mode,
                 prune_missing=prune_missing,
+                llm_fallback=llm_fallback,
+                llm_model=llm_model,
             )
         else:
             init_other_three_level_schema(
@@ -93,6 +110,8 @@ def init_local_schema(
                 table_type=table_type,
                 build_mode=build_mode,
                 prune_missing=prune_missing,
+                llm_fallback=llm_fallback,
+                llm_model=llm_model,
             )
 
     else:
@@ -117,6 +136,8 @@ def init_local_schema(
                     table_type=table_type,
                     build_mode=build_mode,
                     prune_missing=prune_missing,
+                    llm_fallback=llm_fallback,
+                    llm_model=llm_model,
                 )
             elif db_config.type == DBType.DUCKDB:
                 init_duckdb_schema(
@@ -129,6 +150,8 @@ def init_local_schema(
                     table_type=table_type,
                     build_mode=build_mode,
                     prune_missing=prune_missing,
+                    llm_fallback=llm_fallback,
+                    llm_model=llm_model,
                 )
             else:
                 logger.warning(f"Unsupported database type {db_config.type} for multi-database configuration")
@@ -145,6 +168,8 @@ def init_sqlite_schema(
     table_type: TABLE_TYPE = "table",
     build_mode: str = "overwrite",
     prune_missing: bool = False,
+    llm_fallback: bool = False,
+    llm_model: Optional[LLMBaseModel] = None,
 ):
     database_name = getattr(db_config, "database", "")
     sql_connector = db_manager.get_conn(agent_config.current_namespace, database_name)
@@ -173,6 +198,8 @@ def init_sqlite_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -188,6 +215,8 @@ def init_sqlite_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
 
 
@@ -201,6 +230,8 @@ def init_duckdb_schema(
     table_type: TABLE_TYPE = "table",
     build_mode: str = "overwrite",
     prune_missing: bool = False,
+    llm_fallback: bool = False,
+    llm_model: Optional[LLMBaseModel] = None,
 ):
     # means schema_name here
     database_name = database_name or getattr(db_config, "database", "")
@@ -237,6 +268,8 @@ def init_duckdb_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -252,6 +285,8 @@ def init_duckdb_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
 
 
@@ -264,6 +299,8 @@ def init_mysql_schema(
     table_type: TABLE_TYPE = "table",
     build_mode: str = "overwrite",
     prune_missing: bool = False,
+    llm_fallback: bool = False,
+    llm_model: Optional[LLMBaseModel] = None,
 ):
     database_name = database_name or getattr(db_config, "database", "")
 
@@ -298,6 +335,8 @@ def init_mysql_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
 
     if table_type in ("full", "view"):
@@ -314,6 +353,8 @@ def init_mysql_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
 
 
@@ -327,6 +368,8 @@ def init_starrocks_schema(
     table_type: TABLE_TYPE = "table",
     build_mode: str = "overwrite",
     prune_missing: bool = False,
+    llm_fallback: bool = False,
+    llm_model: Optional[LLMBaseModel] = None,
 ):
     sql_connector = db_manager.get_conn(agent_config.current_namespace)
     catalog_name = catalog_name or getattr(db_config, "catalog", "") or sql_connector.catalog_name
@@ -361,6 +404,8 @@ def init_starrocks_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
 
     if table_type in ("full", "view"):
@@ -376,6 +421,8 @@ def init_starrocks_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
     if table_type in ("full", "view"):
         materialized_views = sql_connector.get_materialized_views_with_ddl(
@@ -392,6 +439,8 @@ def init_starrocks_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
 
 
@@ -404,6 +453,8 @@ def init_other_three_level_schema(
     table_type: TABLE_TYPE = "table",
     build_mode: str = "overwrite",
     prune_missing: bool = False,
+    llm_fallback: bool = False,
+    llm_model: Optional[LLMBaseModel] = None,
 ):
     db_type = db_config.type
     database_name = database_name or getattr(db_config, "database", "")
@@ -494,6 +545,8 @@ def init_other_three_level_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -520,6 +573,8 @@ def init_other_three_level_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
         )
     if (table_type == "mv" or table_type == "full") and hasattr(sql_connector, "get_materialized_views_with_ddl"):
         materialized_views = sql_connector.get_materialized_views_with_ddl(
@@ -559,6 +614,8 @@ def store_tables(
     connector: BaseSqlConnector,
     build_mode: str = "overwrite",
     prune_missing: bool = False,
+    llm_fallback: bool = False,
+    llm_model: Optional[LLMBaseModel] = None,
 ):
     """
     Store tables to the table_lineage_store.
@@ -591,6 +648,16 @@ def store_tables(
                 parsed_metadata = extract_enhanced_metadata_from_ddl(
                     definition, dialect=parse_dialect(getattr(connector, "dialect", ""))
                 )
+                if (
+                    llm_fallback
+                    and llm_model
+                    and "CREATE TABLE" in definition.upper()
+                    and (not parsed_metadata.get("columns") or not parsed_metadata.get("table", {}).get("name"))
+                ):
+                    llm_metadata = _llm_fallback_parse_ddl(definition, llm_model)
+                    if llm_metadata:
+                        parsed_metadata = llm_metadata
+                        logger.info(f"LLM fallback parsed DDL for table: {table.get('table_name', '')}")
                 table_comment = parsed_metadata["table"].get("comment", "") or ""
                 column_comments = {
                     col["name"]: col.get("comment", "")
@@ -762,6 +829,93 @@ def _fix_truncated_ddl(ddl: str) -> str:
             return fixed_ddl
 
     return ddl
+
+
+def _llm_fallback_parse_ddl(ddl: str, llm_model: Optional[LLMBaseModel]) -> Optional[Dict[str, Any]]:
+    if not llm_model or not ddl or not isinstance(ddl, str):
+        return None
+
+    prompt = (
+        "You are a SQL DDL parser. Extract metadata from the CREATE TABLE statement.\n"
+        "Return ONLY a JSON object with this schema:\n"
+        "{\n"
+        '  \"table\": {\"name\": \"\", \"comment\": \"\"},\n'
+        '  \"columns\": [{\"name\": \"\", \"type\": \"\", \"comment\": \"\", \"nullable\": true}],\n'
+        '  \"primary_keys\": [],\n'
+        '  \"foreign_keys\": [],\n'
+        '  \"indexes\": []\n'
+        "}\n"
+        "Rules:\n"
+        "- Only use information present in the DDL.\n"
+        "- If a field is missing, use empty string or empty list.\n"
+        "- Keep comments exactly as written (may contain Chinese and punctuation).\n"
+        "- If NULL/NOT NULL is not specified, set nullable=true.\n"
+        "DDL:\n"
+        "```sql\n"
+        f"{ddl}\n"
+        "```\n"
+    )
+
+    try:
+        response = llm_model.generate_with_json_output(prompt)
+    except Exception as exc:
+        logger.warning(f"LLM fallback parse failed: {exc}")
+        return None
+
+    if not isinstance(response, dict):
+        return None
+
+    table = response.get("table") if isinstance(response.get("table"), dict) else {}
+    table_name = table.get("name", "") if isinstance(table.get("name"), str) else ""
+    is_valid, _, table_name = validate_table_name(table_name)
+    if not is_valid or not table_name:
+        table_name = ""
+
+    table_comment = table.get("comment", "") if isinstance(table.get("comment"), str) else ""
+    is_valid, _, table_comment = validate_comment(table_comment)
+    if not is_valid or table_comment is None:
+        table_comment = ""
+
+    columns = []
+    raw_columns = response.get("columns", [])
+    if isinstance(raw_columns, list):
+        for col in raw_columns:
+            if not isinstance(col, dict):
+                continue
+            col_name = col.get("name", "")
+            if not isinstance(col_name, str) or not col_name:
+                continue
+            col_type = col.get("type", "")
+            if not isinstance(col_type, str):
+                col_type = ""
+            col_comment = col.get("comment", "")
+            if not isinstance(col_comment, str):
+                col_comment = ""
+            is_valid, _, col_comment = validate_comment(col_comment)
+            if not is_valid or col_comment is None:
+                col_comment = ""
+            nullable = col.get("nullable", True)
+            if not isinstance(nullable, bool):
+                nullable = True
+            columns.append(
+                {
+                    "name": col_name,
+                    "type": col_type,
+                    "comment": col_comment,
+                    "nullable": nullable,
+                }
+            )
+
+    if not columns:
+        return None
+
+    return {
+        "table": {"name": table_name, "comment": table_comment},
+        "columns": columns,
+        "primary_keys": response.get("primary_keys", []) if isinstance(response.get("primary_keys"), list) else [],
+        "foreign_keys": response.get("foreign_keys", []) if isinstance(response.get("foreign_keys"), list) else [],
+        "indexes": response.get("indexes", []) if isinstance(response.get("indexes"), list) else [],
+    }
 
 
 def _fill_sample_rows(
