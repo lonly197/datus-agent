@@ -824,10 +824,11 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
     async def _get_all_database_tables(self) -> List[str]:
         """
-        Fetch all table names from the database.
+        Fetch all table names from the database(s).
+        Supports multi-database configuration by iterating through all configured databases.
 
         Returns:
-            List of all table names in the database
+            List of all table names in the database(s)
         """
         try:
             if not self.workflow or not self.workflow.task:
@@ -835,20 +836,48 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             task = self.workflow.task
             db_manager = get_db_manager()
-            connector = db_manager.get_conn(self.agent_config.current_namespace, task.database_name)
 
-            if not connector:
-                logger.warning(f"Could not get database connector for {task.database_name}")
-                return []
+            # Check if multiple databases are configured
+            db_configs = self.agent_config.current_db_configs()
+            is_multi_db = len(db_configs) > 1
 
-            # Get all tables from database using the correct method name
-            # BaseSqlConnector defines get_tables() as the abstract method
-            all_tables = connector.get_tables(
-                catalog_name=task.catalog_name or "",
-                database_name=task.database_name or "",
-                schema_name=task.schema_name or "",
-            )
-            logger.debug(f"Retrieved {len(all_tables)} tables from database")
+            all_tables = []
+
+            if is_multi_db:
+                logger.info(f"Multi-database mode detected: scanning {len(db_configs)} databases...")
+                for logic_name, db_config in db_configs.items():
+                    try:
+                        connector = db_manager.get_conn(self.agent_config.current_namespace, logic_name)
+                        if not connector:
+                            continue
+
+                        tables = connector.get_tables(
+                            catalog_name=db_config.catalog or "",
+                            database_name=db_config.database or "",
+                            schema_name=db_config.schema or "",
+                        )
+                        # Prefix with logic_name to distinguish tables from different DBs
+                        prefixed_tables = [f"{logic_name}.{t}" for t in tables]
+                        all_tables.extend(prefixed_tables)
+                    except Exception as e:
+                        logger.warning(f"Failed to get tables for database {logic_name}: {e}")
+            else:
+                # Single database mode (legacy behavior)
+                connector = db_manager.get_conn(self.agent_config.current_namespace, task.database_name)
+
+                if not connector:
+                    logger.warning(f"Could not get database connector for {task.database_name}")
+                    return []
+
+                # Get all tables from database using the correct method name
+                # BaseSqlConnector defines get_tables() as the abstract method
+                all_tables = connector.get_tables(
+                    catalog_name=task.catalog_name or "",
+                    database_name=task.database_name or "",
+                    schema_name=task.schema_name or "",
+                )
+
+            logger.debug(f"Retrieved {len(all_tables)} tables from database(s)")
             return all_tables
 
         except Exception as e:
@@ -908,6 +937,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             return
 
         try:
+            # Check if multiple databases are configured
+            db_configs = self.agent_config.current_db_configs()
+            is_multi_db = len(db_configs) > 1
+
             # --- Repair Logic Start ---
             if self.agent_config:
                 try:
@@ -928,7 +961,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         str(schema.get("table_name", "")): schema.get("definition") for schema in schema_dicts
                     }
                     for table_name in candidate_tables:
-                        definition = definition_by_table.get(table_name)
+                        # Handle potential prefix
+                        lookup_name = table_name.split(".")[-1] if "." in table_name else table_name
+                        definition = definition_by_table.get(lookup_name)
+
                         if not definition or not str(definition).strip():
                             missing_tables.append(table_name)
 
@@ -946,10 +982,14 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             if self.agent_config:
                 rag = SchemaWithValueRAG(agent_config=self.agent_config)
 
+                # Determine target database for search
+                # If multi-db mode, use empty string to search across all databases
+                target_database = "" if is_multi_db else (task.database_name or "")
+
                 schemas, values = rag.search_tables(
                     tables=candidate_tables,
                     catalog_name=task.catalog_name or "",
-                    database_name=task.database_name or "",
+                    database_name=target_database,
                     schema_name=task.schema_name or "",
                     dialect=task.database_type if hasattr(task, "database_type") else None,
                 )
@@ -1033,187 +1073,94 @@ class SchemaDiscoveryNode(Node, LLMMixin):
     async def _ddl_fallback_and_retry(self, candidate_tables: List[str], task) -> None:
         """
         Fallback to retrieve DDL from database and populate storage when SchemaStorage is empty.
+        Supports multi-database configuration by iterating through all configured databases.
 
         This method:
-        1. Connects to the database using the configured connector
+        1. Connects to the database(s) using the configured connector(s)
         2. Retrieves DDL for all tables (or candidate tables)
         3. Populates SchemaStorage with the retrieved DDL
         4. Retries schema search with populated storage
-
-        Enhanced with better diagnostics and fallback strategies for cases where get_tables_with_ddl
-        returns 0 tables.
 
         Args:
             candidate_tables: List of table names to search for
             task: The current task with database connection info
         """
         try:
-            # SchemaWithValueRAG is already imported at module level
-            # Using local import here for clarity in this async context
             db_manager = get_db_manager()
-
-            # Get the database connector for the current task
-            connector = db_manager.get_conn(self.agent_config.current_namespace, task.database_name)
-
-            if not connector:
-                logger.warning(f"Could not get database connector for {task.database_name}")
-                return
+            
+            # Check if multiple databases are configured
+            db_configs = self.agent_config.current_db_configs()
+            is_multi_db = len(db_configs) > 1
 
             # Initialize RAG for storage operations
             rag = SchemaWithValueRAG(agent_config=self.agent_config)
             schemas_to_store = []
-            retrieved_tables = set()
-
-            # Try to get DDL for tables using available connector methods
-            if hasattr(connector, "get_tables_with_ddl"):
-                # Best case: connector can get all tables with DDL at once
-                logger.info("Using get_tables_with_ddl to retrieve all table DDLs...")
-                tables_with_ddl = connector.get_tables_with_ddl()
-
-                for tbl_info in tables_with_ddl:
-                    table_name = tbl_info.get("name", "")
-                    if table_name:
-                        schemas_to_store.append(
-                            {
-                                "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
-                                "catalog_name": task.catalog_name or "",
-                                "database_name": task.database_name or "",
-                                "schema_name": task.schema_name or "",
-                                "table_name": table_name,
-                                "table_type": "table",
-                                "definition": tbl_info.get("ddl", ""),
-                            }
-                        )
-                        retrieved_tables.add(table_name)
-
-                logger.info(f"Retrieved DDL for {len(schemas_to_store)} tables from database")
-
-                # Enhanced diagnostics if 0 tables retrieved
-                if len(schemas_to_store) == 0:
-                    logger.warning("")
-                    logger.warning("=" * 60)
-                    logger.warning("DDL FALLBACK RETRIEVED 0 TABLES FROM DATABASE")
-                    logger.warning("=" * 60)
-                    logger.warning("")
-                    logger.warning("Possible causes:")
-                    logger.warning("  1. Database connection parameters are incorrect")
-                    logger.warning("  2. Database is empty (no tables exist)")
-                    logger.warning("  3. Namespace/database name mismatch")
-                    logger.warning("  4. Insufficient permissions to read schema")
-                    logger.warning("")
-                    logger.warning(f"Connector type: {type(connector).__name__}")
-                    logger.warning(f"Database name: {task.database_name}")
-                    logger.warning(f"Namespace: {self.agent_config.current_namespace}")
-                    logger.warning("")
-                    logger.warning("Immediate actions:")
-                    logger.warning("  1. Verify database connection:")
-                    logger.warning(f'     python -c "')
-                    logger.warning(f"       from datus.tools.db_tools.db_manager import get_db_manager")
-                    logger.warning(
-                        f"       db = get_db_manager().get_conn('{self.agent_config.current_namespace}', '{task.database_name}')"
-                    )
-                    logger.warning(f"       print('Connected:', hasattr(db, 'get_tables_with_ddl'))")
-                    logger.warning(f"       print('Tables:', len(db.get_tables_with_ddl()))")
-                    logger.warning(f'     "')
-                    logger.warning("")
-                    logger.warning("  2. Re-run migration with schema import:")
-                    logger.warning(f"     python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
-                    logger.warning(
-                        f"       --config=<config_path> --namespace={self.agent_config.current_namespace} \\"
-                    )
-                    logger.warning(f"       --import-schemas --force")
-                    logger.warning("")
-                    logger.warning("=" * 60)
-                    logger.warning("")
-
-            elif hasattr(connector, "get_table_ddl") or hasattr(connector, "get_ddl"):
-                # Fallback: get DDL for each candidate table individually
-                logger.info(f"Retrieving DDL for {len(candidate_tables)} candidate tables individually...")
-
-                for table_name in candidate_tables:
-                    try:
-                        ddl = None
-                        if hasattr(connector, "get_table_ddl"):
-                            ddl = connector.get_table_ddl(table_name)
-                        elif hasattr(connector, "get_ddl"):
-                            ddl = connector.get_ddl(table_name)
-
-                        if ddl:
-                            schemas_to_store.append(
-                                {
-                                    "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
-                                    "catalog_name": task.catalog_name or "",
-                                    "database_name": task.database_name or "",
-                                    "schema_name": task.schema_name or "",
-                                    "table_name": table_name,
-                                    "table_type": "table",
-                                    "definition": ddl,
-                                }
-                            )
-                            retrieved_tables.add(table_name)
-                    except Exception as e:
-                        logger.debug(f"Failed to get DDL for table {table_name}: {e}")
-
-                logger.info(f"Retrieved DDL for {len(schemas_to_store)} candidate tables")
-
-                # Enhanced diagnostics if 0 tables retrieved
-                if len(schemas_to_store) == 0:
-                    logger.warning("")
-                    logger.warning("=" * 60)
-                    logger.warning("DDL FALLBACK RETRIEVED 0 TABLES FROM DATABASE")
-                    logger.warning("=" * 60)
-                    logger.warning("")
-                    logger.warning("Possible causes:")
-                    logger.warning("  1. Candidate table names do not exist in database")
-                    logger.warning("  2. Table name casing mismatch (case sensitivity)")
-                    logger.warning("  3. Database connection issues")
-                    logger.warning("  4. Insufficient permissions")
-                    logger.warning("")
-                    logger.warning(f"Connector type: {type(connector).__name__}")
-                    logger.warning(f"Candidate tables: {candidate_tables}")
-                    logger.warning(f"Database name: {task.database_name}")
-                    logger.warning("")
-                    logger.warning("Immediate actions:")
-                    logger.warning("  1. Verify database contains tables:")
-                    logger.warning(f'     python -c "')
-                    logger.warning(f"       from datus.tools.db_tools.db_manager import get_db_manager")
-                    logger.warning(
-                        f"       db = get_db_manager().get_conn('{self.agent_config.current_namespace}', '{task.database_name}')"
-                    )
-                    logger.warning(f"       print('All tables:', db.get_all_table_names())")
-                    logger.warning(f'     "')
-                    logger.warning("")
-                    logger.warning("  2. Re-run migration with schema import:")
-                    logger.warning(f"     python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
-                    logger.warning(
-                        f"       --config=<config_path> --namespace={self.agent_config.current_namespace} \\"
-                    )
-                    logger.warning(f"       --import-schemas --force")
-                    logger.warning("")
-                    logger.warning("=" * 60)
-                    logger.warning("")
-
+            
+            # Define list of (connector, db_name, catalog, schema) tuples to process
+            connectors_to_process = []
+            
+            if is_multi_db:
+                for logic_name, db_config in db_configs.items():
+                    conn = db_manager.get_conn(self.agent_config.current_namespace, logic_name)
+                    if conn:
+                        connectors_to_process.append((conn, logic_name, db_config.catalog, db_config.schema))
             else:
-                logger.warning("Connector does not support DDL retrieval methods")
-                logger.warning("")
-                logger.warning("=" * 60)
-                logger.warning("DDL FALLBACK NOT SUPPORTED BY CONNECTOR")
-                logger.warning("=" * 60)
-                logger.warning("")
-                logger.warning(f"Connector type: {type(connector).__name__}")
-                logger.warning("This connector does not support DDL retrieval methods:")
-                logger.warning("  - get_tables_with_ddl()")
-                logger.warning("  - get_table_ddl()")
-                logger.warning("  - get_ddl()")
-                logger.warning("")
-                logger.warning("To fix this issue:")
-                logger.warning("  1. Check if database connector supports DDL retrieval")
-                logger.warning("  2. Implement DDL retrieval methods in connector")
-                logger.warning("  3. Use schema import to populate storage manually")
-                logger.warning("")
-                logger.warning("=" * 60)
-                logger.warning("")
+                conn = db_manager.get_conn(self.agent_config.current_namespace, task.database_name)
+                if conn:
+                    connectors_to_process.append((conn, task.database_name, task.catalog_name, task.schema_name))
+            
+            if not connectors_to_process:
+                logger.warning(f"Could not get any database connectors")
                 return
+
+            for connector, db_name, catalog, schema in connectors_to_process:
+                try:
+                    if hasattr(connector, "get_tables_with_ddl"):
+                        logger.info(f"Using get_tables_with_ddl to retrieve all table DDLs from {db_name}...")
+                        tables_with_ddl = connector.get_tables_with_ddl()
+                        
+                        for tbl_info in tables_with_ddl:
+                            table_name = tbl_info.get("name", "")
+                            if table_name:
+                                schemas_to_store.append(
+                                    {
+                                        "identifier": f"{catalog or ''}.{db_name}..{table_name}.table",
+                                        "catalog_name": catalog or "",
+                                        "database_name": db_name,
+                                        "schema_name": schema or "",
+                                        "table_name": table_name,
+                                        "table_type": "table",
+                                        "definition": tbl_info.get("ddl", ""),
+                                    }
+                                )
+                    elif hasattr(connector, "get_table_ddl") or hasattr(connector, "get_ddl"):
+                        logger.info(f"Retrieving DDL for candidate tables individually from {db_name}...")
+                        for table_name in candidate_tables:
+                            # Handle potential prefix
+                            lookup_name = table_name.split(".")[-1] if "." in table_name else table_name
+                            try:
+                                ddl = None
+                                if hasattr(connector, "get_table_ddl"):
+                                    ddl = connector.get_table_ddl(lookup_name)
+                                elif hasattr(connector, "get_ddl"):
+                                    ddl = connector.get_ddl(lookup_name)
+                                
+                                if ddl:
+                                    schemas_to_store.append(
+                                        {
+                                            "identifier": f"{catalog or ''}.{db_name}..{lookup_name}.table",
+                                            "catalog_name": catalog or "",
+                                            "database_name": db_name,
+                                            "schema_name": schema or "",
+                                            "table_name": lookup_name,
+                                            "table_type": "table",
+                                            "definition": ddl,
+                                        }
+                                    )
+                            except Exception as e:
+                                logger.debug(f"Failed to get DDL for table {lookup_name} from {db_name}: {e}")
+                except Exception as e:
+                    logger.warning(f"Error processing database {db_name}: {e}")
 
             # Store retrieved schemas in storage
             if schemas_to_store:
@@ -1221,10 +1168,12 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 rag.store_batch(schemas_to_store, [])
 
                 # Retry schema search with populated storage
+                target_database = "" if is_multi_db else (task.database_name or "")
+                
                 schemas, values = rag.search_tables(
                     tables=candidate_tables,
                     catalog_name=task.catalog_name or "",
-                    database_name=task.database_name or "",
+                    database_name=target_database,
                     schema_name=task.schema_name or "",
                     dialect=task.database_type if hasattr(task, "database_type") else None,
                 )
@@ -1251,12 +1200,13 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     )
             else:
                 # Enhanced fallback when get_tables_with_ddl returns 0 tables
-                await self._enhanced_ddl_fallback(candidate_tables, task, connector)
+                for connector, db_name, catalog, schema in connectors_to_process:
+                    await self._enhanced_ddl_fallback(candidate_tables, task, connector, db_name=db_name)
 
         except Exception as e:
             logger.warning(f"DDL fallback failed: {e}")
 
-    async def _enhanced_ddl_fallback(self, candidate_tables: List[str], task, connector) -> None:
+    async def _enhanced_ddl_fallback(self, candidate_tables: List[str], task, connector, db_name: str = None) -> None:
         """
         Enhanced fallback strategy when get_tables_with_ddl returns 0 tables.
 
@@ -1270,20 +1220,28 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             candidate_tables: List of table names to search for
             task: The current task
             connector: The database connector instance
+            db_name: Optional database name override (for multi-db support)
         """
         try:
-            logger.info("Attempting enhanced DDL fallback strategy...")
+            logger.info(f"Attempting enhanced DDL fallback strategy for database: {db_name or task.database_name}...")
+
+            # Use provided db_name or fall back to task.database_name
+            current_db = db_name or task.database_name or ""
+
+            # Check if multiple databases are configured (for target_database logic)
+            db_configs = self.agent_config.current_db_configs()
+            is_multi_db = len(db_configs) > 1
 
             # Strategy 1: Get all tables and try individual DDL retrieval
             try:
                 all_tables = connector.get_tables(
                     catalog_name=task.catalog_name or "",
-                    database_name=task.database_name or "",
+                    database_name=current_db,
                     schema_name=task.schema_name or "",
                 )
 
                 if all_tables:
-                    logger.info(f"Found {len(all_tables)} tables in database, trying individual DDL retrieval...")
+                    logger.info(f"Found {len(all_tables)} tables in {current_db}, trying individual DDL retrieval...")
 
                     rag = SchemaWithValueRAG(agent_config=self.agent_config)
                     schemas_to_store = []
@@ -1321,9 +1279,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                             if ddl:
                                 schemas_to_store.append(
                                     {
-                                        "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
+                                        "identifier": f"{task.catalog_name or ''}.{current_db}..{table_name}.table",
                                         "catalog_name": task.catalog_name or "",
-                                        "database_name": task.database_name or "",
+                                        "database_name": current_db,
                                         "schema_name": task.schema_name or "",
                                         "table_name": table_name,
                                         "table_type": "table",
@@ -1336,14 +1294,16 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                             logger.debug(f"Failed to get DDL for table {table_name}: {e}")
 
                     if retrieved_count > 0:
-                        logger.info(f"Enhanced fallback retrieved DDL for {retrieved_count} tables")
+                        logger.info(f"Enhanced fallback retrieved DDL for {retrieved_count} tables from {current_db}")
                         rag.store_batch(schemas_to_store, [])
 
                         # Retry schema search
+                        target_database = "" if is_multi_db else (task.database_name or "")
+
                         schemas, values = rag.search_tables(
                             tables=candidate_tables,
                             catalog_name=task.catalog_name or "",
-                            database_name=task.database_name or "",
+                            database_name=target_database,
                             schema_name=task.schema_name or "",
                             dialect=task.database_type if hasattr(task, "database_type") else None,
                         )
@@ -1355,11 +1315,11 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                             return
 
             except Exception as e:
-                logger.warning(f"Enhanced DDL fallback strategy failed: {e}")
+                logger.warning(f"Enhanced DDL fallback strategy failed for {current_db}: {e}")
 
             # Strategy 2: Final fallback - store just table names for LLM reference
             if all_tables and candidate_tables:
-                logger.warning("All DDL retrieval attempts failed, storing table names for LLM reference")
+                logger.warning(f"All DDL retrieval attempts failed for {current_db}, storing table names for LLM reference")
                 rag = SchemaWithValueRAG(agent_config=self.agent_config)
 
                 # Create minimal schema entries with just table names
@@ -1368,9 +1328,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     if table_name in candidate_tables:
                         minimal_schemas.append(
                             {
-                                "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
+                                "identifier": f"{task.catalog_name or ''}.{current_db}..{table_name}.table",
                                 "catalog_name": task.catalog_name or "",
-                                "database_name": task.database_name or "",
+                                "database_name": current_db,
                                 "schema_name": task.schema_name or "",
                                 "table_name": table_name,
                                 "table_type": "table",
@@ -1380,10 +1340,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
                 if minimal_schemas:
                     rag.store_batch(minimal_schemas, [])
-                    logger.info(f"Stored {len(minimal_schemas)} minimal schema entries")
+                    logger.info(f"Stored {len(minimal_schemas)} minimal schema entries for {current_db}")
 
         except Exception as e:
-            logger.error(f"Enhanced DDL fallback failed: {e}")
+            logger.error(f"Enhanced DDL fallback failed for {db_name}: {e}")
 
     def _build_ddl_from_schema(self, table_name: str, schema_info: List[Dict[str, Any]]) -> str:
         """
