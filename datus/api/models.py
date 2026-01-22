@@ -6,6 +6,8 @@
 API models for the Datus Agent FastAPI service.
 """
 
+print("LOADING LOCAL DATUS.API.MODELS")
+
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
@@ -31,9 +33,9 @@ class HealthResponse(BaseModel):
 class RunWorkflowRequest(BaseModel):
     """Request model for workflow execution."""
 
-    workflow: str = Field(..., description="Workflow name, e.g., nl2sql")
-    namespace: str = Field(..., description="Database namespace")
-    task: str = Field(..., description="Natural language task description")
+    workflow: str = Field(..., description="Workflow name (UPDATED TEST), e.g., nl2sql", max_length=256)
+    namespace: str = Field(..., description="Database namespace", max_length=256)
+    task: str = Field(..., description="Natural language task description", max_length=10000)
     mode: Mode = Field(Mode.SYNC, description="Execution mode: sync or async")
     task_id: Optional[str] = Field(None, description="Custom task ID for idempotency")
     catalog_name: Optional[str] = Field(None, description="Catalog name")
@@ -101,27 +103,28 @@ class FeedbackResponse(BaseModel):
 class ChatResearchRequest(BaseModel):
     """Request model for chat research execution."""
 
-    namespace: str = Field(..., description="Database namespace")
-    task: str = Field(..., description="Natural language task description")
-    task_id: Optional[str] = Field(None, description="Custom task ID for idempotency (frontend messageId)")
-    catalog_name: Optional[str] = Field(None, description="Catalog name")
-    database_name: Optional[str] = Field(None, description="Database name")
-    schema_name: Optional[str] = Field(None, description="Schema name")
-    current_date: Optional[str] = Field(None, description="Current date reference")
-    domain: Optional[str] = Field(None, description="Domain for the task")
-    layer1: Optional[str] = Field(None, description="Layer1 for the task")
-    layer2: Optional[str] = Field(None, description="Layer2 for the task")
-    ext_knowledge: Optional[str] = Field(None, description="External knowledge (can use '|' as separator)")
+    namespace: str = Field(..., description="Database namespace", max_length=256)
+    task: str = Field(..., description="Natural language task description (UPDATED)", max_length=10000)
+    task_id: Optional[str] = Field(None, description="Custom task ID for idempotency (frontend messageId)", max_length=128)
+    catalog_name: Optional[str] = Field(None, description="Catalog name", max_length=256)
+    database_name: Optional[str] = Field(None, description="Database name", max_length=256)
+    schema_name: Optional[str] = Field(None, description="Schema name", max_length=256)
+    current_date: Optional[str] = Field(None, description="Current date reference", max_length=64)
+    domain: Optional[str] = Field(None, description="Domain for the task", max_length=256)
+    layer1: Optional[str] = Field(None, description="Layer1 for the task", max_length=256)
+    layer2: Optional[str] = Field(None, description="Layer2 for the task", max_length=256)
+    ext_knowledge: Optional[str] = Field(None, description="External knowledge (can use '|' as separator)", max_length=10000)
     ext_knowledges: Optional[List[str]] = Field(None, description="External knowledge array (alternative to ext_knowledge)")
     plan_mode: Optional[bool] = Field(False, description="Enable plan mode for structured execution")
     auto_execute_plan: Optional[bool] = Field(False, description="Auto execute plan without user confirmation")
-    prompt: Optional[str] = Field(None, description="Role definition and task capability prompt to guide the AI agent")
+    prompt: Optional[str] = Field(None, description="Role definition and task capability prompt to guide the AI agent", max_length=50000)
     prompt_mode: Optional[str] = Field(
-        "append", description="How to merge prompt with system prompt: 'replace' or 'append' (default)"
+        "append", description="How to merge prompt with system prompt: 'replace' or 'append' (default)", max_length=32
     )
     execution_mode: Optional[str] = Field(
         None,
         description="Execution mode override. Supports predefined scenarios ('text2sql', 'sql_review', 'data_analysis', 'deep_analysis') or direct workflow names ('chat_agentic_plan', 'metric_to_sql', etc.). Falls back to auto-detection if invalid or unspecified.",
+        max_length=64
     )
 
 

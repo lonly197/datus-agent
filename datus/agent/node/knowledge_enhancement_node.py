@@ -18,7 +18,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
 from datus.storage.cache import get_storage_cache_instance
 from datus.utils.error_handler import LLMMixin
@@ -202,9 +203,7 @@ class KnowledgeEnhancementNode(Node, LLMMixin):
             )
             self.result = BaseResult(success=False, error=str(e))
 
-    def _normalize_knowledge(
-        self, task, context: Optional["Context"]
-    ) -> str:
+    def _normalize_knowledge(self, task, context: Optional["Context"]) -> str:
         """
         Normalize knowledge input: handle ext_knowledges array and | separator.
 
@@ -229,9 +228,7 @@ class KnowledgeEnhancementNode(Node, LLMMixin):
 
         return ext_knowledge
 
-    async def _filter_relevant_knowledge(
-        self, task_text: str, schemas: Optional[List], knowledge: str
-    ) -> str:
+    async def _filter_relevant_knowledge(self, task_text: str, schemas: Optional[List], knowledge: str) -> str:
         """
         Use LLM to filter relevant knowledge when knowledge is too long.
 
@@ -358,9 +355,7 @@ class KnowledgeEnhancementNode(Node, LLMMixin):
 
         return retrieved
 
-    def _merge_knowledge(
-        self, user_knowledge: str, retrieved_knowledge: Dict[str, List[Dict]]
-    ) -> str:
+    def _merge_knowledge(self, user_knowledge: str, retrieved_knowledge: Dict[str, List[Dict]]) -> str:
         """
         Merge user knowledge and retrieved knowledge into formatted output.
 

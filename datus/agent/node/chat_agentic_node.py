@@ -20,9 +20,10 @@ except ImportError:
 
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 from datus.agent.workflow import Workflow
-from datus.configuration.agent_config import AgentConfig
 from datus.api.models import TodoItem, TodoStatus
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.configuration.agent_config import AgentConfig
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.schemas.chat_agentic_node_models import ChatNodeInput
 from datus.schemas.node_models import SQLContext
 from datus.tools.db_tools.db_manager import get_db_manager
@@ -130,7 +131,7 @@ class PreflightOrchestrator:
         tool_call_id = f"preflight_{tool_name}_{start_time}"
 
         # Get plan_id and build todo_item_id for binding to TodoItem.id
-        plan_id = getattr(self.chat_node, '_preflight_plan_id', None)
+        plan_id = getattr(self.chat_node, "_preflight_plan_id", None)
         todo_item_id = f"{plan_id}_todo_{tool_index}" if (plan_id and tool_index is not None) else plan_id
 
         try:
@@ -432,7 +433,9 @@ class PreflightOrchestrator:
             input_data_with_plan = input_data.copy()
             if plan_id:
                 input_data_with_plan["plan_id"] = plan_id
-            await self.execution_event_manager.record_tool_execution(execution_id, tool_name, tool_call_id, input_data_with_plan)
+            await self.execution_event_manager.record_tool_execution(
+                execution_id, tool_name, tool_call_id, input_data_with_plan
+            )
 
     async def _send_tool_call_result_event(
         self,
@@ -1305,7 +1308,8 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
     async def _send_syntax_error_event(self, sql_query: str, error: str):
         """Send SQL syntax error event to frontend."""
-        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+        from datus.schemas.action_history import (ActionHistory, ActionRole,
+                                                  ActionStatus)
 
         error_action = ActionHistory.create_action(
             role=ActionRole.TOOL,
@@ -1333,7 +1337,8 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
     async def _send_table_not_found_event(self, table_name: str, error: str):
         """Send table not found error event to frontend."""
-        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+        from datus.schemas.action_history import (ActionHistory, ActionRole,
+                                                  ActionStatus)
 
         error_action = ActionHistory.create_action(
             role=ActionRole.TOOL,
@@ -1357,7 +1362,8 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
     async def _send_db_connection_error_event(self, sql_query: str, error: str):
         """Send database connection error event to frontend."""
-        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+        from datus.schemas.action_history import (ActionHistory, ActionRole,
+                                                  ActionStatus)
 
         error_action = ActionHistory.create_action(
             role=ActionRole.TOOL,
@@ -1401,7 +1407,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
         logger.info(f"self.workflow: {self.workflow}")
         if self.workflow:
             logger.info(f"self.workflow.metadata: {self.workflow.metadata}")
-            logger.info(f"required_tool_sequence: {self.workflow.metadata.get('required_tool_sequence') if self.workflow.metadata else None}")
+            logger.info(
+                f"required_tool_sequence: {self.workflow.metadata.get('required_tool_sequence') if self.workflow.metadata else None}"
+            )
         else:
             logger.warning("self.workflow is None in ChatAgenticNode.execute_stream()")
 
@@ -1470,7 +1478,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
             has_metadata = bool(self.workflow and self.workflow.metadata)
             has_required_tools = bool(has_metadata and self.workflow.metadata.get("required_tool_sequence"))
 
-            logger.info(f"Preflight check: has_workflow={has_workflow}, has_metadata={has_metadata}, has_required_tools={has_required_tools}")
+            logger.info(
+                f"Preflight check: has_workflow={has_workflow}, has_metadata={has_metadata}, has_required_tools={has_required_tools}"
+            )
 
             if has_required_tools:
                 logger.info("Executing required preflight tool sequence...")
@@ -1479,15 +1489,13 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 # Phase 1: Create Plan Structure for Preflight Tools
                 # Generate plan_id for this execution
                 plan_id = str(uuid.uuid4())
-                required_tools = self.workflow.metadata.get('required_tool_sequence', [])
+                required_tools = self.workflow.metadata.get("required_tool_sequence", [])
 
                 # Create TodoItems for each preflight tool
                 todos = []
                 for idx, tool_name in enumerate(required_tools):
                     todo = TodoItem(
-                        id=f"{plan_id}_todo_{idx}",
-                        content=f"Execute {tool_name}",
-                        status=TodoStatus.PENDING
+                        id=f"{plan_id}_todo_{idx}", content=f"Execute {tool_name}", status=TodoStatus.PENDING
                     )
                     todos.append(todo)
 
@@ -1498,15 +1506,16 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     messages="SQL Review Preflight Plan",
                     input_data={"plan_id": plan_id},  # Issue 4: Only plan_id in input_data
                     output_data={"todos": [t.model_dump() for t in todos]},  # Issue 4: Todos in output_data
-                    status=ActionStatus.SUCCESS
+                    status=ActionStatus.SUCCESS,
                 )
                 action_history_manager.add_action(plan_action)
                 yield plan_action
 
                 # Initialize plan hooks for caching if not already done (even if not in plan mode)
                 if not self.plan_hooks:
-                    from datus.cli.plan_hooks import PlanModeHooks
                     from rich.console import Console
+
+                    from datus.cli.plan_hooks import PlanModeHooks
 
                     # Create minimal hooks for caching support
                     self.plan_hooks = PlanModeHooks(
@@ -1515,7 +1524,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                         auto_mode=False,
                         action_history_manager=action_history_manager,
                         agent_config=self.agent_config,
-                        model=self.model
+                        model=self.model,
                     )
 
                 # Store plan_id for tool events (will be used by PreflightOrchestrator)
@@ -1523,9 +1532,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 # Issue 7: Removed unused _preflight_todos attribute
 
                 # Execute preflight tools using the unified orchestrator
-                async for preflight_action in self._run_original_preflight_tools(
-                    self.workflow, action_history_manager
-                ):
+                async for preflight_action in self._run_original_preflight_tools(self.workflow, action_history_manager):
                     yield preflight_action
 
             system_instruction = self._get_system_prompt(conversation_summary, user_input.prompt_version)
@@ -1616,9 +1623,9 @@ class ChatAgenticNode(GenSQLAgenticNode):
             # Check if this is an SQL review task and send the report as ChatEvent
             # Issue 8: Use startswith() for more flexible SQL review detection
             is_sql_review = (
-                self.workflow and
-                self.workflow.metadata and
-                self.workflow.metadata.get('system_prompt', '').startswith('sql_review')
+                self.workflow
+                and self.workflow.metadata
+                and self.workflow.metadata.get("system_prompt", "").startswith("sql_review")
             )
 
             if is_sql_review and response_content:
@@ -1630,7 +1637,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
                     messages="SQL Review Report",
                     input_data={},
                     output_data={"content": response_content},
-                    status=ActionStatus.SUCCESS
+                    status=ActionStatus.SUCCESS,
                 )
                 action_history_manager.add_action(chat_action)
                 yield chat_action
@@ -1678,8 +1685,8 @@ class ChatAgenticNode(GenSQLAgenticNode):
                 self.plan_hooks = None
 
             # Always cleanup preflight state (not just in plan mode) - Issue 1 fix
-            if hasattr(self, '_preflight_plan_id'):
-                delattr(self, '_preflight_plan_id')
+            if hasattr(self, "_preflight_plan_id"):
+                delattr(self, "_preflight_plan_id")
             # Note: _preflight_todos removed in Issue 7
 
     def _determine_execution_scenario(self, user_input) -> str:

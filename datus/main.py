@@ -355,78 +355,82 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def main():
-    parser = create_parser()
-    args = parser.parse_args()
+    try:
+        parser = create_parser()
+        args = parser.parse_args()
 
-    if not args.action:
-        parser.print_help()
+        if not args.action:
+            parser.print_help()
+            return 1
+
+        # Handle init command separately as it doesn't require existing configuration
+        if args.action == "init":
+            configure_logging(args.debug, console_output=False)
+            init = InteractiveInit()
+            return init.run()
+
+        if args.action == "tutorial":
+            configure_logging(args.debug, console_output=False)
+            tutorial = BenchmarkTutorial(args.config or "~/.datus/conf/agent.yml")
+            return tutorial.run()
+
+        if args.action == "namespace":
+            configure_logging(args.debug, console_output=False)
+            namespace_manager = NamespaceManager(args.config or "")
+            return namespace_manager.run(args.command)
+
+        configure_logging(args.debug)
+        setup_exception_handler()
+
+        # Load agent configuration
+        agent_config = load_agent_config(**vars(args))
+
+        # Initialize agent with both args and config
+        agent = Agent(args, agent_config)
+        result = None
+        # Execute different functions based on action
+        if args.action == "check-db":
+            result = agent.check_db()
+        elif args.action == "probe-llm":
+            result = agent.probe_llm()
+        elif args.action == "bootstrap-kb":
+            result = agent.bootstrap_kb()
+        elif args.action == "run":
+            if args.load_cp:
+                result = agent.run(check_storage=True)  # load task from checkpoint
+            else:
+                db_name, db_type = agent_config.current_db_name_type(args.task_db_name)
+                task_id = args.task_id or datetime.now().strftime("%Y-%m-%d_%H:%M:%S.%f")
+                subject_path = [c.strip() for c in args.subject_path.split("/") if c.strip()] if args.subject_path else None
+                result = agent.run(
+                    SqlTask(
+                        id=task_id,
+                        database_type=db_type,
+                        catalog_name=args.task_catalog,
+                        database_name=db_name,
+                        schema_name=args.task_schema,
+                        task=args.task,
+                        external_knowledge=args.task_ext_knowledge,
+                        output_dir=agent_config.output_dir,
+                        schema_linking_type=args.schema_linking_type,
+                        subject_path=subject_path,
+                        current_date=args.current_date,
+                    ),
+                    True,
+                )
+        elif args.action == "benchmark":
+            result = agent.benchmark()
+        elif args.action == "generate-dataset":
+            result = agent.generate_dataset()
+        elif args.action in ("eval", "evaluation", "evaluate"):
+            result = agent.evaluation()
+        if result:
+            logger.info(f"\nFinal Result: {result}")
+
+        return 0
+    except Exception as e:
+        logger.error(f"Fatal error in main execution: {e}", exc_info=True)
         return 1
-
-    # Handle init command separately as it doesn't require existing configuration
-    if args.action == "init":
-        configure_logging(args.debug, console_output=False)
-        init = InteractiveInit()
-        return init.run()
-
-    if args.action == "tutorial":
-        configure_logging(args.debug, console_output=False)
-        tutorial = BenchmarkTutorial(args.config or "~/.datus/conf/agent.yml")
-        return tutorial.run()
-
-    if args.action == "namespace":
-        configure_logging(args.debug, console_output=False)
-        namespace_manager = NamespaceManager(args.config or "")
-        return namespace_manager.run(args.command)
-
-    configure_logging(args.debug)
-    setup_exception_handler()
-
-    # Load agent configuration
-    agent_config = load_agent_config(**vars(args))
-
-    # Initialize agent with both args and config
-    agent = Agent(args, agent_config)
-    result = None
-    # Execute different functions based on action
-    if args.action == "check-db":
-        result = agent.check_db()
-    elif args.action == "probe-llm":
-        result = agent.probe_llm()
-    elif args.action == "bootstrap-kb":
-        result = agent.bootstrap_kb()
-    elif args.action == "run":
-        if args.load_cp:
-            result = agent.run(check_storage=True)  # load task from checkpoint
-        else:
-            db_name, db_type = agent_config.current_db_name_type(args.task_db_name)
-            task_id = args.task_id or datetime.now().strftime("%Y-%m-%d_%H:%M:%S.%f")
-            subject_path = [c.strip() for c in args.subject_path.split("/") if c.strip()] if args.subject_path else None
-            result = agent.run(
-                SqlTask(
-                    id=task_id,
-                    database_type=db_type,
-                    catalog_name=args.task_catalog,
-                    database_name=db_name,
-                    schema_name=args.task_schema,
-                    task=args.task,
-                    external_knowledge=args.task_ext_knowledge,
-                    output_dir=agent_config.output_dir,
-                    schema_linking_type=args.schema_linking_type,
-                    subject_path=subject_path,
-                    current_date=args.current_date,
-                ),
-                True,
-            )
-    elif args.action == "benchmark":
-        result = agent.benchmark()
-    elif args.action == "generate-dataset":
-        result = agent.generate_dataset()
-    elif args.action in ("eval", "evaluation", "evaluate"):
-        result = agent.evaluation()
-    if result:
-        logger.info(f"\nFinal Result: {result}")
-
-    return 0
 
 
 if __name__ == "__main__":

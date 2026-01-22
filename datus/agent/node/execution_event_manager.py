@@ -10,15 +10,16 @@ Unified Execution Event Manager for all execution modes.
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict
-
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict
 
 if TYPE_CHECKING:
-    from datus.schemas.action_history import ActionHistory, ActionHistoryManager
+    from datus.schemas.action_history import (ActionHistory,
+                                              ActionHistoryManager)
 
 try:
-    from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+    from datus.schemas.action_history import (ActionHistory,
+                                              ActionHistoryManager, ActionRole,
+                                              ActionStatus)
     from datus.utils.loggings import get_logger
 
     logger = get_logger(__name__)
@@ -449,7 +450,8 @@ Be specific about table names, column names, and business logic. If uncertain, u
     async def _link_schema(self):
         """Link relevant database schema using search tools."""
         try:
-            from datus.tools.func_tool.database import db_function_tool_instance
+            from datus.tools.func_tool.database import \
+                db_function_tool_instance
 
             if not self.context.agent_config:
                 return {"tables": [], "columns": {}, "error": "No agent config available"}
@@ -598,7 +600,8 @@ Generate the SQL query:"""
         """Validate SQL syntax using DB tool."""
         try:
             # Import here to avoid circular imports
-            from datus.tools.func_tool.database import db_function_tool_instance
+            from datus.tools.func_tool.database import \
+                db_function_tool_instance
 
             # Get DB tool instance
             if self.context.agent_config:

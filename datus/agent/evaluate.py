@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from typing import Dict
+from typing import Any, Dict
 
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
@@ -12,7 +12,7 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 
-def setup_node_input(node, workflow):
+def setup_node_input(node: Node, workflow: Workflow) -> Dict[str, Any]:
     """Sets up the input for a node based on its type."""
     node_type = node.type
 
@@ -27,7 +27,7 @@ def setup_node_input(node, workflow):
         }
 
 
-def update_context_from_node(node: Node, workflow: Workflow) -> Dict:
+def update_context_from_node(node: Node, workflow: Workflow) -> Dict[str, Any]:
     if (
         node.type in NodeType.ACTION_TYPES
         or node.type == NodeType.TYPE_REFLECT
@@ -43,7 +43,7 @@ def update_context_from_node(node: Node, workflow: Workflow) -> Dict:
         return {"success": False, "message": f"Unknown node type: {node.type}"}
 
 
-def evaluate_result(node: Node, workflow: Workflow) -> Dict:
+def evaluate_result(node: Node, workflow: Workflow) -> Dict[str, Any]:
     """
     Evaluate the result of a node execution and setup input for the next node.
 
@@ -61,7 +61,7 @@ def evaluate_result(node: Node, workflow: Workflow) -> Dict:
 
         # Check for critical failures that should stop the workflow
         if not update_result["success"]:
-            error_msg = update_result.get("message", "Unknown error")
+            error_msg = str(update_result.get("message", "Unknown error"))
 
             # Determine if this is a critical failure
             if "critical" in error_msg.lower() or "required" in error_msg.lower():

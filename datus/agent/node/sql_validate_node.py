@@ -17,7 +17,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
 from datus.schemas.node_models import SQLContext, SQLValidateInput, TableSchema
 from datus.utils.constants import DBType
@@ -284,10 +285,7 @@ class SQLValidateNode(Node):
 
         # 5. Final validity check
         result["is_valid"] = (
-            result["syntax_valid"]
-            and result["tables_exist"]
-            and result["columns_exist"]
-            and len(result["errors"]) == 0
+            result["syntax_valid"] and result["tables_exist"] and result["columns_exist"] and len(result["errors"]) == 0
         )
 
         return result
@@ -434,14 +432,12 @@ class SQLValidateNode(Node):
             is_valid = data.get("is_valid", False)
             if not is_valid:
                 # Import here to avoid circular imports
-                from datus.agent.workflow_runner import WorkflowTerminationStatus
+                from datus.agent.workflow_runner import \
+                    WorkflowTerminationStatus
 
                 workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
 
-                logger.info(
-                    f"SQL validation failed, skipping to reflect: "
-                    f"errors={data.get('errors', [])}"
-                )
+                logger.info(f"SQL validation failed, skipping to reflect: " f"errors={data.get('errors', [])}")
 
             return {
                 "success": True,

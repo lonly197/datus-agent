@@ -59,10 +59,7 @@ async def suggest_join_paths(
         # Get relationship metadata for all involved tables
         all_tables = list(set(source_tables + target_tables))
         schemas = storage.get_table_schemas(
-            table_names=all_tables,
-            catalog_name=catalog_name,
-            database_name=database_name,
-            schema_name=schema_name
+            table_names=all_tables, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
         )
 
         if not schemas or len(schemas) == 0:
@@ -85,13 +82,15 @@ async def suggest_join_paths(
                     confidence = _calculate_confidence(graph, path)
                     reason = _infer_reason(graph, path)
 
-                    paths.append({
-                        "path": path,
-                        "join_conditions": join_conditions,
-                        "confidence": confidence,
-                        "reason": reason,
-                        "path_length": len(path)
-                    })
+                    paths.append(
+                        {
+                            "path": path,
+                            "join_conditions": join_conditions,
+                            "confidence": confidence,
+                            "reason": reason,
+                            "path_length": len(path),
+                        }
+                    )
 
         # Sort by confidence (highest first) and path length (shortest first)
         paths.sort(key=lambda p: (-p["confidence"], p["path_length"]))
@@ -126,7 +125,7 @@ def _build_relationship_graph(schemas) -> Dict[str, Dict[str, str]]:
         graph[table_name] = {}
 
         # Parse relationship_metadata if exists
-        if hasattr(schema, 'relationship_metadata') and schema.relationship_metadata:
+        if hasattr(schema, "relationship_metadata") and schema.relationship_metadata:
             try:
                 relationships = json.loads(schema.relationship_metadata)
                 foreign_keys = relationships.get("foreign_keys", [])
@@ -153,10 +152,7 @@ def _build_relationship_graph(schemas) -> Dict[str, Dict[str, str]]:
 
 
 def _bfs_shortest_path(
-    graph: Dict[str, Dict[str, str]],
-    start: str,
-    end: str,
-    max_depth: int = 3
+    graph: Dict[str, Dict[str, str]], start: str, end: str, max_depth: int = 3
 ) -> Optional[List[str]]:
     """
     Find shortest path between two tables using BFS algorithm.
@@ -315,10 +311,7 @@ async def suggest_drill_down_paths(
     try:
         # Get fact table schema
         fact_schemas = storage.get_table_schemas(
-            table_names=[fact_table],
-            catalog_name=catalog_name,
-            database_name=database_name,
-            schema_name=schema_name
+            table_names=[fact_table], catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
         )
 
         if not fact_schemas or len(fact_schemas) == 0:
@@ -352,7 +345,7 @@ async def suggest_drill_down_paths(
                     table_names=[dim_table],
                     catalog_name=catalog_name,
                     database_name=database_name,
-                    schema_name=schema_name
+                    schema_name=schema_name,
                 )
 
                 if not dim_schemas or len(dim_schemas) == 0:
@@ -372,12 +365,14 @@ async def suggest_drill_down_paths(
                 levels = _detect_hierarchy_levels(dim_table, column_comments)
 
                 if levels:
-                    drill_downs.append({
-                        "dimension_table": dim_table,
-                        "levels": levels,
-                        "join_path": f"{fact_table}.{from_column} = {dim_table}.{fk.get('to_column', '')}",
-                        "level_comments": {col: column_comments.get(col, "") for col in levels}
-                    })
+                    drill_downs.append(
+                        {
+                            "dimension_table": dim_table,
+                            "levels": levels,
+                            "join_path": f"{fact_table}.{from_column} = {dim_table}.{fk.get('to_column', '')}",
+                            "level_comments": {col: column_comments.get(col, "") for col in levels},
+                        }
+                    )
 
             return drill_downs
 
@@ -401,7 +396,8 @@ def _detect_hierarchy_levels(table_name: str, column_comments: Dict[str, str]) -
     Returns:
         Ordered list of column names representing hierarchy levels
     """
-    from datus.configuration.business_term_config import detect_temporal_granularity
+    from datus.configuration.business_term_config import \
+        detect_temporal_granularity
 
     # Temporal hierarchy patterns
     temporal_order = ["year", "quarter", "month", "day", "hour", "minute"]

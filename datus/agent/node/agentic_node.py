@@ -23,7 +23,8 @@ from datus.agent.node.node import Node
 from datus.configuration.agent_config import AgentConfig
 from datus.models.base import LLMBaseModel
 from datus.prompts.prompt_manager import prompt_manager
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionStatus
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
@@ -601,11 +602,13 @@ class AgenticNode(Node):
         try:
             # Try to import the result class from corresponding schema module
             if class_name == "ChatAgenticNode":
-                from datus.schemas.chat_agentic_node_models import ChatNodeResult
+                from datus.schemas.chat_agentic_node_models import \
+                    ChatNodeResult
 
                 return ChatNodeResult
             elif class_name == "GenSQLAgenticNode":
-                from datus.schemas.gen_sql_agentic_node_models import GenSQLNodeResult
+                from datus.schemas.gen_sql_agentic_node_models import \
+                    GenSQLNodeResult
 
                 return GenSQLNodeResult
             elif class_name == "CompareAgenticNode":

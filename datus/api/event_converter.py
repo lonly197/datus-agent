@@ -292,6 +292,24 @@ class DeepResearchEventConverter:
 
         return "\n".join(lines)
 
+    def _escape_markdown_table_cell(self, text: Any) -> str:
+        """Escape text for use in a Markdown table cell.
+
+        Args:
+            text: Input text (will be converted to string)
+
+        Returns:
+            Escaped string safe for Markdown table
+        """
+        if text is None:
+            return "-"
+        s = str(text)
+        # Replace pipes with broken bar or escaped pipe
+        s = s.replace("|", "&#124;")
+        # Replace newlines with space
+        s = s.replace("\n", " ")
+        return s.strip()
+
     def _generate_sql_generation_report(
         self,
         sql_query: str,
@@ -817,6 +835,10 @@ class DeepResearchEventConverter:
             SQL line with inline comment added
         """
         if not field_comment or "--" in sql_line:
+            return sql_line
+
+        # Security limit: avoid regex processing on excessively long inputs
+        if len(field_name) > 256 or len(sql_line) > 4096:
             return sql_line
 
         # Add comment after field name

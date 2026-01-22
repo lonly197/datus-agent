@@ -10,9 +10,10 @@ including unified error result formats, error handling decorators, and
 consistent error logging and reporting.
 """
 
+import asyncio
 import traceback
 from functools import wraps
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, cast
 
 from pydantic import ValidationError
 
@@ -22,7 +23,7 @@ from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
-F = TypeVar("F")
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 class NodeErrorResult(BaseResult):
@@ -150,7 +151,7 @@ def unified_error_handler(node_type: str, operation: str, log_errors: bool = Tru
 
 
 def _create_node_error_result(
-    node_instance,
+    node_instance: Any,
     error_code: ErrorCode,
     error_message: str,
     operation: str,
@@ -183,14 +184,19 @@ def _create_node_error_result(
     if hasattr(node_instance, "_summarize_input"):
         try:
             node_context["input_summary"] = node_instance._summarize_input()
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to summarize input: {e}")
             node_context["input_summary"] = {"error": "Failed to summarize input"}
-
+    
     # Enhanced error details
     enhanced_details = error_details or {}
-    enhanced_details.update(
-        {"stack_trace": traceback.format_exc(), "operation": operation, "timestamp": __import__("time").time()}
-    )
+    try:
+        enhanced_details.update(
+            {"stack_trace": traceback.format_exc(), "operation": operation, "timestamp": __import__("time").time()}
+        )
+    except Exception:
+        # Fallback if update fails
+        pass
 
     # Generate recovery suggestions and retryable flag based on error type
     recovery_suggestions = []
@@ -298,7 +304,8 @@ class ErrorHandlerMixin:
         Returns:
             Dictionary containing input summary
         """
-        summary = {}
+        summary: Dict[str, Any] = {}
+
         if not hasattr(self, "input") or not self.input:
             return summary
 
@@ -378,8 +385,8 @@ def with_error_recovery(
 
         # Return appropriate wrapper based on whether the function is async
         if asyncio.iscoroutinefunction(func):
-            return async_wrapper
+            return cast(F, async_wrapper)
         else:
-            return sync_wrapper
+            return cast(F, sync_wrapper)
 
     return decorator

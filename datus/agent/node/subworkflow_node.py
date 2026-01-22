@@ -9,7 +9,8 @@ from datus.agent.plan import generate_workflow
 from datus.agent.workflow import Workflow
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
 from datus.schemas.base import BaseResult
-from datus.schemas.subworkflow_node_models import SubworkflowInput, SubworkflowResult
+from datus.schemas.subworkflow_node_models import (SubworkflowInput,
+                                                   SubworkflowResult)
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -99,7 +100,8 @@ class SubworkflowNode(Node):
                 next_node = subworkflow.advance_to_next_node()
                 if next_node:
                     # lazy import to avoid circular import at module level
-                    from datus.agent.evaluate import setup_node_input  # type: ignore
+                    from datus.agent.evaluate import \
+                        setup_node_input  # type: ignore
 
                     setup_node_input(next_node, subworkflow)
 
@@ -179,7 +181,8 @@ class SubworkflowNode(Node):
                 # Advance to the next node and setup its input
                 next_node = subworkflow.advance_to_next_node()
                 if next_node:
-                    from datus.agent.evaluate import setup_node_input  # type: ignore
+                    from datus.agent.evaluate import \
+                        setup_node_input  # type: ignore
 
                     try:
                         setup_result = setup_node_input(next_node, subworkflow)

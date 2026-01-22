@@ -13,13 +13,14 @@ This node validates that the SQL execution results are acceptable:
 Enhanced with HTML preview capability for SQL execution results.
 """
 
-from typing import Any, AsyncGenerator, Dict, Optional
 import html
+from typing import Any, AsyncGenerator, Dict, Optional
 
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
 from datus.schemas.node_models import SQLContext
 from datus.utils.env import get_env_int
@@ -257,9 +258,7 @@ class ResultValidationNode(Node):
 
         return False
 
-    def _generate_html_preview(
-        self, sql_context: SQLContext, max_rows: Optional[int] = None
-    ) -> str:
+    def _generate_html_preview(self, sql_context: SQLContext, max_rows: Optional[int] = None) -> str:
         """
         Generate HTML table preview of SQL execution results.
 
@@ -307,13 +306,17 @@ class ResultValidationNode(Node):
                     columns = []
 
                 # Build HTML table
-                html_parts.append("<table class='sql-preview-table' border='1' style='border-collapse: collapse; width: 100%; font-size: 12px;'>")
+                html_parts.append(
+                    "<table class='sql-preview-table' border='1' style='border-collapse: collapse; width: 100%; font-size: 12px;'>"
+                )
 
                 # Header row
                 html_parts.append("<thead><tr style='background-color: #f5f5f5;'>")
                 for col in columns:
                     escaped_col = html.escape(str(col))
-                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{escaped_col}</th>")
+                    html_parts.append(
+                        f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{escaped_col}</th>"
+                    )
                 html_parts.append("</tr></thead>")
 
                 # Data rows
@@ -326,7 +329,10 @@ class ResultValidationNode(Node):
                         row_values = [row[col] for col in columns]
                     elif hasattr(preview_df, "take"):
                         row_data = preview_df.take([i])
-                        row_values = [row_data[col][0].as_py() if hasattr(row_data[col][0], "as_py") else row_data[col][0] for col in columns]
+                        row_values = [
+                            row_data[col][0].as_py() if hasattr(row_data[col][0], "as_py") else row_data[col][0]
+                            for col in columns
+                        ]
                     else:
                         row_values = []
 
@@ -338,18 +344,24 @@ class ResultValidationNode(Node):
                         if len(val_str) > 100:
                             val_str = val_str[:97] + "..."
                         escaped_val = html.escape(val_str)
-                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{escaped_val}</td>")
+                        html_parts.append(
+                            f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{escaped_val}</td>"
+                        )
                     html_parts.append("</tr>")
                 html_parts.append("</tbody>")
                 html_parts.append("</table>")
 
                 # Add row count indicator
                 if total_rows > max_rows:
-                    html_parts.append(f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>")
+                    html_parts.append(
+                        f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>"
+                    )
                     html_parts.append(f"<em>Showing {max_rows} of {total_rows} rows</em>")
                     html_parts.append("</div>")
                 else:
-                    html_parts.append(f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>")
+                    html_parts.append(
+                        f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>"
+                    )
                     html_parts.append(f"<em>Total: {total_rows} row{'s' if total_rows != 1 else ''}</em>")
                     html_parts.append("</div>")
 
@@ -373,13 +385,17 @@ class ResultValidationNode(Node):
                 columns = list(rows[0].keys()) if rows else []
 
                 html_parts = ["<div class='sql-preview-container'>"]
-                html_parts.append("<table class='sql-preview-table' border='1' style='border-collapse: collapse; width: 100%; font-size: 12px;'>")
+                html_parts.append(
+                    "<table class='sql-preview-table' border='1' style='border-collapse: collapse; width: 100%; font-size: 12px;'>"
+                )
 
                 # Header row
                 html_parts.append("<thead><tr style='background-color: #f5f5f5;'>")
                 for col in columns:
                     escaped_col = html.escape(str(col))
-                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{escaped_col}</th>")
+                    html_parts.append(
+                        f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{escaped_col}</th>"
+                    )
                 html_parts.append("</tr></thead>")
 
                 # Data rows
@@ -393,14 +409,18 @@ class ResultValidationNode(Node):
                         if len(val_str) > 100:
                             val_str = val_str[:97] + "..."
                         escaped_val = html.escape(val_str)
-                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{escaped_val}</td>")
+                        html_parts.append(
+                            f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{escaped_val}</td>"
+                        )
                     html_parts.append("</tr>")
                 html_parts.append("</tbody>")
                 html_parts.append("</table>")
 
                 # Add row count indicator
                 if total_rows > max_rows:
-                    html_parts.append(f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>")
+                    html_parts.append(
+                        f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>"
+                    )
                     html_parts.append(f"<em>Showing {max_rows} of {total_rows} rows</em>")
                     html_parts.append("</div>")
 
@@ -419,17 +439,21 @@ class ResultValidationNode(Node):
                     return ""
 
                 headers = lines[0].split(",")
-                data_lines = lines[1:max_rows + 1]
+                data_lines = lines[1 : max_rows + 1]
                 total_rows = len(lines) - 1
 
                 html_parts = ["<div class='sql-preview-container'>"]
-                html_parts.append("<table class='sql-preview-table' border='1' style='border-collapse: collapse; width: 100%; font-size: 12px;'>")
+                html_parts.append(
+                    "<table class='sql-preview-table' border='1' style='border-collapse: collapse; width: 100%; font-size: 12px;'>"
+                )
 
                 # Header row
                 html_parts.append("<thead><tr style='background-color: #f5f5f5;'>")
                 for header in headers:
                     escaped_header = html.escape(header.strip())
-                    html_parts.append(f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{escaped_header}</th>")
+                    html_parts.append(
+                        f"<th style='padding: 8px; text-align: left; border: 1px solid #ddd;'>{escaped_header}</th>"
+                    )
                 html_parts.append("</tr></thead>")
 
                 # Data rows
@@ -443,14 +467,18 @@ class ResultValidationNode(Node):
                         if len(val_str) > 100:
                             val_str = val_str[:97] + "..."
                         escaped_val = html.escape(val_str)
-                        html_parts.append(f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{escaped_val}</td>")
+                        html_parts.append(
+                            f"<td style='padding: 6px; border: 1px solid #ddd; {row_style}'>{escaped_val}</td>"
+                        )
                     html_parts.append("</tr>")
                 html_parts.append("</tbody>")
                 html_parts.append("</table>")
 
                 # Add row count indicator
                 if total_rows > max_rows:
-                    html_parts.append(f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>")
+                    html_parts.append(
+                        f"<div class='sql-preview-footer' style='margin-top: 8px; font-size: 11px; color: #666;'>"
+                    )
                     html_parts.append(f"<em>Showing {max_rows} of {total_rows} rows</em>")
                     html_parts.append("</div>")
 

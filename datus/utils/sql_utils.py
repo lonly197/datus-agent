@@ -1708,3 +1708,74 @@ def _parse_set_command(sql: str, dialect: str) -> Optional[Dict[str, Any]]:
 
     # Other SET commands are not context switches
     return None
+
+
+def validate_and_suggest_sql_fixes(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, Any]:
+    """
+    Validate SQL syntax using sqlglot and provide fix suggestions.
+
+    Args:
+        sql: SQL query string
+        dialect: Database dialect
+
+    Returns:
+        Dict containing validation results:
+        - can_parse: bool
+        - errors: List[str]
+        - warnings: List[str]
+        - fix_suggestions: List[Dict]
+    """
+    result = {
+        "can_parse": True,
+        "errors": [],
+        "warnings": [],
+        "fix_suggestions": [],
+    }
+
+    if not sql or not sql.strip():
+        result["can_parse"] = False
+        result["errors"].append("Empty SQL query")
+        return result
+
+    # Validate input length and basic safety
+    is_valid, error_msg = validate_sql_input(sql)
+    if not is_valid:
+        result["can_parse"] = False
+        result["errors"].append(error_msg)
+        return result
+
+    read_dialect = parse_read_dialect(dialect)
+
+    try:
+        # Parse with sqlglot to check for syntax errors
+        # parse returns a list of expressions. If it raises, it's invalid.
+        sqlglot.parse(sql, read=read_dialect)
+        
+    except sqlglot.errors.ParseError as e:
+        result["can_parse"] = False
+        # Extract error details
+        error_str = str(e)
+        result["errors"].append(f"Syntax error: {error_str}")
+        
+        # Add basic fix suggestion based on error
+        suggestion = {
+            "type": "syntax_error",
+            "description": "Check SQL syntax matches the target dialect",
+            "original_error": error_str
+        }
+        
+        # Try to transpile to standard SQL to see if it fixes it (simple suggestion)
+        try:
+            transpiled = sqlglot.transpile(sql, read=read_dialect, write=read_dialect)[0]
+            if transpiled != sql:
+                suggestion["suggested_fix"] = transpiled
+        except:
+            pass
+            
+        result["fix_suggestions"].append(suggestion)
+        
+    except Exception as e:
+        result["can_parse"] = False
+        result["errors"].append(f"Validation error: {str(e)}")
+
+    return result

@@ -8,7 +8,8 @@ from typing import AsyncGenerator, Dict, Optional
 from datus.agent.node import Node
 from datus.agent.node.compare_agentic_node import CompareAgenticNode
 from datus.agent.workflow import Workflow
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.schemas.compare_node_models import CompareInput, CompareResult
 from datus.schemas.node_models import SQLContext
 from datus.utils.exceptions import DatusException, ErrorCode

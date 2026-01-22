@@ -3,21 +3,24 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 import json
 import os
-from typing import AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, cast
 
 from agents import Tool
-
-from datus.utils.json_utils import llm_result2json
 
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.models.base import LLMBaseModel
 from datus.prompts.gen_sql import get_sql_prompt
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
-from datus.schemas.node_models import GenerateSQLInput, GenerateSQLResult, SQLContext, SqlTask, TableSchema, TableValue
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
+from datus.schemas.node_models import (GenerateSQLInput, GenerateSQLResult,
+                                       SQLContext, SqlTask, TableSchema,
+                                       TableValue)
 from datus.storage.schema_metadata import SchemaWithValueRAG
 from datus.utils.constants import DBType
+from datus.utils.exceptions import ErrorCode
+from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import get_default_current_date
 from datus.utils.traceable_utils import optional_traceable
@@ -30,21 +33,28 @@ DEFAULT_INCLUDE_SCHEMA_DDL = os.getenv("DEFAULT_INCLUDE_SCHEMA_DDL", "false").lo
 
 
 class GenerateSQLNode(Node):
+    """
+    Node responsible for generating SQL queries based on user intent and schema.
+    """
+
     def __init__(
         self,
         node_id: str,
         description: str,
         node_type: str,
-        input_data: GenerateSQLInput = None,
+        input_data: Optional[GenerateSQLInput] = None,
         agent_config: Optional[AgentConfig] = None,
         tools: Optional[List[Tool]] = None,
     ):
         super().__init__(node_id, description, node_type, input_data, agent_config, tools)
-        self._metadata_rag: SchemaWithValueRAG | None = None
+        self._metadata_rag: Optional[SchemaWithValueRAG] = None
 
     @property
     def metadata_rag(self) -> SchemaWithValueRAG:
+        """Lazy load the metadata RAG service."""
         if not self._metadata_rag:
+            if not self.agent_config:
+                raise ValueError("Agent config is required for SchemaWithValueRAG")
             self._metadata_rag = SchemaWithValueRAG(self.agent_config)
         return self._metadata_rag
 
@@ -84,15 +94,36 @@ class GenerateSQLNode(Node):
         # 复杂查询：多表，复杂条件，聚合等 - 需要DDL
         complex_keywords = [
             # 连接操作
-            " join ", " inner join ", " left join ", " right join ", " full join ",
+            " join ",
+            " inner join ",
+            " left join ",
+            " right join ",
+            " full join ",
             # 聚合操作
-            " group by ", " having ", " count(", " sum(", " avg(", " max(", " min(",
+            " group by ",
+            " having ",
+            " count(",
+            " sum(",
+            " avg(",
+            " max(",
+            " min(",
             # 子查询
-            " subquery", " exists ", " in (select", " (select", " cte ", " with ",
+            " subquery",
+            " exists ",
+            " in (select",
+            " (select",
+            " cte ",
+            " with ",
             # 排序和窗口函数
-            " order by ", " over ", " partition by ",
+            " order by ",
+            " over ",
+            " partition by ",
             # 分析函数
-            " rank()", " dense_rank()", " row_number()", " lag(", " lead(",
+            " rank()",
+            " dense_rank()",
+            " row_number()",
+            " lag(",
+            " lead(",
         ]
 
         if any(keyword in query_lower for keyword in complex_keywords):
@@ -105,17 +136,35 @@ class GenerateSQLNode(Node):
         # 默认不包含DDL，节省token
         return DEFAULT_INCLUDE_SCHEMA_DDL
 
-    def execute(self):
+    def execute(self) -> None:
+        """Execute the SQL generation logic."""
         self.result = self._execute_generate_sql()
 
     async def execute_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None
     ) -> AsyncGenerator[ActionHistory, None]:
-        """Execute SQL generation with streaming support."""
+        """
+        Execute SQL generation with streaming support.
+
+        Args:
+            action_history_manager: Manager for tracking action history.
+
+        Yields:
+            ActionHistory: Updates on execution progress.
+        """
         async for action in self._generate_sql_stream(action_history_manager):
             yield action
 
-    def setup_input(self, workflow: Workflow) -> Dict:
+    def setup_input(self, workflow: Workflow) -> Dict[str, Any]:
+        """
+        Prepare input data for SQL generation.
+
+        Args:
+            workflow: The workflow instance.
+
+        Returns:
+            Dict containing success status and suggestions.
+        """
         if workflow.context.document_result:
             database_docs = "\n Reference documents:\n"
             for _, docs in workflow.context.document_result.docs.items():
@@ -123,38 +172,58 @@ class GenerateSQLNode(Node):
         else:
             database_docs = ""
 
-        # 使用智能策略决定是否包含DDL
-        query = workflow.task.task if hasattr(workflow.task, 'task') else ""
+        task = workflow.task
+        if not task:
+            return {"success": False, "message": "No task available in workflow"}
+
+        # Use smart strategy to decide whether to include DDL
+        query = task.task if hasattr(task, "task") else ""
         table_count = len(workflow.context.table_schemas) if workflow.context.table_schemas else 0
         include_ddl = self._should_include_ddl(query, table_count)
 
         logger.debug(f"Query complexity analysis: table_count={table_count}, include_ddl={include_ddl}")
 
-        # irrelevant to current node
+        # Create input for the next step
         next_input = GenerateSQLInput(
-            database_type=workflow.task.database_type,
-            sql_task=workflow.task,
+            database_type=task.database_type,
+            sql_task=task,
             table_schemas=workflow.context.table_schemas,
             data_details=workflow.context.table_values,
             metrics=workflow.context.metrics,
             contexts=workflow.context.sql_contexts,
-            external_knowledge=workflow.task.external_knowledge,
+            external_knowledge=task.external_knowledge,
             database_docs=database_docs,
             include_schema_ddl=include_ddl,
         )
         self.input = next_input
         return {"success": True, "message": "Schema appears valid", "suggestions": [next_input]}
 
-    def update_context(self, workflow: Workflow) -> Dict:
-        """Update SQL generation results to workflow context.
+    def update_context(self, workflow: Workflow) -> Dict[str, Any]:
+        """
+        Update SQL generation results to workflow context.
 
         Note: Schemas should already be loaded by schema_discovery and validated
         by schema_validation. This node only adds the generated SQL to the context.
+
+        Args:
+            workflow: The workflow instance.
+
+        Returns:
+            Dict containing success status.
         """
-        result = self.result
+        result = cast(Optional[GenerateSQLResult], self.result)
+        if not result:
+            return {"success": False, "message": "No generation result available"}
+
         try:
             # Create new SQL context record and add to context
-            new_record = SQLContext(sql_query=result.sql_query, explanation=result.explanation or "")
+            new_record = SQLContext(
+                sql_query=result.sql_query,
+                explanation=result.explanation or "",
+                reflection_strategy="",
+                reflection_explanation="",
+                sql_error="",
+            )
             workflow.context.sql_contexts.append(new_record)
 
             # Log table usage for debugging
@@ -167,7 +236,8 @@ class GenerateSQLNode(Node):
             return {"success": False, "message": f"SQL generation context update failed: {str(e)}"}
 
     def _execute_generate_sql(self) -> GenerateSQLResult:
-        """Execute SQL generation action to create SQL query.
+        """
+        Execute SQL generation action to create SQL query.
 
         Combines input data from previous nodes into a structured format for SQL generation.
         The input data includes:
@@ -188,9 +258,19 @@ class GenerateSQLNode(Node):
                 explanation=None,
             )
 
+        input_data = cast(GenerateSQLInput, self.input)
+        if not input_data:
+            return GenerateSQLResult(
+                success=False,
+                error="Input data is missing",
+                sql_query="",
+                tables=[],
+                explanation=None,
+            )
+
         try:
-            logger.debug(f"Generate SQL input: {type(self.input)} {self.input}")
-            return generate_sql(self.model, self.input)
+            logger.debug(f"Generate SQL input: {type(input_data)} {input_data}")
+            return generate_sql(self.model, input_data)
         except Exception as e:
             logger.error(f"SQL generation execution error: {str(e)}")
             return GenerateSQLResult(success=False, error=str(e), sql_query="", tables=[], explanation=None)
@@ -201,7 +281,14 @@ class GenerateSQLNode(Node):
         """Get table schemas and values using the schema lineage tool."""
         try:
             # Get the schema lineage tool instance
-            sql_connector = self._sql_connector(self.input.sql_task.database_name)
+            input_data = cast(GenerateSQLInput, self.input)
+            if not input_data:
+                return [], []
+
+            sql_connector = self._sql_connector(input_data.sql_task.database_name)
+            if not sql_connector:
+                return [], []
+
             catalog_name = sql_task.catalog_name or sql_connector.catalog_name
             database_name = sql_task.database_name or sql_connector.database_name
             schema_name = sql_task.schema_name or sql_connector.schema_name
@@ -227,6 +314,10 @@ class GenerateSQLNode(Node):
             logger.error("Model not available for SQL generation")
             return
 
+        input_data = cast(GenerateSQLInput, self.input)
+        if not input_data:
+            return
+
         try:
             # SQL generation preparation action
             prep_action = ActionHistory(
@@ -235,15 +326,15 @@ class GenerateSQLNode(Node):
                 messages="Preparing SQL generation with schema and context information",
                 action_type="sql_preparation",
                 input={
-                    "database_type": self.input.database_type if hasattr(self.input, "database_type") else "",
+                    "database_type": input_data.database_type if hasattr(input_data, "database_type") else "",
                     "table_count": (
-                        len(self.input.table_schemas)
-                        if hasattr(self.input, "table_schemas") and self.input.table_schemas
+                        len(input_data.table_schemas)
+                        if hasattr(input_data, "table_schemas") and input_data.table_schemas
                         else 0
                     ),
-                    "has_metrics": bool(hasattr(self.input, "metrics") and self.input.metrics),
+                    "has_metrics": bool(hasattr(input_data, "metrics") and input_data.metrics),
                     "has_external_knowledge": bool(
-                        hasattr(self.input, "external_knowledge") and self.input.external_knowledge
+                        hasattr(input_data, "external_knowledge") and input_data.external_knowledge
                     ),
                 },
                 status=ActionStatus.PROCESSING,
@@ -270,9 +361,9 @@ class GenerateSQLNode(Node):
                 action_type="sql_generation",
                 input={
                     "task_description": (
-                        getattr(self.input.sql_task, "task", "") if hasattr(self.input, "sql_task") else ""
+                        getattr(input_data.sql_task, "task", "") if hasattr(input_data, "sql_task") else ""
                     ),
-                    "database_type": self.input.database_type if hasattr(self.input, "database_type") else "",
+                    "database_type": input_data.database_type if hasattr(input_data, "database_type") else "",
                 },
                 status=ActionStatus.PROCESSING,
             )

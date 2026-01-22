@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.schemas.base import BaseResult
 from datus.schemas.node_models import BaseInput
 from datus.utils.exceptions import ErrorCode
@@ -148,13 +149,13 @@ class IntentAnalysisNode(Node):
         try:
             # Extract task text from workflow
             task_text = ""
-            if hasattr(self.workflow, "task") and self.workflow.task:
+            if self.workflow and hasattr(self.workflow, "task") and self.workflow.task:
                 task_text = self.workflow.task.task or ""
 
             if not task_text.strip():
                 logger.warning("No task text provided for intent analysis")
                 error_result = self.create_error_result(
-                    ErrorCode.NODE_EXECUTION_FAILED,
+                    ErrorCode.COMMON_VALIDATION_FAILED,
                     "No task text provided for intent analysis",
                     "intent_analysis",
                     {"task_id": getattr(self.workflow, "id", "unknown") if self.workflow else "unknown"},

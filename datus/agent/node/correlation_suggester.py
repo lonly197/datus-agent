@@ -57,10 +57,7 @@ async def suggest_correlations(
     try:
         # Get table schema
         schemas = storage.get_table_schemas(
-            table_names=[table_name],
-            catalog_name=catalog_name,
-            database_name=database_name,
-            schema_name=schema_name
+            table_names=[table_name], catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
         )
 
         if not schemas or len(schemas) == 0:
@@ -87,7 +84,7 @@ async def suggest_correlations(
 
         # Get business tags for domain context
         business_tags = []
-        if hasattr(schema, 'business_tags') and schema.business_tags:
+        if hasattr(schema, "business_tags") and schema.business_tags:
             if isinstance(schema.business_tags, list):
                 business_tags = schema.business_tags
 
@@ -104,7 +101,7 @@ async def suggest_correlations(
         # Generate correlation suggestions
         correlations = []
         for i, (col1, stats1) in enumerate(numeric_cols):
-            for col2, stats2 in numeric_cols[i+1:]:
+            for col2, stats2 in numeric_cols[i + 1 :]:
                 # Calculate overlap in value ranges (simple heuristic)
                 range1 = stats1["max"] - stats1["min"]
                 range2 = stats2["max"] - stats2["min"]
@@ -116,15 +113,17 @@ async def suggest_correlations(
                     strength = _estimate_strength(stats1, stats2)
                     reason = _infer_correlation_reason(col1, col2, column_comments, business_tags, stats1, stats2)
 
-                    correlations.append({
-                        "column1": col1,
-                        "column2": col2,
-                        "correlation_type": correlation_type,
-                        "strength": strength,
-                        "reason": reason,
-                        "column1_stats": stats1,
-                        "column2_stats": stats2
-                    })
+                    correlations.append(
+                        {
+                            "column1": col1,
+                            "column2": col2,
+                            "correlation_type": correlation_type,
+                            "strength": strength,
+                            "reason": reason,
+                            "column1_stats": stats1,
+                            "column2_stats": stats2,
+                        }
+                    )
 
                 # Stop if we've reached max suggestions
                 if len(correlations) >= max_correlations:
@@ -134,9 +133,7 @@ async def suggest_correlations(
                 break
 
         # Sort by strength (strong, medium, weak)
-        correlations.sort(key=lambda c: (
-            0 if c["strength"] == "strong" else (1 if c["strength"] == "medium" else 2)
-        ))
+        correlations.sort(key=lambda c: (0 if c["strength"] == "strong" else (1 if c["strength"] == "medium" else 2)))
 
         return correlations[:max_correlations]
 
@@ -145,12 +142,7 @@ async def suggest_correlations(
         return []
 
 
-def _columns_related(
-    col1: str,
-    col2: str,
-    column_comments: Dict[str, str],
-    business_tags: List[str]
-) -> bool:
+def _columns_related(col1: str, col2: str, column_comments: Dict[str, str], business_tags: List[str]) -> bool:
     """
     Determine if two columns are likely related for correlation analysis.
 
@@ -179,7 +171,7 @@ def _columns_related(
     domain_patterns = {
         "finance": ["price", "cost", "revenue", "profit", "volume", "amount", "quantity"],
         "sales": ["order", "customer", "product", "sales", "invoice"],
-        "temporal": ["date", "time", "year", "month", "day"]
+        "temporal": ["date", "time", "year", "month", "day"],
     }
 
     # Check if both columns belong to same domain pattern
@@ -238,12 +230,7 @@ def _estimate_strength(stats1: Dict, stats2: Dict) -> str:
 
 
 def _infer_correlation_reason(
-    col1: str,
-    col2: str,
-    column_comments: Dict[str, str],
-    business_tags: List[str],
-    stats1: Dict,
-    stats2: Dict
+    col1: str, col2: str, column_comments: Dict[str, str], business_tags: List[str], stats1: Dict, stats2: Dict
 ) -> str:
     """
     Generate human-readable reason for correlation suggestion.

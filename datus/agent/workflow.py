@@ -444,6 +444,9 @@ class Workflow:
     def save(self, file_path: str):
         """
         Save the workflow to a YAML file.
+        
+        Note: This is a synchronous operation. If calling from an async context,
+        consider running in a thread executor to avoid blocking the event loop.
 
         Args:
             file_path: Path to save the YAML file

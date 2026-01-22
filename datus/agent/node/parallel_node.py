@@ -211,7 +211,8 @@ class ParallelNode(Node):
             input_data = None
             if is_subworkflow_name:
                 try:
-                    from datus.schemas.subworkflow_node_models import SubworkflowInput
+                    from datus.schemas.subworkflow_node_models import \
+                        SubworkflowInput
 
                     input_data = SubworkflowInput(workflow_name=child_node_type, pass_context=True)
                 except Exception as e:

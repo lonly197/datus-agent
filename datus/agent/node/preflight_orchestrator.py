@@ -11,13 +11,17 @@ and injects results into workflow context for evidence-based SQL generation.
 
 import time
 import uuid
-from typing import Any, AsyncGenerator, Dict, List
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.tools.date_tools.date_parser import DateParserTool
 from datus.tools.func_tool.context_search import ContextSearchTools
 from datus.tools.func_tool.database import db_function_tool_instance
 from datus.utils.loggings import get_logger
+
+if TYPE_CHECKING:
+    from datus.agent.workflow import Workflow
 
 logger = get_logger(__name__)
 
@@ -30,7 +34,7 @@ class PreflightToolResult:
         tool_name: str,
         success: bool,
         result: Any = None,
-        error: str = None,
+        error: Optional[str] = None,
         execution_time: float = 0.0,
         cache_hit: bool = False,
     ):
@@ -77,19 +81,19 @@ class PreflightOrchestrator:
         self.context_search_tools = None
         self.date_parsing_tools = None
 
-    def _get_db_func_tool(self):
+    def _get_db_func_tool(self) -> Any:
         """Lazy initialization of DB function tool."""
         if self.db_func_tool is None:
             self.db_func_tool = db_function_tool_instance(self.agent_config, self.agent_config.current_database)
         return self.db_func_tool
 
-    def _get_context_search_tools(self):
+    def _get_context_search_tools(self) -> ContextSearchTools:
         """Lazy initialization of context search tools."""
         if self.context_search_tools is None:
             self.context_search_tools = ContextSearchTools(self.agent_config)
         return self.context_search_tools
 
-    def _get_date_parsing_tools(self):
+    def _get_date_parsing_tools(self) -> DateParserTool:
         """Lazy initialization of date parsing tools."""
         if self.date_parsing_tools is None:
             self.date_parsing_tools = DateParserTool()
@@ -97,10 +101,10 @@ class PreflightOrchestrator:
 
     async def run_preflight_tools(
         self,
-        workflow,
+        workflow: "Workflow",
         action_history_manager: ActionHistoryManager,
-        execution_id: str = None,
-        required_tools: List[str] = None,
+        execution_id: Optional[str] = None,
+        required_tools: Optional[List[str]] = None,
     ) -> AsyncGenerator[ActionHistory, None]:
         """
         Run preflight tools and yield ActionHistory events.
@@ -120,9 +124,15 @@ class PreflightOrchestrator:
         # Extract SQL query and table info from workflow
         sql_query = self._extract_sql_from_workflow(workflow)
         table_names = self._extract_table_names_from_workflow(workflow)
-        catalog = workflow.task.catalog_name or "default_catalog"
-        database = workflow.task.database_name or ""
-        schema = workflow.task.schema_name or ""
+
+        catalog = "default_catalog"
+        database = ""
+        schema = ""
+
+        if workflow.task:
+            catalog = workflow.task.catalog_name or "default_catalog"
+            database = workflow.task.database_name or ""
+            schema = workflow.task.schema_name or ""
 
         # Get continue_on_failure setting from agent config (default: true for text2sql)
         continue_on_failure = True  # Default to continue on failure
@@ -154,7 +164,7 @@ class PreflightOrchestrator:
         logger.info(f"Starting preflight execution for {len(required_tools)} tools: {required_tools}")
         logger.info(f"Continue on failure: {continue_on_failure}, Tool timeout: {tool_timeout}s")
 
-        preflight_results = []
+        preflight_results: List[PreflightToolResult] = []
 
         for tool_name in required_tools:
             tool_call_id = str(uuid.uuid4())
@@ -205,17 +215,18 @@ class PreflightOrchestrator:
 
                 if self.plan_hooks and getattr(self.plan_hooks, "enable_query_caching", False):
                     try:
-                        cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
-                        if cached_result is not None:
-                            logger.debug(
-                                f"Cache hit for {tool_name} (cache check took {time.time() - cache_check_start:.3f}s)"
-                            )
-                            cache_hit = True
-                            result = cached_result
-                        else:
-                            logger.debug(
-                                f"Cache miss for {tool_name} (cache check took {time.time() - cache_check_start:.3f}s)"
-                            )
+                        if hasattr(self.plan_hooks, "query_cache"):
+                            cached_result = self.plan_hooks.query_cache.get(tool_name, **cache_key_params)
+                            if cached_result is not None:
+                                logger.debug(
+                                    f"Cache hit for {tool_name} (cache check took {time.time() - cache_check_start:.3f}s)"
+                                )
+                                cache_hit = True
+                                result = cached_result
+                            else:
+                                logger.debug(
+                                    f"Cache miss for {tool_name} (cache check took {time.time() - cache_check_start:.3f}s)"
+                                )
                     except Exception as cache_error:
                         logger.warning(
                             f"Cache operation failed for {tool_name}: {cache_error}, proceeding without cache"
@@ -243,10 +254,11 @@ class PreflightOrchestrator:
                         ):
                             try:
                                 cache_set_start = time.time()
-                                self.plan_hooks.query_cache.set(tool_name, result, **cache_key_params)
-                                logger.debug(
-                                    f"Successfully cached result for {tool_name} (cache set took {time.time() - cache_set_start:.3f}s)"
-                                )
+                                if hasattr(self.plan_hooks, "query_cache"):
+                                    self.plan_hooks.query_cache.set(tool_name, result, **cache_key_params)
+                                    logger.debug(
+                                        f"Successfully cached result for {tool_name} (cache set took {time.time() - cache_set_start:.3f}s)"
+                                    )
                             except Exception as cache_error:
                                 logger.warning(
                                     f"Failed to cache result for {tool_name}: {cache_error}, continuing without caching"
@@ -293,7 +305,7 @@ class PreflightOrchestrator:
                 messages=f"Preflight tool {tool_name} completed ({'cached' if cache_hit else 'executed'})",
                 input_data=tool_result.to_dict(),
                 output_data=tool_result.to_dict(),
-                status=ActionStatus.COMPLETED if tool_result.success else ActionStatus.FAILED,
+                status=ActionStatus.SUCCESS if tool_result.success else ActionStatus.FAILED,
             )
             action_history_manager.add_action(result_action)
             yield result_action
@@ -464,32 +476,42 @@ class PreflightOrchestrator:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def _extract_sql_from_workflow(self, workflow) -> str:
+    def _extract_sql_from_workflow(self, workflow: "Workflow") -> str:
         """Extract SQL query from workflow task."""
         if hasattr(workflow, "task") and workflow.task:
             return getattr(workflow.task, "task", "")
         return ""
 
     def _generate_cache_key(
-        self, tool_name: str, workflow, catalog: str, database: str, schema: str, table_names: List[str]
+        self,
+        tool_name: str,
+        workflow: "Workflow",
+        catalog: str,
+        database: str,
+        schema: str,
+        table_names: List[str],
     ) -> Dict[str, Any]:
         """Generate consistent cache key parameters for a tool."""
         # Base parameters that are always included
         cache_key = {"catalog": catalog, "database": database, "schema": schema}
 
+        task_content = ""
+        if workflow.task:
+            task_content = getattr(workflow.task, "task", "")
+
         # Add tool-specific parameters
         if tool_name == "search_table":
             # Use query content for search_table
-            cache_key["query"] = getattr(workflow.task, "task", "")[:200] if workflow.task else ""
+            cache_key["query"] = task_content[:200]
         elif tool_name == "describe_table" and table_names:
             # Use first table name for describe_table
             cache_key["table_name"] = table_names[0]
         elif tool_name == "search_reference_sql":
             # Use query content for reference SQL search
-            cache_key["query"] = getattr(workflow.task, "task", "")[:200] if workflow.task else ""
+            cache_key["query"] = task_content[:200]
         elif tool_name == "parse_temporal_expressions":
             # Use full text for temporal parsing
-            cache_key["text"] = getattr(workflow.task, "task", "") if workflow.task else ""
+            cache_key["text"] = task_content
 
         return cache_key
 
@@ -524,17 +546,21 @@ class PreflightOrchestrator:
 
         return filtered_tables
 
-    def _extract_table_names_from_workflow(self, workflow) -> List[str]:
+    def _extract_table_names_from_workflow(self, workflow: "Workflow") -> List[str]:
         """Extract table names from workflow."""
         sql_query = self._extract_sql_from_workflow(workflow)
         if sql_query:
             return self._extract_potential_table_names(sql_query)
         return []
 
-    def _inject_preflight_results_into_context(self, workflow, results: List[PreflightToolResult]):
+    def _inject_preflight_results_into_context(self, workflow: "Workflow", results: List[PreflightToolResult]) -> None:
         """Inject preflight results into workflow context for prompt access."""
         if not hasattr(workflow, "context"):
-            workflow.context = type("Context", (), {})()
+            # Create a basic context object if missing
+            class Context:
+                pass
+
+            workflow.context = Context()  # type: ignore
 
         # Initialize preflight_results if not exists
         if not hasattr(workflow.context, "preflight_results"):
@@ -546,7 +572,9 @@ class PreflightOrchestrator:
         # Extract structured data for Text2SQL template
         self._extract_structured_data_for_text2sql_template(workflow, results)
 
-    def _extract_structured_data_for_text2sql_template(self, workflow, results: List[PreflightToolResult]):
+    def _extract_structured_data_for_text2sql_template(
+        self, workflow: "Workflow", results: List[PreflightToolResult]
+    ) -> None:
         """Extract structured data from preflight results for Text2SQL template access."""
         # 1. Available tables and schema information
         available_tables = []
@@ -636,8 +664,8 @@ class PreflightOrchestrator:
         )
 
     async def _send_tool_call_event(
-        self, tool_name: str, tool_call_id: str, input_data: Dict[str, Any], execution_id: str = None
-    ):
+        self, tool_name: str, tool_call_id: str, input_data: Dict[str, Any], execution_id: Optional[str] = None
+    ) -> None:
         """Send tool call start event."""
         if self.execution_event_manager and execution_id:
             # Send tool call event through execution event manager
@@ -657,12 +685,11 @@ class PreflightOrchestrator:
         result: Dict[str, Any],
         execution_time: float,
         cache_hit: bool,
-        execution_id: str = None,
-    ):
+        execution_id: Optional[str] = None,
+    ) -> None:
         """Send tool call result event."""
         if self.execution_event_manager and execution_id:
             # Update the tool execution record with results
-            result.get("success", False)
             tool_name = result.get("tool_name", "unknown_tool")
 
             # Send completion event

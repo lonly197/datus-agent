@@ -6,6 +6,7 @@
 Authentication module for Datus Agent API.
 """
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -15,11 +16,20 @@ import yaml
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-# Default clients configuration (fallback if config file not found)
-DEFAULT_CLIENTS = {"datus_client": "datus_secret_key"}
+from datus.utils.loggings import get_logger
+
+logger = get_logger(__name__)
+
+# Default clients configuration (empty by default for security)
+DEFAULT_CLIENTS: Dict[str, str] = {}
 
 # Default JWT configuration
-DEFAULT_JWT_CONFIG = {"secret_key": "your-secret-key-change-in-production", "algorithm": "HS256", "expiration_hours": 2}
+# Security: Generate a random key if none is provided to prevent using known defaults
+DEFAULT_JWT_CONFIG = {
+    "secret_key": secrets.token_hex(32),
+    "algorithm": "HS256",
+    "expiration_hours": 2,
+}
 
 security = HTTPBearer()
 
@@ -74,8 +84,22 @@ class AuthService:
         self.jwt_expiration_hours = jwt_config.get("expiration_hours", 2)
 
     def validate_client_credentials(self, client_id: str, client_secret: str) -> bool:
-        """Validate client credentials."""
-        return self.clients.get(client_id) == client_secret
+        """
+        Validate client credentials using constant-time comparison.
+
+        Args:
+            client_id: Client identifier
+            client_secret: Client secret to validate
+        """
+        if not client_id or not client_secret:
+            return False
+
+        stored_secret = self.clients.get(client_id)
+        if not stored_secret:
+            return False
+
+        # Use constant-time comparison to prevent timing attacks
+        return secrets.compare_digest(stored_secret, client_secret)
 
     def generate_access_token(self, client_id: str) -> Dict[str, Any]:
         """Generate a JWT access token for the client."""
@@ -94,7 +118,7 @@ class AuthService:
             "expires_in": self.jwt_expiration_hours * 3600,  # Convert to seconds
         }
 
-    def validate_token(self, token: str) -> Dict[str, any]:
+    def validate_token(self, token: str) -> Dict[str, Any]:
         """Validate a JWT token and return the payload."""
         try:
             payload = jwt.decode(token, self.jwt_secret, algorithms=[self.jwt_algorithm])
@@ -105,7 +129,7 @@ class AuthService:
                 detail="Token has expired",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        except jwt.PyJWTError:
+        except jwt.InvalidTokenError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token",

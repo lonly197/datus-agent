@@ -17,23 +17,20 @@ from datus.configuration.agent_config import AgentConfig
 from datus.configuration.node_type import NodeType
 from datus.models.base import LLMBaseModel
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
-from datus.schemas.chat_agentic_node_models import ChatNodeInput, ChatNodeResult
-from datus.schemas.date_parser_node_models import DateParserInput, DateParserResult
+from datus.schemas.chat_agentic_node_models import (ChatNodeInput,
+                                                    ChatNodeResult)
+from datus.schemas.date_parser_node_models import (DateParserInput,
+                                                   DateParserResult)
 from datus.schemas.fix_node_models import FixInput
-from datus.schemas.gen_sql_agentic_node_models import GenSQLNodeInput, GenSQLNodeResult
-from datus.schemas.node_models import (
-    BaseInput,
-    BaseResult,
-    ExecuteSQLInput,
-    ExecuteSQLResult,
-    GenerateSQLInput,
-    GenerateSQLResult,
-    OutputInput,
-    OutputResult,
-    ReflectionResult,
-)
+from datus.schemas.gen_sql_agentic_node_models import (GenSQLNodeInput,
+                                                       GenSQLNodeResult)
+from datus.schemas.node_models import (BaseInput, BaseResult, ExecuteSQLInput,
+                                       ExecuteSQLResult, GenerateSQLInput,
+                                       GenerateSQLResult, OutputInput,
+                                       OutputResult, ReflectionResult)
 from datus.schemas.reason_sql_node_models import ReasoningResult
-from datus.schemas.schema_linking_node_models import SchemaLinkingInput, SchemaLinkingResult
+from datus.schemas.schema_linking_node_models import (SchemaLinkingInput,
+                                                      SchemaLinkingResult)
 from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.db_manager import get_db_manager
 from datus.utils.error_handling import NodeErrorResult as UtilsNodeErrorResult
@@ -169,33 +166,19 @@ class Node(ErrorHandlerMixin, ABC):
         tools: Optional[List[Tool]] = None,
         node_name: Optional[str] = None,
     ):
-        from datus.agent.node import (
-            BeginNode,
-            ChatAgenticNode,
-            CompareNode,
-            DateParserNode,
-            DocSearchNode,
-            ExecuteSQLNode,
-            FixNode,
-            GenerateSQLNode,
-            GenSQLAgenticNode,
-            HitlNode,
-            IntentAnalysisNode,
-            IntentClarificationNode,
-            KnowledgeEnhancementNode,
-            OutputNode,
-            ParallelNode,
-            ReasonSQLNode,
-            ReflectNode,
-            ResultValidationNode,
-            SchemaDiscoveryNode,
-            SchemaLinkingNode,
-            SchemaValidationNode,
-            SearchMetricsNode,
-            SelectionNode,
-            SQLValidateNode,
-            SubworkflowNode,
-        )
+        from datus.agent.node import (BeginNode, ChatAgenticNode, CompareNode,
+                                      DateParserNode, DocSearchNode,
+                                      ExecuteSQLNode, FixNode, GenerateSQLNode,
+                                      GenSQLAgenticNode, HitlNode,
+                                      IntentAnalysisNode,
+                                      IntentClarificationNode,
+                                      KnowledgeEnhancementNode, OutputNode,
+                                      ParallelNode, ReasonSQLNode, ReflectNode,
+                                      ResultValidationNode,
+                                      SchemaDiscoveryNode, SchemaLinkingNode,
+                                      SchemaValidationNode, SearchMetricsNode,
+                                      SelectionNode, SQLValidateNode,
+                                      SubworkflowNode)
 
         if node_type == NodeType.TYPE_SCHEMA_LINKING:
             return SchemaLinkingNode(node_id, description, node_type, input_data, agent_config)
@@ -285,10 +268,15 @@ class Node(ErrorHandlerMixin, ABC):
         self.model = None
         self.tools = tools
 
-    def _initialize(self):
-        """Initialize the model for this node"""
-        model_name = None
-        nodes_config = {}
+    def _initialize(self) -> None:
+        """
+        Initialize the model and configuration for this node.
+
+        This method sets up the LLM model based on node configuration or defaults,
+        and injects context if tracing is enabled.
+        """
+        model_name: Optional[str] = None
+        nodes_config: Dict[str, Any] = {}
 
         # Check if model is already initialized (e.g., by AgenticNode or subworkflow config)
         if self.model and isinstance(self.model, LLMBaseModel):
@@ -300,19 +288,25 @@ class Node(ErrorHandlerMixin, ABC):
             model_name = self.model
         else:
             # Fall back to agent config
-            nodes_config = self.agent_config.nodes
-            if self.type in nodes_config:
-                node_config = nodes_config[self.type]
-                model_name = node_config.model
-                node_input = node_config.input
-                # If self.input is None, use node_input directly
-                if self.input is None:
-                    self.input = node_input
-                # Otherwise, apply non-None values from node_input as defaults
-                elif node_input is not None:
-                    for attr, value in node_input.__dict__.items():
-                        if value is not None:
-                            setattr(self.input, attr, value)
+            if self.agent_config:
+                nodes_config = self.agent_config.nodes
+                if self.type in nodes_config:
+                    node_config = nodes_config[self.type]
+                    model_name = node_config.model
+                    node_input = node_config.input
+                    # If self.input is None, use node_input directly
+                    if self.input is None:
+                        self.input = node_input
+                    # Otherwise, apply non-None values from node_input as defaults
+                    elif node_input is not None:
+                        for attr, value in node_input.__dict__.items():
+                            if value is not None:
+                                setattr(self.input, attr, value)
+
+        if not self.agent_config:
+            # If no agent config, we can't create a model properly, but we might proceed if model is optional
+            logger.warning(f"No agent_config provided for node {self.id}, model initialization might fail")
+            return
 
         llm_model = LLMBaseModel.create_model(model_name=model_name, agent_config=self.agent_config)
         logger.info(
@@ -331,21 +325,39 @@ class Node(ErrorHandlerMixin, ABC):
         self.model = llm_model
 
     @abstractmethod
-    def update_context(self, workflow: "Workflow") -> Dict:
+    def update_context(self, workflow: "Workflow") -> Dict[str, Any]:
+        """
+        Update the workflow context with the results of this node execution.
+
+        Args:
+            workflow: The workflow instance to update.
+
+        Returns:
+            Dict containing success status and message.
+        """
         pass
 
     @abstractmethod
-    def setup_input(self, workflow: "Workflow") -> Dict:
+    def setup_input(self, workflow: "Workflow") -> Dict[str, Any]:
+        """
+        Prepare input data for this node from the workflow context.
+
+        Args:
+            workflow: The workflow instance providing context.
+
+        Returns:
+            Dict containing success status and validation message.
+        """
         pass
 
-    def start(self):
+    def start(self) -> None:
         """
-        Mark the node as started.
+        Mark the node as started and record start time.
         """
         self.status = "running"
         self.start_time = time.time()
 
-    def complete(self, result: BaseResult):
+    def complete(self, result: BaseResult) -> None:
         """
         Mark the node as completed with a result.
 
@@ -358,7 +370,7 @@ class Node(ErrorHandlerMixin, ABC):
         self.result = result
         self.end_time = time.time()
 
-    def fail(self, error: str = None):
+    def fail(self, error: str = None) -> None:
         """
         Mark the node as failed with an error message.
 
@@ -442,7 +454,7 @@ class Node(ErrorHandlerMixin, ABC):
         pass
 
     @abstractmethod
-    async def execute_stream(
+    def execute_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None
     ) -> AsyncGenerator[ActionHistory, None]:
         """

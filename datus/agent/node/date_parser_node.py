@@ -6,7 +6,8 @@ from typing import Dict
 
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
-from datus.schemas.date_parser_node_models import DateParserInput, DateParserResult
+from datus.schemas.date_parser_node_models import (DateParserInput,
+                                                   DateParserResult)
 from datus.tools.date_tools.date_parser import DateParserTool
 from datus.utils.loggings import get_logger
 

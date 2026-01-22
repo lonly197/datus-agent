@@ -19,18 +19,14 @@ import json
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from datus.agent.node.node import Node, execute_with_async_stream
-from datus.utils.json_utils import llm_result2json
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import (
-    ActionHistory,
-    ActionHistoryManager,
-    ActionRole,
-    ActionStatus,
-)
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
 from datus.utils.error_handler import LLMMixin
 from datus.utils.exceptions import ErrorCode
+from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -94,20 +90,39 @@ class IntentClarificationNode(Node, LLMMixin):
                 yield ActionHistory(
                     action_id=f"{self.id}_error",
                     role=ActionRole.TOOL,
-                    messages=f"Intent clarification failed: {error_result.error}",
+                    messages=f"Intent clarification failed: {error_result.error_message}",
                     action_type="intent_clarification",
                     input={},
                     status=ActionStatus.FAILED,
-                    output={"error": error_result.error, "error_code": error_result.error_code},
+                    output={"error": error_result.error_message, "error_code": error_result.error_code},
                 )
                 return
 
             task = self.workflow.task
+            task_text = getattr(task, "task", "") or ""
+            if not task_text:
+                error_result = self.create_error_result(
+                    ErrorCode.COMMON_VALIDATION_FAILED,
+                    "Task content is empty",
+                    "intent_clarification",
+                    {"task_id": getattr(task, "id", "unknown")},
+                )
+                yield ActionHistory(
+                    action_id=f"{self.id}_error",
+                    role=ActionRole.TOOL,
+                    messages="Intent clarification failed: Task content is empty",
+                    action_type="intent_clarification",
+                    input={},
+                    status=ActionStatus.FAILED,
+                    output={"error": error_result.error_message, "error_code": error_result.error_code},
+                )
+                return
+
             context = self.workflow.context
 
             # Step 1: Clarify intent using LLM
             clarification_result = await self._clarify_intent(
-                task_text=task.task,
+                task_text=task_text,
                 ext_knowledge=getattr(task, "external_knowledge", None),
             )
 
@@ -119,7 +134,7 @@ class IntentClarificationNode(Node, LLMMixin):
             self.workflow.metadata["intent_clarification"] = clarification_result
 
             # Step 3: Store clarified task for downstream nodes
-            original_task = task.task
+            original_task = task_text
             clarified_task = clarification_result.get("clarified_task", original_task)
 
             # Store both original and clarified tasks in workflow.metadata
@@ -170,11 +185,11 @@ class IntentClarificationNode(Node, LLMMixin):
             yield ActionHistory(
                 action_id=f"{self.id}_error",
                 role=ActionRole.TOOL,
-                messages=f"Intent clarification failed: {error_result.error}",
+                messages=f"Intent clarification failed: {error_result.error_message}",
                 action_type="intent_clarification",
                 input={},
                 status=ActionStatus.FAILED,
-                output={"error": error_result.error, "error_code": error_result.error_code},
+                output={"error": error_result.error_message, "error_code": error_result.error_code},
             )
             self.result = BaseResult(success=False, error=str(e))
 
@@ -203,9 +218,7 @@ class IntentClarificationNode(Node, LLMMixin):
         for attempt in range(max_attempts):
             try:
                 # Build prompt with increasing strictness for retries
-                prompt = self._build_clarification_prompt(
-                    task_text, ext_knowledge, strict=(attempt > 0)
-                )
+                prompt = self._build_clarification_prompt(task_text, ext_knowledge, strict=(attempt > 0))
 
                 if attempt > 0:
                     logger.info(f"Retry {attempt + 1}: Using stricter prompt for JSON parsing")
@@ -275,18 +288,13 @@ class IntentClarificationNode(Node, LLMMixin):
         return {
             "clarified_task": task_text,
             "entities": entities,
-            "corrections": {
-                "typos_fixed": [],
-                "ambiguities_resolved": []
-            },
+            "corrections": {"typos_fixed": [], "ambiguities_resolved": []},
             "confidence": 0.5,  # Higher than 0.3, signals partial success
             "fallback": True,
             "error": "JSON parsing failed after retries",
         }
 
-    def _build_clarification_prompt(
-        self, task_text: str, ext_knowledge: Optional[str], strict: bool
-    ) -> str:
+    def _build_clarification_prompt(self, task_text: str, ext_knowledge: Optional[str], strict: bool) -> str:
         """Build prompt for intent clarification with configurable strictness."""
         if strict:
             # Stricter prompt for retries
@@ -363,28 +371,23 @@ class IntentClarificationNode(Node, LLMMixin):
         """
         import re
 
-        entities = {
-            "business_terms": [],
-            "time_range": None,
-            "dimensions": [],
-            "metrics": []
-        }
+        entities = {"business_terms": [], "time_range": None, "dimensions": [], "metrics": []}
 
         # Extract time-related keywords
         time_patterns = [
-            r'最近\d+天',
-            r'最近\d+月',
-            r'最近\d+周',
-            r'\d+月份',
-            r'\d+月',
-            r'今年',
-            r'去年',
-            r'本月',
-            r'上月',
-            r'每天',
-            r'每周',
-            r'每月',
-            r'每年'
+            r"最近\d+天",
+            r"最近\d+月",
+            r"最近\d+周",
+            r"\d+月份",
+            r"\d+月",
+            r"今年",
+            r"去年",
+            r"本月",
+            r"上月",
+            r"每天",
+            r"每周",
+            r"每月",
+            r"每年",
         ]
         for pattern in time_patterns:
             match = re.search(pattern, task_text)
@@ -398,7 +401,7 @@ class IntentClarificationNode(Node, LLMMixin):
             entities["business_terms"] = quoted_terms
 
         # Extract common metric keywords
-        metric_keywords = ['销售额', '利润', '转化率', '平均', '总计', '数量', '金额', '周期']
+        metric_keywords = ["销售额", "利润", "转化率", "平均", "总计", "数量", "金额", "周期"]
         for keyword in metric_keywords:
             if keyword in task_text:
                 entities["metrics"].append(keyword)

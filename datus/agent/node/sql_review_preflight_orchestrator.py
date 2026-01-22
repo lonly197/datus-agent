@@ -17,10 +17,12 @@ from datus.agent.node.execution_event_manager import ExecutionEventManager
 from datus.agent.node.preflight_orchestrator import PreflightToolResult
 from datus.cli.plan_hooks import PlanModeHooks
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.tools.func_tool.context_search import ContextSearchTools
 from datus.tools.func_tool.database import DBFuncTool
-from datus.tools.func_tool.enhanced_preflight_tools import EnhancedPreflightTools
+from datus.tools.func_tool.enhanced_preflight_tools import \
+    EnhancedPreflightTools
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -57,7 +59,13 @@ class SQLReviewPreflightOrchestrator:
 
         # Critical tools must succeed for review to continue; auxiliary tools are optional
         self.critical_tools = {"describe_table", "search_external_knowledge"}
-        self.auxiliary_tools = {"read_query", "get_table_ddl", "analyze_query_plan", "check_table_conflicts", "validate_partitioning"}
+        self.auxiliary_tools = {
+            "read_query",
+            "get_table_ddl",
+            "analyze_query_plan",
+            "check_table_conflicts",
+            "validate_partitioning",
+        }
 
         # Tool execution order (mandatory sequence)
         self.required_tool_sequence = [
@@ -109,10 +117,7 @@ class SQLReviewPreflightOrchestrator:
         from datus.utils.sql_utils import validate_and_suggest_sql_fixes
 
         logger.info(f"Validating SQL query before preflight tool execution")
-        sql_validation = validate_and_suggest_sql_fixes(
-            sql_query,
-            dialect=workflow.task.database_type or "starrocks"
-        )
+        sql_validation = validate_and_suggest_sql_fixes(sql_query, dialect=workflow.task.database_type or "starrocks")
 
         # Inject validation results into context
         if not hasattr(workflow.context, "preflight_results") or workflow.context.preflight_results is None:
@@ -218,7 +223,7 @@ class SQLReviewPreflightOrchestrator:
                         "tool_name": tool_name,
                         "error": str(e),
                         "execution_time": execution_time,
-                        "is_critical": is_critical
+                        "is_critical": is_critical,
                     }
                 )
 

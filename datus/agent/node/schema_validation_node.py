@@ -20,11 +20,10 @@ from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.business_term_config import (
-    LLM_TERM_EXTRACTION_CONFIG,
-    SCHEMA_VALIDATION_CONFIG,
-    get_schema_term_mapping,
-)
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+    LLM_TERM_EXTRACTION_CONFIG, SCHEMA_VALIDATION_CONFIG,
+    get_schema_term_mapping)
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
 from datus.schemas.node_models import TableSchema
 from datus.storage.cache import get_storage_cache_instance
@@ -103,7 +102,7 @@ class SchemaValidationNode(Node, LLMMixin):
             self.result = BaseResult(
                 success=validation_result["is_sufficient"],
                 error=None if validation_result["is_sufficient"] else "Schema validation failed: Insufficient coverage",
-                data=validation_result
+                data=validation_result,
             )
 
             # Emit validation result
@@ -178,7 +177,7 @@ class SchemaValidationNode(Node, LLMMixin):
             ],
             "allow_reflection": False,  # Unrecoverable - no reflection
             "diagnostic_report": diagnostic_report,
-            "diagnostics_provided": True
+            "diagnostics_provided": True,
         }
 
         self.result = BaseResult(
@@ -224,7 +223,9 @@ class SchemaValidationNode(Node, LLMMixin):
         logger.error("Root Cause Analysis:")
         logger.error("  • LanceDB schema storage is empty (no schema metadata found)")
         logger.error("  • DDL fallback also failed to retrieve schemas from database")
-        logger.error(f"  • Found {diagnostics['candidate_tables_count']} candidate tables, but none matched stored schemas")
+        logger.error(
+            f"  • Found {diagnostics['candidate_tables_count']} candidate tables, but none matched stored schemas"
+        )
         logger.error("")
         logger.error("Possible Causes:")
         logger.error("  1. Schema import was not run after LanceDB v1 migration")
@@ -243,11 +244,13 @@ class SchemaValidationNode(Node, LLMMixin):
         logger.error(f"       --config=<config_path> --namespace={diagnostics['namespace']}")
         logger.error("")
         logger.error("  3. Verify database connection:")
-        logger.error(f"     python -c \"")
+        logger.error(f'     python -c "')
         logger.error(f"       from datus.tools.db_tools.db_manager import get_db_manager")
-        logger.error(f"       db = get_db_manager().get_conn('{diagnostics['namespace']}', '{diagnostics['database_name']}')")
+        logger.error(
+            f"       db = get_db_manager().get_conn('{diagnostics['namespace']}', '{diagnostics['database_name']}')"
+        )
         logger.error(f"       print('Tables:', len(db.get_tables_with_ddl()))")
-        logger.error(f"     \"")
+        logger.error(f'     "')
         logger.error("=" * 80)
         logger.error("")
 
@@ -268,7 +271,7 @@ class SchemaValidationNode(Node, LLMMixin):
                         "lancedb_storage": "empty - no schema metadata found",
                         "ddl_fallback": "returned 0 tables from database",
                         "candidate_tables_found": diagnostics["candidate_tables_count"],
-                    }
+                    },
                 },
                 {
                     "title": "2. Root Cause Analysis",
@@ -276,35 +279,35 @@ class SchemaValidationNode(Node, LLMMixin):
                         "Schema import was not run after LanceDB v1 migration",
                         "Database connection parameters are incorrect",
                         "Database is empty (no tables exist)",
-                        "Namespace/database name mismatch"
-                    ]
+                        "Namespace/database name mismatch",
+                    ],
                 },
                 {
                     "title": "3. Immediate Actions Required",
                     "steps": [
                         "Re-run migration with --import-schemas flag",
                         "Or run schema import separately",
-                        "Verify database connection and table existence"
+                        "Verify database connection and table existence",
                     ],
                     "commands": [
                         f"python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config=<config> --namespace={diagnostics['namespace']} --import-schemas",
-                        f"python -c \"from datus.tools.db_tools.db_manager import get_db_manager; db = get_db_manager().get_conn('{diagnostics['namespace']}', '{diagnostics['database_name']}'); print(f'Tables: {{len(db.get_tables_with_ddl())}}')\""
-                    ]
+                        f"python -c \"from datus.tools.db_tools.db_manager import get_db_manager; db = get_db_manager().get_conn('{diagnostics['namespace']}', '{diagnostics['database_name']}'); print(f'Tables: {{len(db.get_tables_with_ddl())}}')\"",
+                    ],
                 },
                 {
                     "title": "4. SQL Generated (May Contain Hallucinated Tables)",
                     "sql_query": "No SQL generated (validation failed before SQL generation)",
-                    "warning": "SQL was generated without schema context - table names may be incorrect"
+                    "warning": "SQL was generated without schema context - table names may be incorrect",
                 },
                 {
                     "title": "5. Next Steps",
                     "recommendations": [
                         "Import schema metadata using one of the commands above",
                         "Re-run text2sql workflow after schema import completes",
-                        "Contact administrator if schema import fails"
-                    ]
-                }
-            ]
+                        "Contact administrator if schema import fails",
+                    ],
+                },
+            ],
         }
 
     def _store_diagnostic_report(self, report: Dict[str, Any]) -> None:
@@ -331,15 +334,11 @@ class SchemaValidationNode(Node, LLMMixin):
 
         # Calculate dynamic coverage threshold
         coverage_threshold = self._calculate_coverage_threshold(query_terms)
-        logger.info(
-            f"Using dynamic coverage threshold: {coverage_threshold:.2f} for {len(query_terms)} query terms"
-        )
+        logger.info(f"Using dynamic coverage threshold: {coverage_threshold:.2f} for {len(query_terms)} query terms")
 
         # Determine if schemas are sufficient
         is_sufficient = (
-            table_count > 0
-            and len(missing_definitions) == 0
-            and schema_coverage["coverage_score"] > coverage_threshold
+            table_count > 0 and len(missing_definitions) == 0 and schema_coverage["coverage_score"] > coverage_threshold
         )
 
         # Build validation result
@@ -362,11 +361,7 @@ class SchemaValidationNode(Node, LLMMixin):
 
     def _find_missing_definitions(self, schemas: List[TableSchema]) -> List[str]:
         """Find tables with missing or empty DDL definitions."""
-        return [
-            schema.table_name
-            for schema in schemas
-            if not schema.definition or schema.definition.strip() == ""
-        ]
+        return [schema.table_name for schema in schemas if not schema.definition or schema.definition.strip() == ""]
 
     def _add_insufficient_schema_recommendations(
         self, validation_result: Dict[str, Any], schema_coverage: Dict[str, Any]
@@ -427,9 +422,7 @@ class SchemaValidationNode(Node, LLMMixin):
             "schema_validation",
             {
                 "task_id": (
-                    getattr(self.workflow.task, "id", "unknown")
-                    if self.workflow and self.workflow.task
-                    else "unknown"
+                    getattr(self.workflow.task, "id", "unknown") if self.workflow and self.workflow.task else "unknown"
                 )
             },
         )
@@ -464,9 +457,7 @@ class SchemaValidationNode(Node, LLMMixin):
             cache_key = f"llm_term_extraction:{hash(query)}"
             max_retries = LLM_TERM_EXTRACTION_CONFIG.get("max_retries", 3)
             cache_enabled = LLM_TERM_EXTRACTION_CONFIG.get("cache_enabled", True)
-            cache_ttl_seconds = (
-                LLM_TERM_EXTRACTION_CONFIG.get("cache_ttl_seconds") if cache_enabled else None
-            )
+            cache_ttl_seconds = LLM_TERM_EXTRACTION_CONFIG.get("cache_ttl_seconds") if cache_enabled else None
 
             response = await self.llm_call_with_retry(
                 prompt=prompt,
@@ -569,7 +560,7 @@ class SchemaValidationNode(Node, LLMMixin):
                     parsed = parse_one(schema.definition, dialect="starrocks")
 
                     # Extract table comment
-                    if hasattr(parsed, 'comment') and parsed.comment:
+                    if hasattr(parsed, "comment") and parsed.comment:
                         table_comment = str(parsed.comment).strip()
                         if table_comment:
                             schema_terms.add(table_comment.lower())
@@ -577,15 +568,17 @@ class SchemaValidationNode(Node, LLMMixin):
                             logger.debug(f"Extracted table comment '{table_comment}' from {schema.table_name}")
 
                     # Extract column comments
-                    if hasattr(parsed, 'columns'):
+                    if hasattr(parsed, "columns"):
                         for column in parsed.columns:
-                            if hasattr(column, 'comment') and column.comment:
+                            if hasattr(column, "comment") and column.comment:
                                 col_comment = str(column.comment).strip()
                                 if col_comment:
                                     schema_terms.add(col_comment.lower())
-                                    col_name = column.name if hasattr(column, 'name') else "unknown"
+                                    col_name = column.name if hasattr(column, "name") else "unknown"
                                     comment_terms[col_comment.lower()] = f"column:{schema.table_name}.{col_name}"
-                                    logger.debug(f"Extracted column comment '{col_comment}' from {schema.table_name}.{col_name}")
+                                    logger.debug(
+                                        f"Extracted column comment '{col_comment}' from {schema.table_name}.{col_name}"
+                                    )
 
                 except ImportError:
                     logger.warning("sqlglot not available, skipping comment extraction")

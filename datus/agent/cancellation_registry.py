@@ -9,8 +9,8 @@ This module provides a simple registry for tracking task cancellation status
 that can be accessed from different parts of the application without tight coupling.
 """
 
-import asyncio
-from typing import Dict, Optional
+import threading
+from typing import Dict
 
 from datus.utils.loggings import get_logger
 
@@ -19,7 +19,8 @@ logger = get_logger(__name__)
 
 # Module-level registry for task cancellation status
 _cancellation_registry: Dict[str, bool] = {}
-_registry_lock = asyncio.Lock()
+# Use threading.Lock for thread safety across both sync and async contexts
+_registry_lock = threading.Lock()
 
 
 async def is_cancelled(task_id: str) -> bool:
@@ -32,7 +33,7 @@ async def is_cancelled(task_id: str) -> bool:
     Returns:
         True if the task has been cancelled, False otherwise
     """
-    async with _registry_lock:
+    with _registry_lock:
         return _cancellation_registry.get(task_id, False)
 
 
@@ -43,7 +44,7 @@ async def mark_cancelled(task_id: str) -> None:
     Args:
         task_id: The task ID to mark as cancelled
     """
-    async with _registry_lock:
+    with _registry_lock:
         _cancellation_registry[task_id] = True
         logger.info(f"Task {task_id} marked as cancelled in registry")
 
@@ -55,7 +56,7 @@ async def clear_cancelled(task_id: str) -> None:
     Args:
         task_id: The task ID to clear
     """
-    async with _registry_lock:
+    with _registry_lock:
         _cancellation_registry.pop(task_id, None)
         logger.debug(f"Task {task_id} cancellation status cleared from registry")
 
@@ -72,7 +73,8 @@ def is_cancelled_sync(task_id: str) -> bool:
     Returns:
         True if the task has been cancelled, False otherwise
     """
-    return _cancellation_registry.get(task_id, False)
+    with _registry_lock:
+        return _cancellation_registry.get(task_id, False)
 
 
 def mark_cancelled_sync(task_id: str) -> None:
@@ -84,8 +86,9 @@ def mark_cancelled_sync(task_id: str) -> None:
     Args:
         task_id: The task ID to mark as cancelled
     """
-    _cancellation_registry[task_id] = True
-    logger.info(f"Task {task_id} marked as cancelled in registry (sync)")
+    with _registry_lock:
+        _cancellation_registry[task_id] = True
+        logger.info(f"Task {task_id} marked as cancelled in registry (sync)")
 
 
 def clear_cancelled_sync(task_id: str) -> None:
@@ -97,5 +100,6 @@ def clear_cancelled_sync(task_id: str) -> None:
     Args:
         task_id: The task ID to clear
     """
-    _cancellation_registry.pop(task_id, None)
-    logger.debug(f"Task {task_id} cancellation status cleared from registry (sync)")
+    with _registry_lock:
+        _cancellation_registry.pop(task_id, None)
+        logger.debug(f"Task {task_id} cancellation status cleared from registry (sync)")

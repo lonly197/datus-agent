@@ -12,17 +12,12 @@ from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.business_term_config import (
-    LLM_TABLE_DISCOVERY_CONFIG,
-    get_business_term_mapping,
-)
-from datus.schemas.action_history import (
-    ActionHistory,
-    ActionHistoryManager,
-    ActionRole,
-    ActionStatus,
-)
+    LLM_TABLE_DISCOVERY_CONFIG, get_business_term_mapping)
+from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
+                                          ActionRole, ActionStatus)
 from datus.schemas.base import BaseResult
-from datus.schemas.node_models import BaseInput, Metric, ReferenceSql, TableSchema
+from datus.schemas.node_models import (BaseInput, Metric, ReferenceSql,
+                                       TableSchema)
 from datus.storage.schema_metadata import SchemaWithValueRAG
 from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool.context_search import ContextSearchTools
@@ -107,8 +102,12 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         Yields:
             ActionHistory: Progress and result actions
         """
+        if not self.workflow:
+            logger.error("Workflow not initialized in SchemaDiscoveryNode")
+            return
+
         try:
-            if not self.workflow or not self.workflow.task:
+            if not self.workflow.task:
                 error_result = self.create_error_result(
                     ErrorCode.NODE_EXECUTION_FAILED,
                     "No workflow or task available for schema discovery",
@@ -133,7 +132,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             if hasattr(self.workflow, "metadata") and self.workflow.metadata:
                 detected_intent = self.workflow.metadata.get("detected_intent")
-                confidence = self.workflow.metadata.get("intent_confidence", 0.0)
+                try:
+                    confidence = float(self.workflow.metadata.get("intent_confidence", 0.0))
+                except (ValueError, TypeError):
+                    confidence = 0.0
 
                 if detected_intent and isinstance(detected_intent, str) and confidence > 0.3:
                     intent = detected_intent
@@ -149,7 +151,6 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             # Check if intent clarification has occurred and use the clarified version
             if hasattr(self.workflow, "metadata") and self.workflow.metadata:
                 clarified_task = self.workflow.metadata.get("clarified_task")
-                original_task = self.workflow.metadata.get("original_task")
 
                 if clarified_task and clarified_task != task.task:
                     logger.info(
@@ -283,8 +284,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         finally:
             # ✅ Fix: Restore original task to prevent parameter pollution
             # Check if we have the original_task_text from the clarified task modification
-            original_task_text = getattr(self, '_original_task_text', None)
-            if original_task_text is not None:
+            original_task_text = getattr(self, "_original_task_text", None)
+            if original_task_text is not None and self.workflow and self.workflow.task:
                 self.workflow.task.task = original_task_text
                 logger.info(f"Restored original task to prevent parameter pollution")
                 # Clear the stored original task
@@ -316,7 +317,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             task_text = task.task.lower()
 
             # ✅ NEW: Apply progressive matching based on reflection round (from SchemaLinkingNode)
-            if self.agent_config and hasattr(self.agent_config, 'schema_discovery_config'):
+            if self.agent_config and hasattr(self.agent_config, "schema_discovery_config"):
                 base_matching_rate = self.agent_config.schema_discovery_config.base_matching_rate
             else:
                 base_matching_rate = "fast"  # Default for backward compatibility
@@ -373,7 +374,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             # ✅ Optimized: More aggressive trigger condition (was <3, now <10)
             # This ensures better recall by using context search more frequently
             if len(candidate_tables) < 10:
-                logger.info(f"[Stage 2] Tables found ({len(candidate_tables)}) below threshold (10), initiating Context Search...")
+                logger.info(
+                    f"[Stage 2] Tables found ({len(candidate_tables)}) below threshold (10), initiating Context Search..."
+                )
                 context_tables = await self._context_based_discovery(task.task)
                 if context_tables:
                     candidate_tables.extend(context_tables)
@@ -531,7 +534,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             List of table names
         """
         try:
-            from datus.configuration.business_term_config import infer_business_tags
+            from datus.configuration.business_term_config import \
+                infer_business_tags
 
             if not self.agent_config:
                 return []
@@ -539,7 +543,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             tables = []
 
             # Get similarity threshold from configuration (with backward compatibility)
-            if hasattr(self.agent_config, 'schema_discovery_config'):
+            if hasattr(self.agent_config, "schema_discovery_config"):
                 base_similarity_threshold = self.agent_config.schema_discovery_config.semantic_similarity_threshold
             else:
                 base_similarity_threshold = 0.5  # Default threshold for backward compatibility
@@ -549,7 +553,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             # due to cross-lingual embedding mismatch. Lower threshold improves recall.
             if _contains_chinese(task_text):
                 # Get reduction factor from configuration (with backward compatibility)
-                if hasattr(self.agent_config, 'schema_discovery_config'):
+                if hasattr(self.agent_config, "schema_discovery_config"):
                     reduction_factor = self.agent_config.schema_discovery_config.chinese_query_threshold_reduction
                 else:
                     reduction_factor = 0.6  # Default: apply 40% reduction for Chinese queries
@@ -588,8 +592,16 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         table_names = schema_results.column("table_name").to_pylist()
 
                         # ✅ Enhanced: Extract additional metadata for ranking
-                        table_comments = schema_results.column("table_comment").to_pylist() if "table_comment" in schema_results.column_names else [""] * len(table_names)
-                        row_counts = schema_results.column("row_count").to_pylist() if "row_count" in schema_results.column_names else [0] * len(table_names)
+                        table_comments = (
+                            schema_results.column("table_comment").to_pylist()
+                            if "table_comment" in schema_results.column_names
+                            else [""] * len(table_names)
+                        )
+                        row_counts = (
+                            schema_results.column("row_count").to_pylist()
+                            if "row_count" in schema_results.column_names
+                            else [0] * len(table_names)
+                        )
                         business_tags_list = []
                         if "business_tags" in schema_results.column_names:
                             # Convert from list if present
@@ -622,7 +634,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
                             # ✅ Enhanced: Comment match bonus (if table comment contains query terms)
                             comment_bonus = 0
-                            if table_comment and any(term.lower() in table_comment.lower() for term in task_text.split()):
+                            if table_comment and any(
+                                term.lower() in table_comment.lower() for term in task_text.split()
+                            ):
                                 comment_bonus = 0.05
 
                             # Final score: similarity + weighted enhancements
@@ -648,7 +662,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         # No _distance column, use all results
                         found_tables = schema_results.column("table_name").to_pylist()
                         tables.extend(found_tables)
-                        logger.info(f"Semantic search found tables via metadata (no distance filtering): {found_tables}")
+                        logger.info(
+                            f"Semantic search found tables via metadata (no distance filtering): {found_tables}"
+                        )
 
                 except Exception as filter_error:
                     logger.warning(f"Similarity filtering failed: {filter_error}. Using all results.")
@@ -682,7 +698,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         candidate_tables = []
 
         # 1. Check hardcoded configuration
-        from datus.configuration.business_term_config import TABLE_KEYWORD_PATTERNS
+        from datus.configuration.business_term_config import \
+            TABLE_KEYWORD_PATTERNS
 
         for keyword, table_name in TABLE_KEYWORD_PATTERNS.items():
             if keyword in task_text:
@@ -774,9 +791,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             cache_key = f"llm_table_discovery:{hash(query)}:{hash(tuple(all_tables))}"
             max_retries = LLM_TABLE_DISCOVERY_CONFIG.get("max_retries", 3)
             cache_enabled = LLM_TABLE_DISCOVERY_CONFIG.get("cache_enabled", True)
-            cache_ttl_seconds = (
-                LLM_TABLE_DISCOVERY_CONFIG.get("cache_ttl_seconds") if cache_enabled else None
-            )
+            cache_ttl_seconds = LLM_TABLE_DISCOVERY_CONFIG.get("cache_ttl_seconds") if cache_enabled else None
 
             response = await self.llm_call_with_retry(
                 prompt=prompt,
@@ -831,7 +846,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             all_tables = connector.get_tables(
                 catalog_name=task.catalog_name or "",
                 database_name=task.database_name or "",
-                schema_name=task.schema_name or ""
+                schema_name=task.schema_name or "",
             )
             logger.debug(f"Retrieved {len(all_tables)} tables from database")
             return all_tables
@@ -863,7 +878,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             all_tables = connector.get_tables(
                 catalog_name=task.catalog_name or "",
                 database_name=task.database_name or "",
-                schema_name=task.schema_name or ""
+                schema_name=task.schema_name or "",
             )
 
             # Limit to reasonable number to avoid context overflow
@@ -910,8 +925,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     # to_pylist() converts to list of dicts where each dict represents a row
                     schema_dicts = current_schemas.to_pylist()
                     definition_by_table = {
-                        str(schema.get("table_name", "")): schema.get("definition")
-                        for schema in schema_dicts
+                        str(schema.get("table_name", "")): schema.get("definition") for schema in schema_dicts
                     }
                     for table_name in candidate_tables:
                         definition = definition_by_table.get(table_name)
@@ -1059,15 +1073,17 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 for tbl_info in tables_with_ddl:
                     table_name = tbl_info.get("name", "")
                     if table_name:
-                        schemas_to_store.append({
-                            "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
-                            "catalog_name": task.catalog_name or "",
-                            "database_name": task.database_name or "",
-                            "schema_name": task.schema_name or "",
-                            "table_name": table_name,
-                            "table_type": "table",
-                            "definition": tbl_info.get("ddl", ""),
-                        })
+                        schemas_to_store.append(
+                            {
+                                "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
+                                "catalog_name": task.catalog_name or "",
+                                "database_name": task.database_name or "",
+                                "schema_name": task.schema_name or "",
+                                "table_name": table_name,
+                                "table_type": "table",
+                                "definition": tbl_info.get("ddl", ""),
+                            }
+                        )
                         retrieved_tables.add(table_name)
 
                 logger.info(f"Retrieved DDL for {len(schemas_to_store)} tables from database")
@@ -1091,16 +1107,20 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     logger.warning("")
                     logger.warning("Immediate actions:")
                     logger.warning("  1. Verify database connection:")
-                    logger.warning(f"     python -c \"")
+                    logger.warning(f'     python -c "')
                     logger.warning(f"       from datus.tools.db_tools.db_manager import get_db_manager")
-                    logger.warning(f"       db = get_db_manager().get_conn('{self.agent_config.current_namespace}', '{task.database_name}')")
+                    logger.warning(
+                        f"       db = get_db_manager().get_conn('{self.agent_config.current_namespace}', '{task.database_name}')"
+                    )
                     logger.warning(f"       print('Connected:', hasattr(db, 'get_tables_with_ddl'))")
                     logger.warning(f"       print('Tables:', len(db.get_tables_with_ddl()))")
-                    logger.warning(f"     \"")
+                    logger.warning(f'     "')
                     logger.warning("")
                     logger.warning("  2. Re-run migration with schema import:")
                     logger.warning(f"     python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
-                    logger.warning(f"       --config=<config_path> --namespace={self.agent_config.current_namespace} \\")
+                    logger.warning(
+                        f"       --config=<config_path> --namespace={self.agent_config.current_namespace} \\"
+                    )
                     logger.warning(f"       --import-schemas --force")
                     logger.warning("")
                     logger.warning("=" * 60)
@@ -1119,15 +1139,17 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                             ddl = connector.get_ddl(table_name)
 
                         if ddl:
-                            schemas_to_store.append({
-                                "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
-                                "catalog_name": task.catalog_name or "",
-                                "database_name": task.database_name or "",
-                                "schema_name": task.schema_name or "",
-                                "table_name": table_name,
-                                "table_type": "table",
-                                "definition": ddl,
-                            })
+                            schemas_to_store.append(
+                                {
+                                    "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
+                                    "catalog_name": task.catalog_name or "",
+                                    "database_name": task.database_name or "",
+                                    "schema_name": task.schema_name or "",
+                                    "table_name": table_name,
+                                    "table_type": "table",
+                                    "definition": ddl,
+                                }
+                            )
                             retrieved_tables.add(table_name)
                     except Exception as e:
                         logger.debug(f"Failed to get DDL for table {table_name}: {e}")
@@ -1153,15 +1175,19 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     logger.warning("")
                     logger.warning("Immediate actions:")
                     logger.warning("  1. Verify database contains tables:")
-                    logger.warning(f"     python -c \"")
+                    logger.warning(f'     python -c "')
                     logger.warning(f"       from datus.tools.db_tools.db_manager import get_db_manager")
-                    logger.warning(f"       db = get_db_manager().get_conn('{self.agent_config.current_namespace}', '{task.database_name}')")
+                    logger.warning(
+                        f"       db = get_db_manager().get_conn('{self.agent_config.current_namespace}', '{task.database_name}')"
+                    )
                     logger.warning(f"       print('All tables:', db.get_all_table_names())")
-                    logger.warning(f"     \"")
+                    logger.warning(f'     "')
                     logger.warning("")
                     logger.warning("  2. Re-run migration with schema import:")
                     logger.warning(f"     python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
-                    logger.warning(f"       --config=<config_path> --namespace={self.agent_config.current_namespace} \\")
+                    logger.warning(
+                        f"       --config=<config_path> --namespace={self.agent_config.current_namespace} \\"
+                    )
                     logger.warning(f"       --import-schemas --force")
                     logger.warning("")
                     logger.warning("=" * 60)
@@ -1220,7 +1246,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     else:
                         logger.warning(f"Context update failed after DDL fallback: {result.get('error')}")
                 else:
-                    logger.warning(f"DDL fallback retrieved schemas but still no match for candidates: {candidate_tables}")
+                    logger.warning(
+                        f"DDL fallback retrieved schemas but still no match for candidates: {candidate_tables}"
+                    )
             else:
                 # Enhanced fallback when get_tables_with_ddl returns 0 tables
                 await self._enhanced_ddl_fallback(candidate_tables, task, connector)
@@ -1251,7 +1279,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 all_tables = connector.get_tables(
                     catalog_name=task.catalog_name or "",
                     database_name=task.database_name or "",
-                    schema_name=task.schema_name or ""
+                    schema_name=task.schema_name or "",
                 )
 
                 if all_tables:
@@ -1291,15 +1319,17 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                                     logger.debug(f"get_schema failed for {table_name}: {e}")
 
                             if ddl:
-                                schemas_to_store.append({
-                                    "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
-                                    "catalog_name": task.catalog_name or "",
-                                    "database_name": task.database_name or "",
-                                    "schema_name": task.schema_name or "",
-                                    "table_name": table_name,
-                                    "table_type": "table",
-                                    "definition": ddl,
-                                })
+                                schemas_to_store.append(
+                                    {
+                                        "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
+                                        "catalog_name": task.catalog_name or "",
+                                        "database_name": task.database_name or "",
+                                        "schema_name": task.schema_name or "",
+                                        "table_name": table_name,
+                                        "table_type": "table",
+                                        "definition": ddl,
+                                    }
+                                )
                                 retrieved_count += 1
 
                         except Exception as e:
@@ -1319,7 +1349,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         )
 
                         if schemas:
-                            logger.info(f"Schema search successful after enhanced fallback: found {len(schemas)} schemas")
+                            logger.info(
+                                f"Schema search successful after enhanced fallback: found {len(schemas)} schemas"
+                            )
                             return
 
             except Exception as e:
@@ -1334,15 +1366,17 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 minimal_schemas = []
                 for table_name in all_tables:
                     if table_name in candidate_tables:
-                        minimal_schemas.append({
-                            "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
-                            "catalog_name": task.catalog_name or "",
-                            "database_name": task.database_name or "",
-                            "schema_name": task.schema_name or "",
-                            "table_name": table_name,
-                            "table_type": "table",
-                            "definition": f"CREATE TABLE {table_name} (-- DDL retrieval failed, table name only)",
-                        })
+                        minimal_schemas.append(
+                            {
+                                "identifier": f"{task.catalog_name or ''}.{task.database_name}..{table_name}.table",
+                                "catalog_name": task.catalog_name or "",
+                                "database_name": task.database_name or "",
+                                "schema_name": task.schema_name or "",
+                                "table_name": table_name,
+                                "table_type": "table",
+                                "definition": f"CREATE TABLE {table_name} (-- DDL retrieval failed, table name only)",
+                            }
+                        )
 
                 if minimal_schemas:
                     rag.store_batch(minimal_schemas, [])
@@ -1496,7 +1530,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             return base_rate
 
         # Check if progressive matching is enabled (with backward compatibility)
-        if not hasattr(self.agent_config, 'schema_discovery_config'):
+        if not hasattr(self.agent_config, "schema_discovery_config"):
             return base_rate
 
         if not self.agent_config.schema_discovery_config.progressive_matching_enabled:
@@ -1518,9 +1552,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         final_idx = min(start_idx + reflection_round, len(matching_rates) - 1)
         final_rate = matching_rates[final_idx]
 
-        logger.info(
-            f"Progressive matching: base={base_rate}, round={reflection_round}, final={final_rate}"
-        )
+        logger.info(f"Progressive matching: base={base_rate}, round={reflection_round}, final={final_rate}")
 
         return final_rate
 
@@ -1544,7 +1576,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 return ""
 
             # Check if external knowledge enhancement is enabled (with backward compatibility)
-            if not hasattr(self.agent_config, 'schema_discovery_config'):
+            if not hasattr(self.agent_config, "schema_discovery_config"):
                 return ""
 
             if not self.agent_config.schema_discovery_config.external_knowledge_enabled:
@@ -1564,7 +1596,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             layer2 = subject_path[2] if len(subject_path) > 2 else ""
 
             # Get top_n from configuration (with backward compatibility)
-            if hasattr(self.agent_config, 'schema_discovery_config'):
+            if hasattr(self.agent_config, "schema_discovery_config"):
                 top_n = self.agent_config.schema_discovery_config.external_knowledge_top_n
             else:
                 top_n = 5  # Default value for backward compatibility
@@ -1614,9 +1646,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             parts.append(f"Relevant Business Knowledge:\n{enhanced}")
         return "\n\n".join(parts)
 
-    async def _llm_based_schema_matching(
-        self, query: str, matching_rate: str = "from_llm"
-    ) -> List[str]:
+    async def _llm_based_schema_matching(self, query: str, matching_rate: str = "from_llm") -> List[str]:
         """
         Use LLM-based schema matching for large datasets (from SchemaLinkingNode).
 
@@ -1634,7 +1664,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             return []
 
         # Check if LLM matching is enabled (with backward compatibility)
-        if not hasattr(self.agent_config, 'schema_discovery_config'):
+        if not hasattr(self.agent_config, "schema_discovery_config"):
             return []
 
         if not self.agent_config.schema_discovery_config.llm_matching_enabled:
@@ -1642,8 +1672,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             return []
 
         try:
-            from datus.schemas.schema_linking_node_models import SchemaLinkingInput
-            from datus.tools.lineage_graph_tools.schema_lineage import SchemaLineageTool
+            from datus.schemas.schema_linking_node_models import \
+                SchemaLinkingInput
+            from datus.tools.lineage_graph_tools.schema_lineage import \
+                SchemaLineageTool
 
             # Get task from workflow
             task = self.workflow.task if self.workflow else None

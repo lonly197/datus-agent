@@ -69,10 +69,10 @@ class Agent:
         else:
             self.db_manager = get_db_manager(self.global_config.namespaces)
 
-        self.tools = {}
-        self.storage_modules = {}
-        self.metadata_store = None
-        self.metrics_store = None
+        self.tools: Dict[str, Any] = {}
+        self.storage_modules: Dict[str, bool] = {}
+        self.metadata_store: Optional[SchemaWithValueRAG] = None
+        self.metrics_store: Optional[SemanticMetricsRAG] = None
         self._check_storage_modules()
 
     def _initialize_model(self) -> LLMBaseModel:
@@ -80,13 +80,6 @@ class Agent:
         logger.info(f"Using model type: {llm_model.model_config.type}, model name: {llm_model.model_config.model}")
 
         return llm_model
-
-    # def _setup_database_conn(self):
-    #     """
-    #     Set up the environment by initializing necessary tools and connectors.
-    #     """
-    #     # Initialize database tools based on task type
-    #     self.database_connector = self.global_config.connector()
 
     def _check_storage_modules(self):
         """
@@ -209,7 +202,7 @@ class Agent:
             logger.info("Agent stream execution was cancelled")
             raise
 
-    def check_db(self):
+    def check_db(self) -> Dict[str, Any]:
         """Validate database connectivity."""
         logger.info("Checking database connectivity")
         namespace = self.global_config.current_namespace

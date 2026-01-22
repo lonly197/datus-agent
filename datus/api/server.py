@@ -86,7 +86,8 @@ def _daemon_worker(args: argparse.Namespace, agent_args: argparse.Namespace, pid
     """Worker function that runs in the daemon process."""
     # Set process session and umask
     os.setsid()
-    os.umask(0)
+    # Security: Use 0o022 (rwxr-xr-x) instead of 0 (rwxrwxrwx) to prevent world-writable files
+    os.umask(0o022)
 
     # Configure logging for daemon process
     configure_logging(args.debug, log_dir="logs", console_output=False)
@@ -183,6 +184,7 @@ async def _run_server_async(args: argparse.Namespace, agent_args: argparse.Names
         workers=args.workers if not args.reload else 1,
         log_level="debug" if args.debug else "info",
         access_log=True,
+        server_header=False,  # Security: Hide server header
     )
     server = uvicorn.Server(config)
 

@@ -335,6 +335,11 @@ class DatusAPIService:
             if not csv_string or not csv_string.strip():
                 return []
 
+            # Prevent DoS: Limit CSV size to 10MB
+            if len(csv_string) > 10 * 1024 * 1024:
+                logger.warning("CSV data exceeds 10MB limit, skipping parsing")
+                return []
+
             reader = csv.DictReader(StringIO(csv_string.strip()))
             return [dict(row) for row in reader]
         except Exception as e:
@@ -598,7 +603,8 @@ class DatusAPIService:
 
                         # Convert CSV string to list of dictionaries for API response
                         if query_results_raw and isinstance(query_results_raw, str):
-                            query_results = self._parse_csv_to_list(query_results_raw)
+                            # Run in thread pool to avoid blocking event loop
+                            query_results = await asyncio.to_thread(self._parse_csv_to_list, query_results_raw)
                         else:
                             query_results = None
 

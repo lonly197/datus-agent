@@ -13,10 +13,13 @@ import asyncio
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Dict, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, cast
 
 from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
+
+if TYPE_CHECKING:
+    from datus.models.base import LLMBaseModel
 
 logger = get_logger(__name__)
 
@@ -149,6 +152,10 @@ class IntentDetector:
         """
         if not text:
             return False, {}
+            
+        # Limit text length to avoid ReDoS or excessive processing
+        if len(text) > 10000:
+            text = text[:10000]
 
         text_lower = text.lower()
         keyword_matches = []
@@ -178,7 +185,7 @@ class IntentDetector:
         is_sql_intent = total_matches >= self.keyword_threshold
         return is_sql_intent, metadata
 
-    async def classify_intent_with_llm(self, text: str, model) -> Tuple[str, float]:
+    async def classify_intent_with_llm(self, text: str, model: "LLMBaseModel") -> Tuple[str, float]:
         """
         LLM-based intent classification as fallback.
 
@@ -211,9 +218,10 @@ User request: {text}
                 if result is None:
                     logger.warning(f"llm_result2json returned None, response: {response[:200]}")
                     return "other", 0.0
-
-                intent = result.get("intent", "other")
-                confidence = float(result.get("confidence", 0.0))
+                
+                result_dict = cast(Dict[str, Any], result)
+                intent = result_dict.get("intent", "other")
+                confidence = float(result_dict.get("confidence", 0.0))
 
                 # Validate confidence range
                 if not 0.0 <= confidence <= 1.0:
@@ -229,7 +237,9 @@ User request: {text}
             logger.error(f"LLM classification failed: {e}")
             return "other", 0.0
 
-    async def detect_sql_intent(self, text: str, model=None, use_llm_fallback: bool = True) -> IntentResult:
+    async def detect_sql_intent(
+        self, text: str, model: Optional["LLMBaseModel"] = None, use_llm_fallback: bool = True
+    ) -> IntentResult:
         """
         Hybrid intent detection: keyword first, LLM fallback.
 
@@ -272,7 +282,7 @@ default_intent_detector = IntentDetector()
 
 async def detect_sql_intent(
     text: str,
-    model=None,
+    model: Optional["LLMBaseModel"] = None,
     keyword_threshold: int = 1,
     llm_confidence_threshold: float = 0.7,
     use_llm_fallback: bool = True,
