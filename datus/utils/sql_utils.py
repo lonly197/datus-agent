@@ -249,10 +249,15 @@ def validate_comment(comment: Any) -> Tuple[bool, str, Optional[str]]:
 
 def _clean_ddl(sql: str) -> str:
     """
-    Clean corrupted DDL by removing common error message fragments.
+    Clean corrupted DDL by removing common error message fragments and fixing syntax issues.
 
     This function handles DDL that may have been corrupted during storage or
     transfer, such as when error messages get appended to the DDL text.
+    It also fixes common syntax issues like:
+    - Unclosed quotes in comments
+    - Mismatched quotes (e.g., " for opening and ' for closing)
+    - Truncated column definitions
+    - Incomplete statements
 
     Args:
         sql: Potentially corrupted DDL
@@ -265,25 +270,88 @@ def _clean_ddl(sql: str) -> str:
 
     cleaned = sql
 
-    # Step 1: First, try to fix unclosed quotes by finding COMMENT without closing quote
+    # Step 1: Fix mismatched quotes in comments
+    # Pattern: COMMENT with mismatched quotes (e.g., " opening and ' closing)
+    # This handles cases like: COMMENT "text'
+    mismatched_quote_pattern = re.compile(
+        r'COMMENT\s*(["\'])[^"\']*\1?([^"\']*)$',
+        re.IGNORECASE | re.MULTILINE
+    )
+    def fix_mismatched_quotes(match):
+        opening_quote = match.group(1)
+        content = match.group(2)
+        # Close with the same quote type as opening
+        return f'COMMENT {opening_quote}{content}{opening_quote}'
+
+    cleaned = mismatched_quote_pattern.sub(fix_mismatched_quotes, cleaned)
+
+    # Step 2: First, try to fix unclosed quotes by finding COMMENT without closing quote
     # Pattern: COMMENT followed by quote but no closing quote before end of line or error message
     # This needs to be done BEFORE error message cleanup to preserve table comments
     cleaned = _UNCLOSED_COMMENT_RE.sub("", cleaned)
 
-    # Step 2: Apply pre-compiled error message patterns
+    # Step 3: Fix incomplete column definitions at the end
+    # Look for patterns like: `column_name without closing parenthesis or comma
+    incomplete_column_pattern = re.compile(
+        r'[`\w]+$',
+        re.MULTILINE
+    )
+    cleaned = incomplete_column_pattern.sub("", cleaned)
+
+    # Step 4: Apply pre-compiled error message patterns
     for pattern in _ERROR_MESSAGE_PATTERNS:
         cleaned = pattern.sub("", cleaned)
 
-    # Step 3: Fix any remaining unclosed quotes in comments
+    # Step 5: Fix any remaining unclosed quotes in comments
     cleaned = _UNCLOSED_QUOTE_RE.sub("", cleaned)
 
-    # Step 4: Remove trailing incomplete column definitions
-    cleaned = _TRAILING_CHARS_RE.sub("", cleaned)
+    # Step 6: Remove trailing incomplete column definitions (more aggressive)
+    # Remove trailing backticks, partial words, or incomplete syntax
+    trailing_incomplete_patterns = [
+        re.compile(r'[`\s]*$', re.MULTILINE),  # Trailing backticks and spaces
+        re.compile(r'[,\s]+$', re.MULTILINE),  # Trailing commas and spaces
+        re.compile(r'\w+$', re.MULTILINE),     # Trailing partial words
+    ]
+    for pattern in trailing_incomplete_patterns:
+        cleaned = pattern.sub("", cleaned)
 
-    # Step 5: Clean up multiple spaces
+    # Step 7: Clean up multiple spaces
     cleaned = _MULTI_SPACE_RE.sub(" ", cleaned)
 
+    # Step 8: Final validation - if the SQL still looks incomplete, try to complete it
+    cleaned = _complete_incomplete_ddl(cleaned)
+
     return cleaned.strip()
+
+
+def _complete_incomplete_ddl(sql: str) -> str:
+    """
+    Attempt to complete incomplete DDL statements by adding missing closing parentheses.
+
+    Args:
+        sql: Potentially incomplete DDL
+
+    Returns:
+        Completed DDL string
+    """
+    if not sql or not isinstance(sql, str):
+        return sql
+
+    # Count parentheses
+    open_parens = sql.count('(')
+    close_parens = sql.count(')')
+
+    # If we have more opening than closing parentheses, try to close them
+    if open_parens > close_parens:
+        # Add missing closing parentheses
+        missing_parens = open_parens - close_parens
+        sql += ')' * missing_parens
+
+        # Also add a semicolon if missing
+        if not sql.rstrip().endswith(';'):
+            sql += ';'
+
+    return sql
 
 
 # =============================================================================
@@ -485,117 +553,143 @@ def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE
         "indexes": []
     }
 
-    try:
-        # Parse SQL using sqlglot with error handling
-        parsed = sqlglot.parse_one(sql.strip(), dialect=dialect, error_level=sqlglot.ErrorLevel.IGNORE)
+    # Try multiple parsing strategies
+    parsing_attempts = []
 
-        if isinstance(parsed, sqlglot.exp.Create):
-            tb_info = parsed.find_all(Table).__next__()
+    # Strategy 1: Try original SQL
+    parsing_attempts.append(("original", sql.strip()))
 
-            # Get and validate table name
-            table_name = tb_info.name
-            if isinstance(table_name, str):
-                table_name = table_name.strip('"').strip("`").strip("[]")
+    # Strategy 2: Try cleaned SQL
+    cleaned_sql = _clean_ddl(sql)
+    if cleaned_sql != sql:
+        parsing_attempts.append(("cleaned", cleaned_sql))
 
-            is_valid, _, table_name = validate_table_name(table_name)
-            if not is_valid or not table_name:
-                logger.warning(f"Invalid table name: {tb_info.name}")
-            else:
-                result["table"]["name"] = table_name
+    # Strategy 3: Try with different dialects
+    if dialect == DBType.MYSQL:
+        # StarRocks uses MySQL dialect but might have different syntax
+        parsing_attempts.append(("mysql_dialect", cleaned_sql))
+    else:
+        # Try MySQL dialect for broader compatibility
+        parsing_attempts.append(("mysql_dialect", cleaned_sql))
 
-            result["table"]["schema_name"] = tb_info.db
-            result["table"]["database_name"] = tb_info.catalog
+    # Try each parsing strategy
+    for strategy_name, sql_to_parse in parsing_attempts:
+        try:
+            # Parse SQL using sqlglot with error handling
+            parsed = sqlglot.parse_one(sql_to_parse, dialect=dialect, error_level=sqlglot.ErrorLevel.IGNORE)
 
-            # Handle table comment
-            if tb_info.comments:
-                is_valid, _, comment = validate_comment(tb_info.comments)
-                if is_valid:
-                    result["table"]["comment"] = comment
+            if isinstance(parsed, sqlglot.exp.Create):
+                tb_info = parsed.find_all(Table).__next__()
 
-            # Get column definitions
-            for column in parsed.this.expressions:
-                if isinstance(column, sqlglot.exp.ColumnDef):
-                    col_name = column.name
-                    if isinstance(col_name, str):
-                        col_name = col_name.strip('"').strip("`").strip("[]")
+                # Get and validate table name
+                table_name = tb_info.name
+                if isinstance(table_name, str):
+                    table_name = table_name.strip('"').strip("`").strip("[]")
 
-                    # Validate column name length
-                    if len(col_name) > MAX_COLUMN_NAME_LENGTH:
-                        logger.warning(f"Column name too long: {col_name}")
-                        continue
+                is_valid, _, table_name = validate_table_name(table_name)
+                if not is_valid or not table_name:
+                    logger.warning(f"Invalid table name: {tb_info.name}")
+                else:
+                    result["table"]["name"] = table_name
 
-                    col_dict = {"name": col_name, "type": str(column.kind), "nullable": True}
+                result["table"]["schema_name"] = tb_info.db
+                result["table"]["database_name"] = tb_info.catalog
 
-                    # Check NOT NULL constraint
-                    if hasattr(column, "constraints") and column.constraints:
-                        for constraint in column.constraints:
-                            if isinstance(constraint, sqlglot.exp.NotNullColumnConstraint):
-                                col_dict["nullable"] = False
-
-                    # Get column comment
-                    if hasattr(column, "comments") and column.comments:
-                        col_dict["comment"] = column.comments
-                    elif hasattr(column, "comment") and column.comment:
-                        col_dict["comment"] = column.comment
-
-                    result["columns"].append(col_dict)
-
-            # Extract primary keys
-            for constraint in parsed.find_all(sqlglot.exp.PrimaryKey):
-                pk_columns = [col.name for col in constraint.expressions if hasattr(col, 'name')]
-                result["primary_keys"].extend(pk_columns)
-
-            # Extract foreign keys
-            for constraint in parsed.find_all(sqlglot.exp.ForeignKey):
-                fk_dict = {"from_column": "", "to_table": "", "to_column": ""}
-
-                if constraint.expressions:
-                    fk_dict["from_column"] = constraint.expressions[0].name if hasattr(constraint.expressions[0], 'name') else str(constraint.expressions[0])
-
-                if constraint.ref:
-                    ref_table = constraint.ref.name if hasattr(constraint.ref, 'name') else str(constraint.ref)
-                    fk_dict["to_table"] = ref_table
-                    if constraint.ref.expressions:
-                        fk_dict["to_column"] = constraint.ref.expressions[0].name if hasattr(constraint.ref.expressions[0], 'name') else str(constraint.ref.expressions[0])
-
-                result["foreign_keys"].append(fk_dict)
-
-            # Extract indexes
-            for constraint in parsed.find_all(sqlglot.exp.Index):
-                index_dict = {"name": "", "columns": []}
-
-                if hasattr(constraint, 'name'):
-                    index_dict["name"] = constraint.name
-
-                if constraint.expressions:
-                    index_dict["columns"] = [
-                        expr.name if hasattr(expr, 'name') else str(expr)
-                        for expr in constraint.expressions
-                    ]
-
-                result["indexes"].append(index_dict)
-
-            # Fallback: extract table comment using pre-compiled regex
-            if not result["table"].get("comment"):
-                table_comment_matches = _TABLE_COMMENT_RE.findall(sql)
-                if table_comment_matches:
-                    is_valid, _, comment = validate_comment(table_comment_matches[-1])
+                # Handle table comment
+                if tb_info.comments:
+                    is_valid, _, comment = validate_comment(tb_info.comments)
                     if is_valid:
                         result["table"]["comment"] = comment
 
-            # If we got here, sqlglot parsing was successful
-            if result["table"]["name"] and result["columns"]:
-                return result
+                # Get column definitions
+                columns_parsed = 0
+                for column in parsed.this.expressions:
+                    if isinstance(column, sqlglot.exp.ColumnDef):
+                        col_name = column.name
+                        if isinstance(col_name, str):
+                            col_name = col_name.strip('"').strip("`").strip("[]")
 
-    except Exception as e:
-        ddl_preview = sql[:200] if len(sql) > 200 else sql
-        logger.warning(
-            f"Error parsing SQL with sqlglot (dialect={dialect}): {e}\n"
-            f"DDL preview: {ddl_preview}..."
-        )
+                        # Validate column name length
+                        if len(col_name) > MAX_COLUMN_NAME_LENGTH:
+                            logger.warning(f"Column name too long: {col_name}")
+                            continue
 
-    # Fallback: Use regex-based parsing for StarRocks/MySQL-style DDL
-    logger.info(f"Falling back to regex parsing for dialect: {dialect}")
+                        col_dict = {"name": col_name, "type": str(column.kind), "nullable": True}
+
+                        # Check NOT NULL constraint
+                        if hasattr(column, "constraints") and column.constraints:
+                            for constraint in column.constraints:
+                                if isinstance(constraint, sqlglot.exp.NotNullColumnConstraint):
+                                    col_dict["nullable"] = False
+
+                        # Get column comment
+                        if hasattr(column, "comments") and column.comments:
+                            col_dict["comment"] = column.comments
+                        elif hasattr(column, "comment") and column.comment:
+                            col_dict["comment"] = column.comment
+
+                        result["columns"].append(col_dict)
+                        columns_parsed += 1
+
+                # Extract primary keys
+                for constraint in parsed.find_all(sqlglot.exp.PrimaryKey):
+                    pk_columns = [col.name for col in constraint.expressions if hasattr(col, 'name')]
+                    result["primary_keys"].extend(pk_columns)
+
+                # Extract foreign keys
+                for constraint in parsed.find_all(sqlglot.exp.ForeignKey):
+                    fk_dict = {"from_column": "", "to_table": "", "to_column": ""}
+
+                    if constraint.expressions:
+                        fk_dict["from_column"] = constraint.expressions[0].name if hasattr(constraint.expressions[0], 'name') else str(constraint.expressions[0])
+
+                    if constraint.ref:
+                        ref_table = constraint.ref.name if hasattr(constraint.ref, 'name') else str(constraint.ref)
+                        fk_dict["to_table"] = ref_table
+                        if constraint.ref.expressions:
+                            fk_dict["to_column"] = constraint.ref.expressions[0].name if hasattr(constraint.ref.expressions[0], 'name') else str(constraint.ref.expressions[0])
+
+                    result["foreign_keys"].append(fk_dict)
+
+                # Extract indexes
+                for constraint in parsed.find_all(sqlglot.exp.Index):
+                    index_dict = {"name": "", "columns": []}
+
+                    if hasattr(constraint, 'name'):
+                        index_dict["name"] = constraint.name
+
+                    if constraint.expressions:
+                        index_dict["columns"] = [
+                            expr.name if hasattr(expr, 'name') else str(expr)
+                            for expr in constraint.expressions
+                        ]
+
+                    result["indexes"].append(index_dict)
+
+                # Fallback: extract table comment using pre-compiled regex
+                if not result["table"].get("comment"):
+                    table_comment_matches = _TABLE_COMMENT_RE.findall(sql_to_parse)
+                    if table_comment_matches:
+                        is_valid, _, comment = validate_comment(table_comment_matches[-1])
+                        if is_valid:
+                            result["table"]["comment"] = comment
+
+                # Success criteria: at least have table name and some columns
+                if result["table"]["name"] and columns_parsed > 0:
+                    logger.debug(f"Successfully parsed DDL using {strategy_name} strategy")
+                    return result
+
+        except sqlglot.TokenError as e:
+            # TokenError: This means the SQL is malformed (e.g., unclosed quotes, truncated)
+            logger.debug(f"TokenError with {strategy_name} strategy: {e}")
+            continue
+        except Exception as e:
+            # Other exceptions (parsing errors, etc.)
+            logger.debug(f"Error with {strategy_name} strategy: {e}")
+            continue
+
+    # If all sqlglot strategies failed, try regex-based parsing
+    logger.info(f"All sqlglot parsing strategies failed, falling back to regex parsing for dialect: {dialect}")
     regex_result = _parse_ddl_with_regex(sql, dialect)
 
     # Merge results
@@ -611,6 +705,13 @@ def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE
         result["foreign_keys"] = regex_result["foreign_keys"]
     if regex_result["indexes"]:
         result["indexes"] = regex_result["indexes"]
+
+    # Log the final attempt
+    ddl_preview = sql[:200] if len(sql) > 200 else sql
+    if result["table"]["name"]:
+        logger.info(f"Successfully parsed DDL using regex fallback - Table: {result['table']['name']}")
+    else:
+        logger.warning(f"Failed to parse DDL with all strategies - Preview: {ddl_preview}...")
 
     return result
 
