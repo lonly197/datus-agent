@@ -938,7 +938,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
         try:
             # Check if multiple databases are configured
-            db_configs = self.agent_config.current_db_configs()
+            if self.agent_config is None:
+                db_configs = {}
+            else:
+                db_configs = self.agent_config.current_db_configs()
             is_multi_db = len(db_configs) > 1
 
             # --- Repair Logic Start ---
