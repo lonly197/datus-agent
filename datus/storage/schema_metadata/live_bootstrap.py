@@ -21,7 +21,7 @@ from datus.configuration.agent_config_loader import load_agent_config
 from datus.storage.schema_metadata import SchemaWithValueRAG
 from datus.tools.db_tools.metadata_extractor import get_metadata_extractor
 from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, parse_dialect
+from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, extract_enum_values_from_comment, parse_dialect
 from datus.configuration.business_term_config import infer_business_tags
 
 logger = get_logger(__name__)
@@ -248,6 +248,13 @@ async def bootstrap_database_metadata(
                     col["name"]: col.get("comment", "")
                     for col in parsed_metadata["columns"]
                 }
+                column_enums: Dict[str, List[Dict[str, str]]] = {}
+                for col_name, col_comment in column_comments.items():
+                    enum_pairs = extract_enum_values_from_comment(col_comment)
+                    if enum_pairs:
+                        column_enums[col_name] = [
+                            {"value": code, "label": label} for code, label in enum_pairs
+                        ]
 
                 # Infer business tags
                 column_names = [col["name"] for col in parsed_metadata["columns"]]
@@ -303,6 +310,7 @@ async def bootstrap_database_metadata(
                     # Enhanced metadata fields
                     "table_comment": table_comment,
                     "column_comments": json.dumps(column_comments, ensure_ascii=False),
+                    "column_enums": json.dumps(column_enums, ensure_ascii=False),
                     "business_tags": business_tags,
                     "row_count": row_count,
                     "sample_statistics": json.dumps(sample_statistics, ensure_ascii=False),
@@ -434,6 +442,13 @@ async def bootstrap_incremental(
                     # Extract all enhanced metadata
                     table_comment = parsed_metadata["table"].get("comment", "")
                     column_comments = {col["name"]: col.get("comment", "") for col in parsed_metadata["columns"]}
+                    column_enums: Dict[str, List[Dict[str, str]]] = {}
+                    for col_name, col_comment in column_comments.items():
+                        enum_pairs = extract_enum_values_from_comment(col_comment)
+                        if enum_pairs:
+                            column_enums[col_name] = [
+                                {"value": code, "label": label} for code, label in enum_pairs
+                            ]
                     column_names = [col["name"] for col in parsed_metadata["columns"]]
                     business_tags = infer_business_tags(table_name, column_names)
 
@@ -460,6 +475,7 @@ async def bootstrap_incremental(
                         table_type="table",
                         table_comment=table_comment,
                         column_comments=column_comments,
+                        column_enums=column_enums,
                         business_tags=business_tags,
                         row_count=row_count,
                         sample_statistics=sample_statistics,

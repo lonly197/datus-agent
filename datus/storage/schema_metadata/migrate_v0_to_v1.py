@@ -27,7 +27,13 @@ from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata import SchemaStorage, SchemaWithValueRAG
 from datus.models.base import LLMBaseModel
 from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, parse_dialect, validate_comment, validate_table_name
+from datus.utils.sql_utils import (
+    extract_enhanced_metadata_from_ddl,
+    extract_enum_values_from_comment,
+    parse_dialect,
+    validate_comment,
+    validate_table_name,
+)
 from datus.utils.constants import DBType
 
 # Import _fix_truncated_ddl to fix truncated DDL before parsing
@@ -194,7 +200,7 @@ def report_migration_state(db_path: str, table_name: str = "schema_metadata"):
 
         # Check if it has v1 fields
         v1_fields = [
-            "table_comment", "column_comments", "business_tags",
+            "table_comment", "column_comments", "column_enums", "business_tags",
             "row_count", "sample_statistics", "relationship_metadata",
             "metadata_version", "last_updated"
         ]
@@ -525,6 +531,13 @@ def migrate_schema_storage(
                     col["name"]: col.get("comment", "")
                     for col in enhanced_metadata["columns"]
                 }
+                column_enums: Dict[str, List[Dict[str, str]]] = {}
+                for col_name, col_comment in column_comments.items():
+                    enum_pairs = extract_enum_values_from_comment(col_comment)
+                    if enum_pairs:
+                        column_enums[col_name] = [
+                            {"value": code, "label": label} for code, label in enum_pairs
+                        ]
 
                 # Infer business tags
                 from datus.configuration.business_term_config import infer_business_tags
@@ -555,6 +568,7 @@ def migrate_schema_storage(
                     # New v1 fields
                     "table_comment": table_comment,
                     "column_comments": json.dumps(column_comments, ensure_ascii=False),
+                    "column_enums": json.dumps(column_enums, ensure_ascii=False),
                     "business_tags": business_tags,
                     "row_count": 0,  # Will be populated if extract_statistics=True
                     "sample_statistics": json.dumps({}, ensure_ascii=False),  # Empty initially
@@ -684,7 +698,7 @@ def verify_migration_detailed(storage: SchemaWithValueRAG) -> bool:
 
             # Verify v1 fields exist
             v1_fields = [
-                "table_comment", "column_comments", "business_tags",
+                "table_comment", "column_comments", "column_enums", "business_tags",
                 "row_count", "sample_statistics", "relationship_metadata",
                 "metadata_version", "last_updated"
             ]

@@ -72,6 +72,7 @@ class BaseMetadataStorage(BaseEmbeddingStore):
                     # Enhanced fields (v1) - Business Semantics (HIGH PRIORITY)
                     pa.field("table_comment", pa.string()),  # Extracted from DDL COMMENT
                     pa.field("column_comments", pa.string()),  # JSON: {"col1": "comment1", ...}
+                    pa.field("column_enums", pa.string()),  # JSON: {"col1": [{"value": "0", "label": "foo"}], ...}
                     pa.field("business_tags", pa.list_(pa.string())),  # ["finance", "fact_table", "revenue"]
                     # Statistics (MEDIUM PRIORITY)
                     pa.field("row_count", pa.int64()),  # Table row count
@@ -350,6 +351,7 @@ class SchemaStorage(BaseMetadataStorage):
         table_type: TABLE_TYPE = "table",
         table_comment: str = "",
         column_comments: Optional[Dict[str, str]] = None,
+        column_enums: Optional[Dict[str, List[Dict[str, str]]]] = None,
         business_tags: Optional[List[str]] = None,
         row_count: int = 0,
         sample_statistics: Optional[Dict[str, Dict]] = None,
@@ -370,6 +372,7 @@ class SchemaStorage(BaseMetadataStorage):
             table_type: Type of table (table, view, mv)
             table_comment: Table comment from DDL
             column_comments: Dictionary mapping column names to comments
+            column_enums: Dictionary mapping column names to enum values
             business_tags: List of business domain tags
             row_count: Approximate row count
             sample_statistics: Column statistics (min, max, mean, std)
@@ -421,6 +424,7 @@ class SchemaStorage(BaseMetadataStorage):
                 # Enhanced metadata fields (stored separately for reference)
                 "table_comment": table_comment or "",
                 "column_comments": json.dumps(column_comments or {}, ensure_ascii=False),
+                "column_enums": json.dumps(column_enums or {}, ensure_ascii=False),
                 "business_tags": business_tags or [],
                 "row_count": row_count or 0,
                 "sample_statistics": json.dumps(sample_statistics or {}, ensure_ascii=False),

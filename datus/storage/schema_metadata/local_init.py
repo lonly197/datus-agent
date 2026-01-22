@@ -12,7 +12,7 @@ from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.db_manager import DBManager
 from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, parse_dialect
+from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, extract_enum_values_from_comment, parse_dialect
 
 from .init_utils import exists_table_value
 
@@ -597,10 +597,19 @@ def store_tables(
                     for col in parsed_metadata.get("columns", [])
                     if col.get("comment")
                 }
+                column_enums: Dict[str, List[Dict[str, str]]] = {}
+                for col_name, col_comment in column_comments.items():
+                    enum_pairs = extract_enum_values_from_comment(col_comment)
+                    if enum_pairs:
+                        column_enums[col_name] = [
+                            {"value": code, "label": label} for code, label in enum_pairs
+                        ]
                 if table_comment:
                     table["table_comment"] = table_comment
                 if column_comments:
                     table["column_comments"] = json.dumps(column_comments, ensure_ascii=False)
+                if column_enums:
+                    table["column_enums"] = json.dumps(column_enums, ensure_ascii=False)
                 if table_comment or column_comments:
                     table["definition"] = table_lineage_store.schema_store._enhance_definition_with_comments(
                         definition=definition,
