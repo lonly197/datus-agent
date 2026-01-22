@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from datus.configuration.agent_config import AgentConfig, DbConfig
 from datus.schemas.base import TABLE_TYPE
@@ -26,6 +26,7 @@ def init_local_schema(
     init_catalog_name: str = "",
     init_database_name: str = "",
     pool_size: int = 4,  # TODO: support multi-threading
+    prune_missing: bool = False,
 ):
     """Initialize local schema from the configured database."""
     logger.info(f"Initializing local schema for namespace: {agent_config.current_namespace}")
@@ -44,6 +45,7 @@ def init_local_schema(
                 db_manager,
                 table_type=table_type,
                 build_mode=build_mode,
+                prune_missing=prune_missing,
             )
         elif db_configs.type == DBType.DUCKDB:
             init_duckdb_schema(
@@ -54,6 +56,7 @@ def init_local_schema(
                 schema_name=init_database_name,
                 table_type=table_type,
                 build_mode=build_mode,
+                prune_missing=prune_missing,
             )
         elif db_configs.type == DBType.MYSQL:
             init_mysql_schema(
@@ -64,6 +67,7 @@ def init_local_schema(
                 database_name=init_database_name,
                 table_type=table_type,
                 build_mode=build_mode,
+                prune_missing=prune_missing,
             )
         elif db_configs.type == DBType.STARROCKS:
             init_starrocks_schema(
@@ -75,6 +79,7 @@ def init_local_schema(
                 database_name=init_database_name,
                 table_type=table_type,
                 build_mode=build_mode,
+                prune_missing=prune_missing,
             )
         else:
             init_other_three_level_schema(
@@ -85,6 +90,7 @@ def init_local_schema(
                 database_name=init_database_name,
                 table_type=table_type,
                 build_mode=build_mode,
+                prune_missing=prune_missing,
             )
 
     else:
@@ -108,6 +114,7 @@ def init_local_schema(
                     db_manager,
                     table_type=table_type,
                     build_mode=build_mode,
+                    prune_missing=prune_missing,
                 )
             elif db_config.type == DBType.DUCKDB:
                 init_duckdb_schema(
@@ -119,6 +126,7 @@ def init_local_schema(
                     schema_name=init_database_name,
                     table_type=table_type,
                     build_mode=build_mode,
+                    prune_missing=prune_missing,
                 )
             else:
                 logger.warning(f"Unsupported database type {db_config.type} for multi-database configuration")
@@ -134,14 +142,16 @@ def init_sqlite_schema(
     db_manager: DBManager,
     table_type: TABLE_TYPE = "table",
     build_mode: str = "overwrite",
+    prune_missing: bool = False,
 ):
     database_name = getattr(db_config, "database", "")
     sql_connector = db_manager.get_conn(agent_config.current_namespace, database_name)
-    all_schema_tables, all_value_tables = exists_table_value(
+    all_schema_tables, all_value_tables, all_schema_metadata = exists_table_value(
         table_lineage_store,
         database_name=database_name,
         table_type=table_type,
         build_mode=build_mode,
+        return_metadata=True,
     )
     logger.info(
         f"Exists data from LanceDB {database_name}, tables={len(all_schema_tables)}, values={len(all_value_tables)}"
@@ -155,9 +165,12 @@ def init_sqlite_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             tables,
             "table",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -167,9 +180,12 @@ def init_sqlite_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             views,
             "view",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
 
 
@@ -182,16 +198,18 @@ def init_duckdb_schema(
     schema_name: str = "",
     table_type: TABLE_TYPE = "table",
     build_mode: str = "overwrite",
+    prune_missing: bool = False,
 ):
     # means schema_name here
     database_name = database_name or getattr(db_config, "database", "")
     schema_name = schema_name or getattr(db_config, "schema", "")
 
-    all_schema_tables, all_value_tables = exists_table_value(
+    all_schema_tables, all_value_tables, all_schema_metadata = exists_table_value(
         table_lineage_store,
         database_name=database_name,
         table_type=table_type,
         build_mode=build_mode,
+        return_metadata=True,
     )
 
     logger.info(
@@ -211,9 +229,12 @@ def init_duckdb_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             tables,
             "table",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -223,9 +244,12 @@ def init_duckdb_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             views,
             "view",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
 
 
@@ -237,18 +261,20 @@ def init_mysql_schema(
     database_name: str = "",
     table_type: TABLE_TYPE = "table",
     build_mode: str = "overwrite",
+    prune_missing: bool = False,
 ):
     database_name = database_name or getattr(db_config, "database", "")
 
     sql_connector = db_manager.get_conn(agent_config.current_namespace)
 
-    all_schema_tables, all_value_tables = exists_table_value(
+    all_schema_tables, all_value_tables, all_schema_metadata = exists_table_value(
         storage=table_lineage_store,
         database_name=database_name,
         catalog_name="",
         schema_name="",
         table_type=table_type,
         build_mode=build_mode,
+        return_metadata=True,
     )
 
     logger.info(
@@ -264,9 +290,12 @@ def init_mysql_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             tables,
             "table",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
 
     if table_type in ("full", "view"):
@@ -277,9 +306,12 @@ def init_mysql_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             views,
             "view",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
 
 
@@ -292,18 +324,20 @@ def init_starrocks_schema(
     database_name: str = "",
     table_type: TABLE_TYPE = "table",
     build_mode: str = "overwrite",
+    prune_missing: bool = False,
 ):
     sql_connector = db_manager.get_conn(agent_config.current_namespace)
     catalog_name = catalog_name or getattr(db_config, "catalog", "") or sql_connector.catalog_name
     database_name = database_name or getattr(db_config, "database", "") or sql_connector.database_name
 
-    all_schema_tables, all_value_tables = exists_table_value(
+    all_schema_tables, all_value_tables, all_schema_metadata = exists_table_value(
         table_lineage_store,
         database_name=database_name,
         catalog_name=catalog_name,
         schema_name="",
         table_type=table_type,
         build_mode=build_mode,
+        return_metadata=True,
     )
 
     logger.info(
@@ -319,9 +353,12 @@ def init_starrocks_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             tables,
             "table",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
 
     if table_type in ("full", "view"):
@@ -331,9 +368,12 @@ def init_starrocks_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             views,
             "view",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
     if table_type in ("full", "view"):
         materialized_views = sql_connector.get_materialized_views_with_ddl(
@@ -344,9 +384,12 @@ def init_starrocks_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             materialized_views,
             "mv",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
 
 
@@ -358,6 +401,7 @@ def init_other_three_level_schema(
     database_name: str = "",
     table_type: TABLE_TYPE = "table",
     build_mode: str = "overwrite",
+    prune_missing: bool = False,
 ):
     db_type = db_config.type
     database_name = database_name or getattr(db_config, "database", "")
@@ -387,13 +431,14 @@ def init_other_three_level_schema(
         if not schema_name and hasattr(sql_connector, "schema_name"):
             schema_name = getattr(sql_connector, "schema_name", "")
 
-    all_schema_tables, all_value_tables = exists_table_value(
+    all_schema_tables, all_value_tables, all_schema_metadata = exists_table_value(
         table_lineage_store,
         database_name=database_name,
         catalog_name=catalog_name,
         schema_name=schema_name,
         table_type=table_type,
         build_mode=build_mode,
+        return_metadata=True,
     )
 
     logger.info(
@@ -441,9 +486,12 @@ def init_other_three_level_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             tables,
             "table",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -464,9 +512,12 @@ def init_other_three_level_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             views,
             "view",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
     if (table_type == "mv" or table_type == "full") and hasattr(sql_connector, "get_materialized_views_with_ddl"):
         materialized_views = sql_connector.get_materialized_views_with_ddl(
@@ -486,9 +537,12 @@ def init_other_three_level_schema(
             database_name,
             all_schema_tables,
             all_value_tables,
+            all_schema_metadata if prune_missing else None,
             materialized_views,
             "mv",
             sql_connector,
+            build_mode=build_mode,
+            prune_missing=prune_missing,
         )
 
 
@@ -497,9 +551,12 @@ def store_tables(
     database_name: str,
     exists_tables: Dict[str, str],
     exists_values: Set[str],
+    exists_metadata: Optional[Dict[str, Dict[str, str]]],
     tables: List[Dict[str, str]],
     table_type: TABLE_TYPE,
     connector: BaseSqlConnector,
+    build_mode: str = "overwrite",
+    prune_missing: bool = False,
 ):
     """
     Store tables to the table_lineage_store.
@@ -507,11 +564,12 @@ def store_tables(
         exists_tables: {full_name: schema_text}
         return the new tables.
     """
-    if not tables:
+    if not tables and not (prune_missing and build_mode == "append"):
         logger.info(f"No schemas of {table_type} to store for {database_name}")
         return
     new_tables: List[Dict[str, Any]] = []
     new_values: List[Dict[str, Any]] = []
+    incoming_identifiers: Set[str] = set()
     for table in tables:
         if not table.get("database_name"):
             table["database_name"] = database_name
@@ -527,6 +585,7 @@ def store_tables(
         table["definition"] = _fix_truncated_ddl(table["definition"])
 
         identifier = table["identifier"]
+        incoming_identifiers.add(identifier)
         if identifier not in exists_tables:
             logger.debug(f"Add {table_type} {identifier}")
             new_tables.append(table)
@@ -552,6 +611,27 @@ def store_tables(
             logger.debug(f"Just add sample rows for {identifier}")
 
             _fill_sample_rows(new_values=new_values, identifier=identifier, table_data=table, connector=connector)
+
+    if prune_missing and build_mode == "append" and exists_metadata is not None:
+        filtered_existing = {
+            identifier: meta
+            for identifier, meta in exists_metadata.items()
+            if meta.get("table_type") == table_type
+        }
+        missing_identifiers = set(filtered_existing.keys()) - incoming_identifiers
+        if missing_identifiers:
+            for missing_identifier in missing_identifiers:
+                missing_meta = filtered_existing.get(missing_identifier, {})
+                table_lineage_store.remove_data(
+                    catalog_name=missing_meta.get("catalog_name", ""),
+                    database_name=missing_meta.get("database_name", ""),
+                    schema_name=missing_meta.get("schema_name", ""),
+                    table_name=missing_meta.get("table_name", ""),
+                    table_type=missing_meta.get("table_type", table_type),
+                )
+            logger.info(
+                f"Pruned {len(missing_identifiers)} {table_type}(s) missing from source for {database_name}"
+            )
 
     if new_tables or new_values:
         for item in new_values:
@@ -685,6 +765,7 @@ def main():
     parser.add_argument("--catalog", default="", help="Catalog name (for StarRocks/Snowflake)")
     parser.add_argument("--table-type", default="full", choices=["table", "view", "mv", "full"], help="Type of tables to import")
     parser.add_argument("--build-mode", default="overwrite", choices=["overwrite", "append"], help="Build mode: overwrite or append")
+    parser.add_argument("--prune-missing", action="store_true", help="Delete tables not present in source when build-mode=append")
 
     args = parser.parse_args()
 
@@ -719,7 +800,11 @@ def main():
     logger.info(f"Namespace: {namespace}")
     logger.info(f"Table type: {args.table_type}")
     logger.info(f"Build mode: {args.build_mode}")
+    logger.info(f"Prune missing: {args.prune_missing}")
     logger.info("")
+
+    if args.prune_missing and args.build_mode != "append":
+        logger.warning("Prune missing is only effective with --build-mode=append; ignoring for overwrite mode")
 
     # Initialize storage
     from datus.storage.schema_metadata import SchemaWithValueRAG
@@ -737,6 +822,7 @@ def main():
             db_manager,
             build_mode=args.build_mode,
             table_type=args.table_type,
+            prune_missing=args.prune_missing,
             init_catalog_name=args.catalog,
             init_database_name=args.database or "",
         )
