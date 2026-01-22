@@ -247,6 +247,53 @@ def validate_comment(comment: Any) -> Tuple[bool, str, Optional[str]]:
 # DDL CLEANUP FUNCTIONS
 # =============================================================================
 
+def _preserve_chinese_comments(sql: str) -> tuple:
+    """
+    Temporarily protect Chinese comment text during DDL cleaning.
+
+    StarRocks uses double quotes for COMMENT text with Chinese characters.
+    This function replaces those comment values with placeholders to prevent
+    them from being removed by aggressive regex patterns.
+
+    Args:
+        sql: DDL string with potential Chinese comments
+
+    Returns:
+        Tuple of (modified_sql, protected_dict) where protected_dict maps
+        placeholders to original COMMENT values
+    """
+    import re
+
+    protected = {}
+    pattern = re.compile(r'COMMENT\s+"([^"]*)"', re.IGNORECASE)
+
+    def replace_with_placeholder(match):
+        content = match.group(0)
+        placeholder = f"__CHINESE_COMMENT_{len(protected)}__"
+        protected[placeholder] = content
+        return f'COMMENT "{placeholder}"'
+
+    result = pattern.sub(replace_with_placeholder, sql)
+    return result, protected
+
+
+def _restore_chinese_comments(sql: str, protected: dict) -> str:
+    """
+    Restore protected Chinese comment text after DDL cleaning.
+
+    Args:
+        sql: DDL string with placeholders
+        protected: Dictionary mapping placeholders to original values
+
+    Returns:
+        DDL string with restored Chinese comments
+    """
+    result = sql
+    for placeholder, original in protected.items():
+        result = result.replace(f'COMMENT "{placeholder}"', original)
+    return result
+
+
 def _clean_ddl(sql: str) -> str:
     """
     Clean corrupted DDL by removing common error message fragments and fixing syntax issues.
@@ -270,55 +317,72 @@ def _clean_ddl(sql: str) -> str:
 
     cleaned = sql
 
+    # Step 0: Preserve Chinese characters in double-quoted strings (StarRocks-specific)
+    # StarRocks uses double quotes for COMMENT text with Chinese characters
+    # We need to protect these from aggressive cleaning
+    protected_content = {}
+    has_chinese = 'COMMENT' in cleaned and any(ord(c) > 127 for c in cleaned)
+    if has_chinese:
+        # Has non-ASCII characters, protect them during cleaning
+        cleaned, protected_content = _preserve_chinese_comments(cleaned)
+
     # Step 1: Fix mismatched quotes in comments
     # Pattern: COMMENT with mismatched quotes (e.g., " opening and ' closing)
     # This handles cases like: COMMENT "text'
-    mismatched_quote_pattern = re.compile(
-        r'COMMENT\s*(["\'])[^"\']*\1?([^"\']*)$',
-        re.IGNORECASE | re.MULTILINE
-    )
-    def fix_mismatched_quotes(match):
-        opening_quote = match.group(1)
-        content = match.group(2)
-        # Close with the same quote type as opening
-        return f'COMMENT {opening_quote}{content}{opening_quote}'
+    # SKIP this step if we have protected Chinese content to avoid corruption
+    if not protected_content:
+        mismatched_quote_pattern = re.compile(
+            r'COMMENT\s*(["\'])[^"\']*\1?([^"\']*)$',
+            re.IGNORECASE | re.MULTILINE
+        )
+        def fix_mismatched_quotes(match):
+            opening_quote = match.group(1)
+            content = match.group(2)
+            # Close with the same quote type as opening
+            return f'COMMENT {opening_quote}{content}{opening_quote}'
 
-    cleaned = mismatched_quote_pattern.sub(fix_mismatched_quotes, cleaned)
+        cleaned = mismatched_quote_pattern.sub(fix_mismatched_quotes, cleaned)
 
-    # Step 2: First, try to fix unclosed quotes by finding COMMENT without closing quote
-    # Pattern: COMMENT followed by quote but no closing quote before end of line or error message
-    # This needs to be done BEFORE error message cleanup to preserve table comments
-    cleaned = _UNCLOSED_COMMENT_RE.sub("", cleaned)
+    # Step 2: REMOVED - This was removing valid Chinese comments
+    # The _UNCLOSED_COMMENT_RE pattern was too aggressive and removed complete comments
+    # We now skip this step to preserve valid DDL content
 
-    # Step 3: Fix incomplete column definitions at the end
-    # Look for patterns like: `column_name without closing parenthesis or comma
-    incomplete_column_pattern = re.compile(
-        r'[`\w]+$',
-        re.MULTILINE
-    )
-    cleaned = incomplete_column_pattern.sub("", cleaned)
+    # Step 3: REMOVED - This pattern was too aggressive and removed valid content
+    # The pattern r'[`\w]+$' was removing Chinese characters from COMMENT fields
+    # We now skip this step to preserve valid DDL content
 
     # Step 4: Apply pre-compiled error message patterns
     for pattern in _ERROR_MESSAGE_PATTERNS:
         cleaned = pattern.sub("", cleaned)
 
-    # Step 5: Fix any remaining unclosed quotes in comments
-    cleaned = _UNCLOSED_QUOTE_RE.sub("", cleaned)
+    # Step 5: REMOVED - Skip unclosed quote fixing when we have Chinese content
+    # The _UNCLOSED_QUOTE_RE pattern was removing valid Chinese comments
+    # Be careful not to remove valid Chinese comments
+    # if not protected_content:
+    #     cleaned = _UNCLOSED_QUOTE_RE.sub("", cleaned)
 
-    # Step 6: Remove trailing incomplete column definitions (more aggressive)
-    # Remove trailing backticks, partial words, or incomplete syntax
-    trailing_incomplete_patterns = [
-        re.compile(r'[`\s]*$', re.MULTILINE),  # Trailing backticks and spaces
-        re.compile(r'[,\s]+$', re.MULTILINE),  # Trailing commas and spaces
-        re.compile(r'\w+$', re.MULTILINE),     # Trailing partial words
-    ]
+    # Step 6: Remove trailing incomplete column definitions (conservative approach)
+    # Only apply if we detect actual truncation (trailing comma, missing semicolon, etc.)
+    # This prevents removing valid Chinese text from COMMENT fields
+    trailing_incomplete_patterns = []
+    ddl_stripped = cleaned.rstrip()
+    if ddl_stripped.endswith(',') or not ddl_stripped.endswith(';'):
+        # Only apply these patterns when actual truncation is detected
+        trailing_incomplete_patterns = [
+            re.compile(r'[`\s]*,[`\s]*$', re.MULTILINE),  # Only trailing comma + backticks
+            re.compile(r',[`\s]*$', re.MULTILINE),  # Just trailing comma
+        ]
     for pattern in trailing_incomplete_patterns:
         cleaned = pattern.sub("", cleaned)
 
-    # Step 7: Clean up multiple spaces
+    # Step 7: Restore protected Chinese comment text BEFORE other processing
+    if protected_content:
+        cleaned = _restore_chinese_comments(cleaned, protected_content)
+
+    # Step 8: Clean up multiple spaces
     cleaned = _MULTI_SPACE_RE.sub(" ", cleaned)
 
-    # Step 8: Final validation - if the SQL still looks incomplete, try to complete it
+    # Step 9: Final validation - if the SQL still looks incomplete, try to complete it
     cleaned = _complete_incomplete_ddl(cleaned)
 
     return cleaned.strip()
@@ -327,6 +391,9 @@ def _clean_ddl(sql: str) -> str:
 def _complete_incomplete_ddl(sql: str) -> str:
     """
     Attempt to complete incomplete DDL statements by adding missing closing parentheses.
+
+    This function accounts for type annotations like varchar(1024) which contain
+    parentheses that should not be counted as CREATE TABLE delimiters.
 
     Args:
         sql: Potentially incomplete DDL
@@ -337,18 +404,45 @@ def _complete_incomplete_ddl(sql: str) -> str:
     if not sql or not isinstance(sql, str):
         return sql
 
-    # Count parentheses
-    open_parens = sql.count('(')
-    close_parens = sql.count(')')
+    # Check if DDL appears to be truncated or incomplete
+    # Use indicators rather than simple parentheses counting
+    ddl_upper = sql.upper().strip()
 
-    # If we have more opening than closing parentheses, try to close them
-    if open_parens > close_parens:
-        # Add missing closing parentheses
-        missing_parens = open_parens - close_parens
-        sql += ')' * missing_parens
+    stripped_sql = sql.rstrip()
+    # Indicators of actual truncation
+    indicators = [
+        stripped_sql.endswith(','),  # Ends with comma (incomplete column list)
+        not stripped_sql.endswith(')'),  # No closing paren near end
+    ]
 
-        # Also add a semicolon if missing
-        if not sql.rstrip().endswith(';'):
+    # Only complete if multiple indicators suggest truncation
+    if sum(indicators) >= 1:
+        # Add one closing paren for CREATE TABLE if clearly missing
+        # (not for each varchar() - those are already balanced in valid DDL)
+        if not stripped_sql.endswith(')'):
+            if stripped_sql.endswith(';'):
+                sql = stripped_sql.rstrip(';')
+            sql += '\n)'
+
+        # Add ENGINE clause if completely missing and this looks like StarRocks
+        stripped_sql = sql.rstrip()
+        ddl_upper = sql.upper().strip()
+        starrocks_indicators = [
+            'DUPLICATE KEY' in ddl_upper,
+            'AGGREGATE KEY' in ddl_upper,
+            'UNIQUE KEY' in ddl_upper,
+            'PRIMARY KEY' in ddl_upper,
+            'DISTRIBUTED BY' in ddl_upper,
+            'PARTITION BY' in ddl_upper,
+            'PROPERTIES' in ddl_upper,
+        ]
+        if 'ENGINE=' not in ddl_upper and any(starrocks_indicators):
+            if not stripped_sql.endswith(';'):
+                sql += ' ENGINE=OLAP;'
+            else:
+                sql = sql.rstrip(';') + ' ENGINE=OLAP;'
+        # Add semicolon if missing
+        elif not stripped_sql.endswith(';'):
             sql += ';'
 
     return sql

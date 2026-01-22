@@ -29,6 +29,9 @@ from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, parse_dialect
 from datus.utils.constants import DBType
 
+# Import _fix_truncated_ddl to fix truncated DDL before parsing
+from datus.storage.schema_metadata.local_init import _fix_truncated_ddl
+
 logger = get_logger(__name__)
 
 
@@ -411,6 +414,10 @@ def migrate_schema_storage(
                 table_name = row["table_name"]
                 table_type = row["table_type"]
                 definition = row["definition"]
+
+                # Fix truncated DDL before parsing
+                # This handles incomplete DDL statements from SHOW CREATE TABLE
+                definition = _fix_truncated_ddl(definition)
 
                 # Parse enhanced metadata from DDL with dialect detection
                 detected_dialect = detect_dialect_from_ddl(definition)
