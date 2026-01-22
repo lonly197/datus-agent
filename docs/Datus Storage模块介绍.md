@@ -1,0 +1,614 @@
+# Datus Storage 模块介绍
+
+> **文档版本**: v2.0
+> **更新日期**: 2026-01-22
+> **相关模块**: `datus/storage/`
+> **代码仓库**: [Datus Agent](https://github.com/Datus-ai/Datus-agent)
+
+---
+
+## 模块概述
+
+### 核心功能
+
+Datus Storage 模块是一个基于 **LanceDB 向量数据库** 的多层知识存储系统，为 Text2SQL 和数据工程应用提供智能化的元数据管理和语义检索能力。
+
+### 设计架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    StorageCache (缓存层)                      │
+│  ┌─────────────┬──────────────┬──────────────┬────────────┐│
+│  │SchemaStorage│MetricStorage │RefSqlStorage │DocumentStore││
+│  └─────────────┴──────────────┴──────────────┴────────────┘│
+└─────────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────┐
+│                   Base Classes (基类层)                       │
+│  ┌─────────────────┬──────────────────┬───────────────────┐│
+│  │StorageBase      │BaseEmbeddingStore│BaseSubjectEmbedding││
+│  │(LanceDB连接)    │(向量嵌入存储)     │Store(主题树集成)   ││
+│  └─────────────────┴──────────────────┴───────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────┐
+│                   Storage Engines (存储引擎)                  │
+│  ┌─────────────┬──────────────┬──────────────┬────────────┐│
+│  │  LanceDB    │   SQLite     │  FastEmbed   │ SubjectTree││
+│  │(向量数据库)  │(主题树存储)   │(嵌入模型)    │(层次结构)  ││
+│  └─────────────┴──────────────┴──────────────┴────────────┘│
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 存储类型详解
+
+### 1. SchemaStorage - 表结构存储
+
+**用途**: 存储数据库表、视图、物化视图的 DDL 定义和增强元数据
+
+**核心字段**:
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `identifier` | string | 唯一标识符: `catalog.database.schema.table.type` |
+| `catalog_name` | string | 目录名 (StarRocks/Snowflake) |
+| `database_name` | string | 数据库名 |
+| `schema_name` | string | 模式名/命名空间 |
+| `table_name` | string | 表名 |
+| `table_type` | string | 类型: `table`/`view`/`mv` |
+| `definition` | string | DDL 定义 (含中文注释增强) |
+| `table_comment` | string | 表注释 |
+| `column_comments` | string | 列注释 JSON |
+| `business_tags` | list[string] | 业务标签 |
+| `row_count` | int64 | 行数统计 |
+| `sample_statistics` | string | 列统计 JSON |
+| `vector` | list[float32] | 向量嵌入 |
+
+**核心方法**:
+```python
+# 语义搜索表结构
+search_similar(query_text, database_name, schema_name, top_n)
+
+# 获取单个表结构
+get_schema(table_name, catalog_name, database_name, schema_name)
+
+# 批量获取表结构
+get_table_schemas(table_names, catalog_name, database_name, schema_name)
+
+# 更新表结构 (元数据修复)
+update_table_schema(table_name, definition, table_comment, column_comments, ...)
+
+# 获取所有表
+search_all(catalog_name, database_name, schema_name, table_type)
+```
+
+### 2. SchemaValueStorage - 样本数据存储
+
+**用途**: 存储表的样本数据 (通常为前5行)，用于数据理解
+
+**核心字段**:
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `identifier` | string | 唯一标识符 |
+| `sample_rows` | string | 样本数据 (CSV 格式) |
+| `vector` | list[float32] | 向量嵌入 |
+
+**使用场景**: 配合 SchemaStorage 提供完整的表结构理解
+
+### 3. MetricStorage - 业务指标存储
+
+**用途**: 存储业务指标和 KPI，支持主题树层次化组织
+
+**核心字段**:
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `subject_node_id` | int64 | 主题树节点 ID |
+| `name` | string | 指标名称 |
+| `semantic_model_name` | string | 所属语义模型 |
+| `llm_text` | string | LLM 描述文本 (用于嵌入) |
+| `vector` | list[float32] | 向量嵌入 |
+
+**核心方法**:
+```python
+# 语义搜索指标
+search_metrics(query_text, subject_path, semantic_model_names, top_n)
+
+# 获取所有指标
+search_all_metrics(subject_path, semantic_model_names)
+
+# 批量存储指标
+batch_store_metrics(metrics)
+```
+
+**主题树组织示例**:
+```
+Finance
+├── Revenue
+│   ├── Q1
+│   │   ├── total_revenue
+│   │   └── growth_rate
+│   └── Q2
+└── Costs
+    └── Operations
+```
+
+### 4. SemanticModelStorage - 语义模型存储
+
+**用途**: 存储语义模型定义 (维度、度量、标识符)
+
+**核心字段**:
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `id` | string | 模型 ID |
+| `semantic_model_name` | string | 语义模型名称 |
+| `semantic_model_desc` | string | 模型描述 |
+| `identifiers` | string | 标识符 JSON |
+| `dimensions` | string | 维度定义 |
+| `measures` | string | 度量定义 |
+| `vector` | list[float32] | 向量嵌入 |
+
+### 5. ReferenceSqlStorage - 参考SQL存储
+
+**用途**: 存储历史 SQL 查询和最佳实践
+
+**核心字段**:
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `subject_node_id` | int64 | 主题树节点 ID |
+| `name` | string | SQL 名称 |
+| `sql` | string | SQL 语句 |
+| `comment` | string | 注释 |
+| `summary` | string | 摘要 (用于嵌入) |
+| `search_text` | string | 搜索文本 |
+| `filepath` | string | 文件路径 |
+| `tags` | string | 标签 |
+
+**核心方法**:
+```python
+# 语义搜索 SQL
+search_reference_sql(query_text, subject_path, top_n)
+
+# 获取所有 SQL
+search_all_reference_sql(subject_path)
+
+# 批量存储 SQL
+batch_store_sql(sql_items)
+```
+
+### 6. DocumentStore - 文档存储
+
+**用途**: 存储文档块，支持长文档的语义检索
+
+**核心字段**:
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `title` | string | 文档标题 |
+| `hierarchy` | string | 层次结构路径 |
+| `keywords` | list[string] | 关键词 |
+| `language` | string | 语言 |
+| `chunk_text` | string | 文档块文本 |
+| `vector` | list[float64] | 向量嵌入 |
+
+### 7. SubjectTreeStore - 主题树存储
+
+**用途**: SQLite 实现的层次化主题分类系统
+
+**数据结构** (邻接表模型):
+```sql
+CREATE TABLE subject_nodes (
+    node_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER,              -- 父节点 ID (NULL 表示根节点)
+    name TEXT NOT NULL,             -- 节点名称
+    description TEXT,               -- 描述
+    created_at TEXT,                -- 创建时间
+    updated_at TEXT,                -- 更新时间
+    UNIQUE(parent_id, name)         -- 同一父节点下名称唯一
+)
+```
+
+**核心方法**:
+```python
+# CRUD 操作
+create_node(parent_id, name, description)
+get_node(node_id)
+update_node(node_id, name, description, parent_id)
+delete_node(node_id, cascade)
+
+# 树遍历
+get_children(parent_id)              # 获取直接子节点
+get_descendants(node_id)             # 获取所有后代
+get_ancestors(node_id)               # 获取所有祖先
+get_full_path(node_id)               # 获取完整路径
+
+# 路径操作
+find_or_create_path(path_components) # 查找或创建路径
+get_node_by_path(path)               # 通过路径获取节点
+rename(old_path, new_path)           # 重命名/移动节点
+
+# 树结构
+get_tree_structure()                 # 获取嵌套树结构
+get_simple_tree_structure()          # 获取简单树结构
+
+# 模式匹配
+get_matched_children_id(path, descendant=True)  # 支持通配符的节点匹配
+```
+
+**路径示例**: `['Finance', 'Revenue', 'Q1']`
+
+---
+
+## 索引策略
+
+### 向量索引
+
+根据数据集大小自动选择索引类型:
+
+```python
+# 代码位置: datus/storage/base.py:191-256
+if row_count >= 5000:
+    index_type = "IVF_PQ"  # 大数据集: 产品量化压缩
+else:
+    index_type = "IVF_FLAT"  # 小数据集: 精确搜索
+```
+
+**IVF 参数自动计算**:
+- `num_partitions`: √n (最大1024)
+- `num_sub_vectors`: 根据向量维度和数据量调整 (8-96)
+
+### 标量索引
+
+为常用字段创建标量索引，加速精确查找:
+```python
+table.create_scalar_index("database_name", replace=True)
+table.create_scalar_index("table_name", replace=True)
+table.create_scalar_index("subject_node_id", replace=True)
+```
+
+### 全文搜索索引 (FTS)
+
+为文本字段创建全文搜索索引:
+```python
+create_fts_index(["definition", "table_name", "schema_name"])
+```
+
+---
+
+## 子代理作用域存储
+
+### 设计理念
+
+支持为每个子代理 (Sub-Agent) 创建独立的知识库，实现上下文隔离。
+
+### 存储路径管理
+
+```python
+# 全局存储路径
+agent_config.rag_storage_path()  # ~/.datus/data/kb
+
+# 子代理存储路径
+agent_config.sub_agent_storage_path(sub_agent_name)
+# ~/.datus/data/sub_agents/{sub_agent_name}/data
+```
+
+### 作用域配置
+
+在 `agent.yml` 中配置子代理的作用域上下文:
+
+```yaml
+sub_agents:
+  sales_agent:
+    scoped_context:
+      tables: true    # 使用独立的表元数据
+      metrics: true   # 使用独立的指标
+      sqls: false     # 共享全局 SQL
+```
+
+### 缓存机制
+
+```python
+# 代码位置: datus/storage/cache.py
+@lru_cache(maxsize=12)
+def _cached_storage(factory, path, model_name):
+    return factory(path, get_embedding_model(model_name))
+```
+
+---
+
+## 增强元数据 (v1 Schema)
+
+### 中文注释支持
+
+DDL 定义会自动添加中文注释前缀，提升中文查询的语义搜索效果:
+
+```python
+def _enhance_definition_with_comments(
+    definition: str,
+    table_comment: str = "",
+    column_comments: Optional[Dict[str, str]] = None,
+) -> str:
+    """增强 DDL 定义，添加中文注释"""
+    enhanced_parts = []
+
+    if table_comment:
+        enhanced_parts.append(f"-- 表注释: {table_comment}")
+
+    if column_comments:
+        for col_name, col_comment in column_comments.items():
+            enhanced_parts.append(f"-- 列 {col_name}: {col_comment}")
+
+    enhanced_parts.append(definition)
+    return "\n".join(enhanced_parts)
+```
+
+### 增强字段
+
+| 字段 | 优先级 | 说明 |
+|------|--------|------|
+| `table_comment` | HIGH | 从 DDL COMMENT 提取 |
+| `column_comments` | HIGH | 列注释 JSON |
+| `business_tags` | HIGH | 业务领域标签 |
+| `row_count` | MEDIUM | 表行数 |
+| `sample_statistics` | MEDIUM | 列统计信息 |
+| `relationship_metadata` | MEDIUM | 外键和关联路径 |
+| `metadata_version` | - | 元数据版本 (0=旧版, 1=增强) |
+
+---
+
+## 搜索模式
+
+### 1. 向量搜索
+
+基于语义相似度的搜索:
+```python
+search(query_txt, select_fields, top_n, where, reranker)
+```
+
+### 2. 混合搜索
+
+结合向量和全文搜索，可选重排序:
+```python
+search(
+    query_txt,
+    reranker=custom_reranker,  # 可选重排序器
+    ...
+)
+```
+
+### 3. 条件构建 DSL
+
+类型安全的查询条件构建:
+```python
+from datus.storage.lancedb_conditions import and_, or_, eq, in_, like
+
+# 构建复杂条件
+where = and_(
+    eq("database_name", "sales"),
+    in_("table_type", ["table", "view"]),
+    like("table_name", "customer%")
+)
+```
+
+### 4. 主题过滤搜索
+
+结合主题树的层次化过滤:
+```python
+search_with_subject_filter(
+    query_text="销售指标",
+    subject_path=["Finance", "Revenue"],  # 主题路径
+    top_n=5
+)
+```
+
+---
+
+## 初始化命令
+
+### bootstrap-kb 命令
+
+```bash
+datus-agent bootstrap-kb --namespace <your_namespace> --kb_update_strategy <strategy>
+```
+
+**策略选项**:
+- `check`: 检查当前数据条目数量
+- `overwrite`: 完全覆盖现有数据
+- `incremental`: 增量更新 (变更更新 + 新增追加)
+
+### 示例
+
+```bash
+# 检查状态
+datus-agent bootstrap-kb --namespace my_database --kb_update_strategy check
+
+# 完全重建
+datus-agent bootstrap-kb --namespace my_database --kb_update_strategy overwrite
+
+# 增量更新
+datus-agent bootstrap-kb --namespace my_database --kb_update_strategy incremental
+```
+
+---
+
+## 最佳实践
+
+### 1. 数据库配置
+
+```yaml
+# agent.yml
+namespace:
+  production_snowflake:
+    type: snowflake
+    account: ${SNOWFLAKE_ACCOUNT}
+    username: ${SNOWFLAKE_USER}
+    password: ${SNOWFLAKE_PASSWORD}
+    database: ANALYTICS
+```
+
+### 2. 嵌入模型选择
+
+```python
+# 支持的嵌入模型
+- bge-large-zh-v1.5   # 中文优先 (1024 维)
+- bge-large-en-v1.5   # 英文优先 (1024 维)
+- multilingual-e5     # 多语言支持
+```
+
+### 3. 索引创建时机
+
+```python
+# 数据加载完成后创建索引
+def after_init():
+    schema_store.create_indices()
+    value_store.create_indices()
+```
+
+### 4. 批处理优化
+
+```python
+# 大数据量分批处理
+batch_size = 500
+for i in range(0, len(data), batch_size):
+    batch = data[i:i + batch_size]
+    store.store_batch(batch)
+```
+
+---
+
+## 故障排查
+
+### 常见问题
+
+1. **权限错误**: 确保数据库用户有访问系统表/信息模式的权限
+2. **连接超时**: 检查网络连接和数据库可用性
+3. **嵌入模型失败**: 检查模型文件是否已下载到 `~/.datus/models/`
+4. **存储路径冲突**: 子代理使用独立存储路径避免冲突
+
+### 验证方法
+
+```bash
+# 检查配置
+datus-agent --config-check
+
+# 测试数据库连接
+datus-agent --test-db-connection
+
+# 验证工作流
+datus-agent --validate-workflow
+```
+
+---
+
+## API 参考
+
+### SchemaStorage
+
+```python
+class SchemaStorage(BaseMetadataStorage):
+    def search_similar(
+        self,
+        query_text: str,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        top_n: int = 5,
+        table_type: TABLE_TYPE = "table",
+        reranker: Optional[Reranker] = None,
+    ) -> pa.Table
+
+    def get_schema(
+        self,
+        table_name: str,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = ""
+    ) -> pa.Table
+
+    def get_table_schemas(
+        self,
+        table_names: List[str],
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = ""
+    ) -> pa.Table
+
+    def update_table_schema(
+        self,
+        table_name: str,
+        definition: str,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_type: TABLE_TYPE = "table",
+        table_comment: str = "",
+        column_comments: Optional[Dict[str, str]] = None,
+        business_tags: Optional[List[str]] = None,
+        row_count: int = 0,
+        sample_statistics: Optional[Dict[str, Dict]] = None,
+        relationship_metadata: Optional[Dict[str, Any]] = None,
+        metadata_version: int = 1,
+    ) -> bool
+```
+
+### MetricStorage
+
+```python
+class MetricStorage(BaseSubjectEmbeddingStore):
+    def search_metrics(
+        self,
+        query_text: str = "",
+        semantic_model_names: Optional[List[str]] = None,
+        subject_path: Optional[List[str]] = None,
+        top_n: int = 5,
+    ) -> List[Dict[str, Any]]
+
+    def search_all_metrics(
+        self,
+        semantic_model_names: Optional[List[str]] = None,
+        subject_path: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]
+
+    def batch_store_metrics(self, metrics: List[Dict[str, Any]]) -> None
+```
+
+### SubjectTreeStore
+
+```python
+class SubjectTreeStore:
+    def create_node(
+        self,
+        parent_id: Optional[int],
+        name: str,
+        description: str = ""
+    ) -> Dict[str, Any]
+
+    def get_node_by_path(self, path: List[str]) -> Optional[Dict[str, Any]]
+
+    def find_or_create_path(self, path_components: List[str]) -> int
+
+    def get_full_path(self, node_id: int) -> List[str]
+
+    def rename(self, old_path: List[str], new_path: List[str]) -> bool
+```
+
+---
+
+## 架构演进
+
+### v0 → v1 主要变化
+
+1. **增强元数据**: 添加 `table_comment`, `column_comments`, `business_tags` 等字段
+2. **中文注释**: DDL 自动添加中文注释前缀
+3. **主题树集成**: 指标和 SQL 支持层次化主题组织
+4. **子代理隔离**: 支持独立的知识库作用域
+5. **智能索引**: 根据数据量自动选择索引类型
+6. **缓存优化**: LRU 缓存提升性能
+
+---
+
+## 相关资源
+
+- **项目主页**: [https://datus.ai](https://datus.ai)
+- **文档**: [https://docs.datus.ai](https://docs.datus.ai)
+- **GitHub**: [https://github.com/Datus-ai/Datus-agent](https://github.com/Datus-ai/Datus-agent)
+- **Slack 社区**: [https://join.slack.com/t/datus-ai](https://join.slack.com/t/datus-ai/shared_invite/zt-3g6h4fsdg-iOl5uNoz6A4GOc4xKKWUYg)
