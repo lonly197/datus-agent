@@ -18,6 +18,7 @@ from datus.storage.lancedb_conditions import Node, and_, build_where, eq, or_
 from datus.utils.constants import DBType
 from datus.utils.json_utils import json2csv
 from datus.utils.loggings import get_logger
+from datus.utils.sql_utils import extract_enum_values_from_comment
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -213,6 +214,10 @@ class SchemaStorage(BaseMetadataStorage):
             for col_name, col_comment in column_comments.items():
                 if col_comment and col_comment.strip():
                     enhanced_parts.append(f"-- 列 {col_name}: {col_comment}")
+                    enum_pairs = extract_enum_values_from_comment(col_comment)
+                    if enum_pairs:
+                        formatted = "; ".join([f"{code}={label}" for code, label in enum_pairs])
+                        enhanced_parts.append(f"-- 列 {col_name} 枚举: {formatted}")
 
         # Add original DDL
         enhanced_parts.append(definition)

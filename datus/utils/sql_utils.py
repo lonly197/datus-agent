@@ -52,6 +52,11 @@ _COLUMN_COMMENT_RE = re.compile(
     re.IGNORECASE
 )
 
+_ENUM_PAIR_RE = re.compile(
+    r'(?P<code>-?\d+)\s*[:：=\-]\s*(?P<label>[^;；,，、)]*?)\s*(?=(?:-?\d+\s*[:：=\-])|$)',
+    re.IGNORECASE,
+)
+
 _COLUMN_DEF_RE = re.compile(
     r'`?([\w]+)`?\s+(\w+(?:\([^)]{0,100}\))?)\s*(NULL|NOT\s+NULL)?',
     re.IGNORECASE
@@ -273,6 +278,101 @@ def validate_comment(comment: Any) -> Tuple[bool, str, Optional[str]]:
 
     return True, "", sanitized
 
+
+def extract_enum_values_from_comment(comment: str) -> List[Tuple[str, str]]:
+    """
+    Extract enum-like code/label pairs from a comment string.
+
+    Example: "客户类型（0：售前客户、1：售后客户）" -> [("0", "售前客户"), ("1", "售后客户")]
+    """
+    if not comment or not isinstance(comment, str):
+        return []
+
+    matches = list(_ENUM_PAIR_RE.finditer(comment))
+    if not matches:
+        return []
+
+    pairs: List[Tuple[str, str]] = []
+    for match in matches:
+        code = match.group("code").strip()
+        label = match.group("label").strip()
+        if not code or not label:
+            continue
+        pairs.append((code, label))
+
+    # Require at least 2 pairs to reduce false positives.
+    if len(pairs) < 2:
+        return []
+
+    return pairs
+
+
+def _extract_table_comment_after_columns(sql: str) -> Optional[str]:
+    """
+    Extract table-level COMMENT after the column list, avoiding column comments.
+    """
+    if not sql or not isinstance(sql, str):
+        return None
+
+    create_match = re.search(r"CREATE\s+TABLE", sql, re.IGNORECASE)
+    start_scan = create_match.end() if create_match else 0
+
+    in_single_quote = False
+    in_double_quote = False
+    in_backtick = False
+    escaped = False
+    paren_count = 0
+    start_idx = -1
+    end_idx = -1
+
+    for i in range(start_scan, len(sql)):
+        char = sql[i]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if in_single_quote:
+            if char == "'":
+                in_single_quote = False
+            continue
+        if in_double_quote:
+            if char == '"':
+                in_double_quote = False
+            continue
+        if in_backtick:
+            if char == "`":
+                in_backtick = False
+            continue
+        if char == "'":
+            in_single_quote = True
+            continue
+        if char == '"':
+            in_double_quote = True
+            continue
+        if char == "`":
+            in_backtick = True
+            continue
+        if char == '(':
+            if paren_count == 0:
+                start_idx = i
+            paren_count += 1
+        elif char == ')':
+            paren_count -= 1
+            if paren_count == 0 and start_idx >= 0:
+                end_idx = i
+                break
+
+    if end_idx < 0:
+        return None
+
+    tail = sql[end_idx + 1 :]
+    comment_match = re.search(r'COMMENT\s*(?:=\s*)?([\'"])(.*?)\1', tail, re.IGNORECASE | re.DOTALL)
+    if not comment_match:
+        return None
+
+    return comment_match.group(2)
 
 # =============================================================================
 # DDL CLEANUP FUNCTIONS
@@ -630,6 +730,12 @@ def parse_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[s
                     is_valid, _, comment = validate_comment(table_comment_matches[-1])
                     if is_valid:
                         result["table"]["comment"] = comment
+                else:
+                    table_comment = _extract_table_comment_after_columns(sql)
+                    if table_comment:
+                        is_valid, _, comment = validate_comment(table_comment)
+                        if is_valid:
+                            result["table"]["comment"] = comment
 
             # Get column definitions
             for column in parsed.this.expressions:
@@ -818,6 +924,12 @@ def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE
                         is_valid, _, comment = validate_comment(table_comment_matches[-1])
                         if is_valid:
                             result["table"]["comment"] = comment
+                    else:
+                        table_comment = _extract_table_comment_after_columns(sql_to_parse)
+                        if table_comment:
+                            is_valid, _, comment = validate_comment(table_comment)
+                            if is_valid:
+                                result["table"]["comment"] = comment
 
                 # Success criteria: at least have table name and some columns
                 if result["table"]["name"] and columns_parsed > 0:
@@ -901,23 +1013,29 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
 
     # Extract table comment from ORIGINAL SQL before cleaning
     # This preserves comments even if error messages were appended
-    original_comment_matches = _TABLE_COMMENT_RE.findall(original_sql)
-    if not original_comment_matches:
-        # Fallback: try loose pattern for corrupted DDL
-        original_comment_matches = _TABLE_COMMENT_LOOSE_RE.findall(original_sql)
-        if original_comment_matches:
-            # Clean up trailing error messages from the extracted comment
-            comment = original_comment_matches[-1]
-            comment = re.sub(r"\s*contains.*$", "", comment)
-            comment = re.sub(r"\s*is not valid.*$", "", comment)
-            comment = re.sub(r"\s*unexpected.*$", "", comment)
-            is_valid, _, comment = validate_comment(comment)
-            if is_valid:
-                result["table"]["comment"] = comment
-    else:
-        is_valid, _, comment = validate_comment(original_comment_matches[-1])
+    original_comment = _extract_table_comment_after_columns(original_sql)
+    if original_comment:
+        is_valid, _, comment = validate_comment(original_comment)
         if is_valid:
             result["table"]["comment"] = comment
+    if not result["table"]["comment"]:
+        original_comment_matches = _TABLE_COMMENT_RE.findall(original_sql)
+        if not original_comment_matches:
+            # Fallback: try loose pattern for corrupted DDL
+            original_comment_matches = _TABLE_COMMENT_LOOSE_RE.findall(original_sql)
+            if original_comment_matches:
+                # Clean up trailing error messages from the extracted comment
+                comment = original_comment_matches[-1]
+                comment = re.sub(r"\s*contains.*$", "", comment)
+                comment = re.sub(r"\s*is not valid.*$", "", comment)
+                comment = re.sub(r"\s*unexpected.*$", "", comment)
+                is_valid, _, comment = validate_comment(comment)
+                if is_valid:
+                    result["table"]["comment"] = comment
+        else:
+            is_valid, _, comment = validate_comment(original_comment_matches[-1])
+            if is_valid:
+                result["table"]["comment"] = comment
 
     # Clean the DDL
     sql = _clean_ddl(original_sql)
@@ -940,6 +1058,12 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
                 is_valid, _, comment = validate_comment(comment_matches[-1])
                 if is_valid:
                     result["table"]["comment"] = comment
+            else:
+                table_comment = _extract_table_comment_after_columns(sql)
+                if table_comment:
+                    is_valid, _, comment = validate_comment(table_comment)
+                    if is_valid:
+                        result["table"]["comment"] = comment
 
         # Find the content between the first ( and the matching )
         paren_count = 0

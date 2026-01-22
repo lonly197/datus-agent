@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import json
 from typing import Any, Dict, List, Optional, Set
 
 from datus.configuration.agent_config import AgentConfig, DbConfig
@@ -11,6 +12,7 @@ from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.db_manager import DBManager
 from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
+from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, parse_dialect
 
 from .init_utils import exists_table_value
 
@@ -583,6 +585,30 @@ def store_tables(
 
         # Fix truncated DDL before storing
         table["definition"] = _fix_truncated_ddl(table["definition"])
+        definition = table.get("definition", "")
+        if definition:
+            try:
+                parsed_metadata = extract_enhanced_metadata_from_ddl(
+                    definition, dialect=parse_dialect(getattr(connector, "dialect", ""))
+                )
+                table_comment = parsed_metadata["table"].get("comment", "") or ""
+                column_comments = {
+                    col["name"]: col.get("comment", "")
+                    for col in parsed_metadata.get("columns", [])
+                    if col.get("comment")
+                }
+                if table_comment:
+                    table["table_comment"] = table_comment
+                if column_comments:
+                    table["column_comments"] = json.dumps(column_comments, ensure_ascii=False)
+                if table_comment or column_comments:
+                    table["definition"] = table_lineage_store.schema_store._enhance_definition_with_comments(
+                        definition=definition,
+                        table_comment=table_comment,
+                        column_comments=column_comments,
+                    )
+            except Exception as e:
+                logger.debug(f"Failed to parse DDL comments for {table.get('table_name', '')}: {e}")
 
         identifier = table["identifier"]
         incoming_identifiers.add(identifier)
