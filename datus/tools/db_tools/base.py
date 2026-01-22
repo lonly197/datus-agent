@@ -25,7 +25,16 @@ class BaseSqlConnector(ABC):
 
     def __init__(self, config: ConnectionConfig, dialect: str):
         self.config = config
-        self.timeout_seconds = config.timeout_seconds
+        # Handle both ConnectionConfig objects and dicts (for adapters)
+        if hasattr(config, 'timeout_seconds'):
+            # ConnectionConfig object
+            self.timeout_seconds = config.timeout_seconds
+        elif isinstance(config, dict):
+            # Dict from adapter - extract timeout with fallback
+            self.timeout_seconds = config.get('timeout_seconds', 30)
+        else:
+            # Fallback
+            self.timeout_seconds = 30
         self.connection: Any = None
         self.dialect = dialect
         self.catalog_name = ""

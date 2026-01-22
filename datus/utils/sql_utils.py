@@ -164,6 +164,16 @@ def validate_sql_input(sql: Any, max_length: int = MAX_SQL_LENGTH) -> Tuple[bool
     if '\x00' in sql:
         return False, "NULL bytes not allowed in SQL"
 
+    # Additional validation for CREATE TABLE statements
+    # Check if it's a truncated CREATE TABLE statement
+    sql_upper = sql.upper().strip()
+    if sql_upper.startswith("CREATE TABLE"):
+        # If the statement seems truncated (ends with incomplete comment or doesn't end with semicolon)
+        if not sql.rstrip().endswith(';') and ' COMMENT ' in sql:
+            # This might be a truncated DDL with incomplete comment
+            # Don't reject it, just warn
+            logger.debug(f"Potentially truncated DDL detected: {sql[:100]}...")
+
     return True, ""
 
 
@@ -1023,3 +1033,225 @@ def parse_sql_type(sql: str, dialect: str = DBType.SNOWFLAKE) -> SQLType:
 
     # If we can't determine the type, return UNKNOWN
     return SQLType.UNKNOWN
+
+
+def parse_context_switch(sql: str, dialect: str = DBType.SNOWFLAKE) -> Optional[Dict[str, Any]]:
+    """
+    Parse database context switch commands (USE, SET) to extract database/schema/catalog information.
+
+    This function parses SQL commands that switch database context, such as:
+    - USE database_name (MySQL, DuckDB)
+    - USE catalog.database (StarRocks)
+    - USE database.schema (Snowflake)
+    - SET catalog catalog_name (StarRocks)
+
+    Args:
+        sql: SQL command string to parse
+        dialect: SQL dialect (affects how context switches are interpreted)
+
+    Returns:
+        Dictionary containing:
+        - command: Command type ("USE" or "SET")
+        - target: What is being switched ("database", "schema", or "catalog")
+        - catalog_name: Catalog name (if applicable)
+        - database_name: Database name (if applicable)
+        - schema_name: Schema name (if applicable)
+        - fuzzy: Whether the context switch is ambiguous
+        - raw: Original SQL command
+        Or None if the command is not a context switch
+
+    Examples:
+        >>> parse_context_switch("USE analytics", dialect=DBType.DUCKDB)
+        {
+            "command": "USE",
+            "target": "schema",
+            "catalog_name": "",
+            "database_name": "",
+            "schema_name": "analytics",
+            "fuzzy": True,
+            "raw": "USE analytics"
+        }
+        >>> parse_context_switch("USE lakehouse.sales", dialect=DBType.STARROCKS)
+        {
+            "command": "USE",
+            "target": "database",
+            "catalog_name": "lakehouse",
+            "database_name": "sales",
+            "schema_name": "",
+            "fuzzy": False,
+            "raw": "USE lakehouse.sales"
+        }
+    """
+    if not sql or not sql.strip():
+        return None
+
+    # Clean the SQL: remove leading/trailing whitespace
+    sql_clean = sql.strip()
+
+    # Normalize case for parsing
+    sql_upper = sql_clean.upper()
+
+    # Check for context switch commands
+    if sql_upper.startswith("USE "):
+        return _parse_use_command(sql_clean, dialect)
+    elif sql_upper.startswith("SET "):
+        return _parse_set_command(sql_clean, dialect)
+
+    return None
+
+
+def _parse_use_command(sql: str, dialect: str) -> Dict[str, Any]:
+    """Parse USE command to extract context information."""
+    # Extract the part after "USE"
+    # Supports: USE database, USE catalog.database, USE database.schema
+    use_pattern = re.match(r'^\s*USE\s+(.+?)\s*$', sql, re.IGNORECASE)
+    if not use_pattern:
+        return None
+
+    target_str = use_pattern.group(1).strip()
+
+    # Remove quotes if present
+    if (target_str.startswith('`') and target_str.endswith('`')) or \
+       (target_str.startswith('"') and target_str.endswith('"')) or \
+       (target_str.startswith("'") and target_str.endswith("'")):
+        target_str = target_str[1:-1]
+
+    # Parse based on dialect
+    if dialect == DBType.MYSQL:
+        # MySQL: USE database
+        return {
+            "command": "USE",
+            "target": "database",
+            "catalog_name": "",
+            "database_name": target_str,
+            "schema_name": "",
+            "fuzzy": False,
+            "raw": sql.strip()
+        }
+
+    elif dialect == DBType.DUCKDB:
+        # DuckDB: USE schema or USE database.schema
+        if "." in target_str:
+            # database.schema format
+            parts = target_str.split(".", 1)
+            return {
+                "command": "USE",
+                "target": "schema",
+                "catalog_name": "",
+                "database_name": parts[0],
+                "schema_name": parts[1],
+                "fuzzy": False,
+                "raw": sql.strip()
+            }
+        else:
+            # Just schema name - fuzzy because DuckDB treats schemas like databases
+            return {
+                "command": "USE",
+                "target": "schema",
+                "catalog_name": "",
+                "database_name": "",
+                "schema_name": target_str,
+                "fuzzy": True,
+                "raw": sql.strip()
+            }
+
+    elif dialect == DBType.STARROCKS:
+        # StarRocks: USE catalog.database or USE database
+        if "." in target_str:
+            # catalog.database format
+            parts = target_str.split(".", 1)
+            return {
+                "command": "USE",
+                "target": "database",
+                "catalog_name": parts[0],
+                "database_name": parts[1],
+                "schema_name": "",
+                "fuzzy": False,
+                "raw": sql.strip()
+            }
+        else:
+            # Just database name
+            return {
+                "command": "USE",
+                "target": "database",
+                "catalog_name": "",
+                "database_name": target_str,
+                "schema_name": "",
+                "fuzzy": False,
+                "raw": sql.strip()
+            }
+
+    elif dialect in [DBType.SNOWFLAKE, DBType.BIGQUERY]:
+        # Snowflake/BigQuery: USE database.schema
+        if "." in target_str:
+            # database.schema format
+            parts = target_str.split(".", 1)
+            return {
+                "command": "USE",
+                "target": "schema",
+                "catalog_name": "",
+                "database_name": parts[0],
+                "schema_name": parts[1],
+                "fuzzy": False,
+                "raw": sql.strip()
+            }
+        else:
+            # Just database name
+            return {
+                "command": "USE",
+                "target": "database",
+                "catalog_name": "",
+                "database_name": target_str,
+                "schema_name": "",
+                "fuzzy": False,
+                "raw": sql.strip()
+            }
+
+    # Default fallback
+    return {
+        "command": "USE",
+        "target": "database",
+        "catalog_name": "",
+        "database_name": target_str,
+        "schema_name": "",
+        "fuzzy": False,
+        "raw": sql.strip()
+    }
+
+
+def _parse_set_command(sql: str, dialect: str) -> Optional[Dict[str, Any]]:
+    """Parse SET command to extract context information."""
+    # Extract the part after "SET"
+    # StarRocks supports: SET CATALOG catalog_name
+    set_pattern = re.match(r'^\s*SET\s+(.+?)\s*$', sql, re.IGNORECASE)
+    if not set_pattern:
+        return None
+
+    set_parts = set_pattern.group(1).strip().split(None, 1)
+
+    if len(set_parts) < 2:
+        return None
+
+    keyword = set_parts[0].upper()
+    value = set_parts[1].strip()
+
+    # Remove quotes if present
+    if (value.startswith('`') and value.endswith('`')) or \
+       (value.startswith('"') and value.endswith('"')) or \
+       (value.startswith("'") and value.endswith("'")):
+        value = value[1:-1]
+
+    # Handle SET CATALOG for StarRocks
+    if keyword == "CATALOG" and dialect == DBType.STARROCKS:
+        return {
+            "command": "SET",
+            "target": "catalog",
+            "catalog_name": value,
+            "database_name": "",
+            "schema_name": "",
+            "fuzzy": False,
+            "raw": sql.strip()
+        }
+
+    # Other SET commands are not context switches
+    return None
