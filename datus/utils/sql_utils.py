@@ -368,7 +368,20 @@ def _extract_table_comment_after_columns(sql: str) -> Optional[str]:
         return None
 
     tail = sql[end_idx + 1 :]
-    comment_match = re.search(r'COMMENT\s*(?:=\s*)?([\'"])(.*?)\1', tail, re.IGNORECASE | re.DOTALL)
+    tail_upper = tail.upper()
+    stop_tokens = ("DISTRIBUTED BY", "PROPERTIES", "PARTITION BY", "ORDER BY")
+    stop_idx = len(tail)
+    for token in stop_tokens:
+        idx = tail_upper.find(token)
+        if idx != -1:
+            stop_idx = min(stop_idx, idx)
+    comment_scope = tail[:stop_idx]
+
+    comment_match = re.search(
+        r'COMMENT\s*(?:=\s*)?([\'"])(.*?)\1',
+        comment_scope,
+        re.IGNORECASE | re.DOTALL,
+    )
     if not comment_match:
         return None
 
