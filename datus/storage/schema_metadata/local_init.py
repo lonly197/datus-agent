@@ -523,6 +523,9 @@ def store_tables(
                 table_name=table["table_name"],
             )
 
+        # Fix truncated DDL before storing
+        table["definition"] = _fix_truncated_ddl(table["definition"])
+
         identifier = table["identifier"]
         if identifier not in exists_tables:
             logger.debug(f"Add {table_type} {identifier}")
@@ -557,6 +560,78 @@ def store_tables(
         logger.info(f"Stored {len(new_tables)} {table_type}s and {len(new_values)} values for {database_name}")
     else:
         logger.info(f"No new {table_type}s or values to store for {database_name}")
+
+
+def _fix_truncated_ddl(ddl: str) -> str:
+    """
+    Fix truncated DDL statements by detecting common truncation patterns and attempting completion.
+
+    This function handles DDL that may have been truncated during retrieval from the database,
+    such as when SHOW CREATE TABLE returns incomplete results due to length limits.
+
+    Args:
+        ddl: Potentially truncated DDL statement
+
+    Returns:
+        Fixed DDL statement or original if not recognized as truncated
+    """
+    if not ddl or not isinstance(ddl, str):
+        return ddl
+
+    # Check if DDL appears to be truncated
+    ddl_upper = ddl.upper().strip()
+
+    # Patterns that indicate truncation
+    truncation_indicators = [
+        ddl.rstrip().endswith(','),  # Ends with comma (incomplete column list)
+        not ddl.rstrip().endswith(';'),  # No semicolon at end
+        not ('ENGINE=' in ddl_upper or 'PARTITION BY' in ddl_upper),  # Missing StarRocks-specific clauses
+    ]
+
+    # Check if missing closing paren for CREATE TABLE
+    open_parens = ddl.count('(')
+    close_parens = ddl.count(')')
+    missing_closing_paren = open_parens > close_parens
+
+    # If any truncation indicators or missing closing paren, try to fix
+    if sum(truncation_indicators) >= 1 or missing_closing_paren:
+        logger.debug(f"Detected potentially truncated DDL (indicators: {sum(truncation_indicators)}, missing paren: {missing_closing_paren})")
+
+        # Try to complete the basic structure
+        fixed_ddl = ddl
+
+        # Remove trailing comma if present
+        if fixed_ddl.rstrip().endswith(','):
+            # Find the last complete column definition
+            lines = fixed_ddl.split('\n')
+            for i in range(len(lines) - 1, -1, -1):
+                line = lines[i].strip()
+                if line and not line.endswith(','):
+                    # This looks like the last complete column
+                    lines[i] = line  # Remove trailing comma
+                    break
+
+            fixed_ddl = '\n'.join(lines)
+
+        # Add basic StarRocks table structure if missing
+        if 'ENGINE=' not in fixed_ddl.upper():
+            # If missing closing paren, add it before ENGINE
+            if missing_closing_paren:
+                fixed_ddl += '\n) ENGINE=OLAP;'
+            # If has closing paren but missing ENGINE
+            elif not fixed_ddl.rstrip().endswith(';'):
+                fixed_ddl += ' ENGINE=OLAP;'
+            else:
+                fixed_ddl = fixed_ddl.rstrip(';') + ' ENGINE=OLAP;'
+
+        # Clean up
+        fixed_ddl = fixed_ddl.strip()
+
+        if fixed_ddl != ddl:
+            logger.info(f"Fixed truncated DDL for table (length: {len(ddl)} -> {len(fixed_ddl)})")
+            return fixed_ddl
+
+    return ddl
 
 
 def _fill_sample_rows(
