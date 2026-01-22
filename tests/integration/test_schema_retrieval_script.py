@@ -12,7 +12,7 @@ Test Scenario:
 - Focus: Schema discovery stage only
 
 Usage:
-    python test_schema_retrieval.py --config=path/to/agent.yml --namespace=your_namespace
+    python tests/integration/test_schema_retrieval_script.py --config=path/to/agent.yml --namespace=your_namespace
 """
 
 import argparse
@@ -22,8 +22,10 @@ import os
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
-# Add project to path
-sys.path.insert(0, '/Users/lonlyhuang/workspace/git/Datus-agent')
+# Add project root to path
+project_root = str(Path(__file__).resolve().parent.parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 try:
     from rich.console import Console
@@ -34,7 +36,7 @@ try:
 except ImportError:
     # Fallback if rich not installed
     def print(*args, **kwargs):
-        print(*args, **kwargs)
+        __builtins__.print(*args, **kwargs)
     Console = None
     Table = None
     Panel = None
@@ -627,10 +629,10 @@ def main():
         epilog="""
 Examples:
   # Test with namespace
-  python test_schema_retrieval.py --config=conf/agent.yml --namespace=my_namespace
+  python tests/integration/test_schema_retrieval_script.py --config=conf/agent.yml --namespace=my_namespace
 
   # Test without namespace
-  python test_schema_retrieval.py --config=conf/agent.yml
+  python tests/integration/test_schema_retrieval_script.py --config=conf/agent.yml
         """
     )
 

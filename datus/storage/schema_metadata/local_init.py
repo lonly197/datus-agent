@@ -784,16 +784,8 @@ def _fix_truncated_ddl(ddl: str) -> str:
 
         # Remove trailing comma if present
         if fixed_ddl.rstrip().endswith(','):
-            # Find the last complete column definition
-            lines = fixed_ddl.split('\n')
-            for i in range(len(lines) - 1, -1, -1):
-                line = lines[i].strip()
-                if line and not line.endswith(','):
-                    # This looks like the last complete column
-                    lines[i] = line  # Remove trailing comma
-                    break
-
-            fixed_ddl = '\n'.join(lines)
+            # Remove the trailing comma from the end of the DDL
+            fixed_ddl = fixed_ddl.rstrip()[:-1].rstrip()  # Remove comma and any trailing whitespace
 
         stripped_fixed = fixed_ddl.rstrip()
         if missing_closing_paren or not stripped_fixed.endswith(')'):

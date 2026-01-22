@@ -112,16 +112,8 @@ class StarRocksConnector(BaseSqlConnector):
 
             # Remove trailing comma if present
             if fixed_ddl.rstrip().endswith(','):
-                # Find the last complete column definition
-                lines = fixed_ddl.split('\n')
-                for i in range(len(lines) - 1, -1, -1):
-                    line = lines[i].strip()
-                    if line and not line.endswith(','):
-                        # This looks like the last complete column
-                        lines[i] = line  # Remove trailing comma
-                        break
-
-                fixed_ddl = '\n'.join(lines)
+                # Remove the trailing comma from the end of the DDL
+                fixed_ddl = fixed_ddl.rstrip()[:-1].rstrip()  # Remove comma and any trailing whitespace
 
             # Add basic StarRocks table structure if missing
             if 'ENGINE=' not in fixed_ddl.upper():

@@ -10,7 +10,7 @@ echo ""
 echo "Example 1: Testing with namespace"
 echo "-----------------------------------"
 cat << 'EOF'
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.yml \
     --namespace=analytics_db
 EOF
@@ -20,7 +20,7 @@ echo ""
 echo "Example 2: Testing with custom query"
 echo "-----------------------------------"
 cat << 'EOF'
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.yml \
     --namespace=analytics_db \
     --query="销售转化率" \
@@ -32,7 +32,7 @@ echo ""
 echo "Example 3: Production environment test"
 echo "-----------------------------------"
 cat << 'EOF'
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=/Users/lonlyhuang/workspace/myway/Examples/datus-docs/conf/agent.yml \
     --namespace=starrocks_prod \
     --query="销售线索" \
@@ -45,19 +45,19 @@ echo "Example 4: Test specific business scenarios"
 echo "-----------------------------------"
 cat << 'EOF'
 # Test customer conversion
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.yml \
     --namespace=analytics \
     --query="客户转化"
 
 # Test sales performance
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.yml \
     --namespace=analytics \
     --query="销售业绩"
 
 # Test lead analysis
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.yml \
     --namespace=analytics \
     --query="线索分析"
@@ -77,7 +77,7 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --force
 
 # Step 2: Verify migration
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.yml \
     --namespace=analytics_db
 EOF
@@ -94,7 +94,7 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --force
 
 # Issue 2: Check database connection
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.yml \
     --namespace=analytics_db
 
@@ -137,7 +137,7 @@ echo "Namespace: $NAMESPACE"
 echo "Query: $QUERY"
 echo ""
 
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config="$CONFIG_FILE" \
     --namespace="$NAMESPACE" \
     --query="$QUERY"
@@ -170,7 +170,7 @@ QUERIES=(
 
 for QUERY in "${QUERIES[@]}"; do
     echo "Testing: $QUERY"
-    python test_schema_retrieval.py \
+    python tests/integration/test_schema_retrieval_script.py \
         --config=conf/agent.yml \
         --namespace=analytics \
         --query="$QUERY"
@@ -181,6 +181,6 @@ echo ""
 
 echo "=============================================="
 echo "For more details, see:"
-echo "  - TEST_SCHEMA_RETRIEVAL.md (full documentation)"
+echo "  - tests/integration/SCHEMA_RETRIEVAL.md (full documentation)"
 echo "  - QUICKSTART_SCHEMA_TEST.md (quick start guide)"
 echo "=============================================="

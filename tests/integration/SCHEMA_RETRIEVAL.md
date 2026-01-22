@@ -2,7 +2,7 @@
 
 ## 概述
 
-`test_schema_retrieval.py` 是一个CLI测试脚本，用于验证迁移后的schema检索功能是否正常工作。它模拟了text2sql工作流中的schema discovery阶段，检查RAG和Keyword检索是否能正确找到所需的表和字段信息。
+`tests/integration/test_schema_retrieval_script.py` 是一个CLI测试脚本，用于验证迁移后的schema检索功能是否正常工作。它模拟了text2sql工作流中的schema discovery阶段，检查RAG和Keyword检索是否能正确找到所需的表和字段信息。
 
 ## 测试目标
 
@@ -25,13 +25,13 @@
 
 ```bash
 # 测试带命名空间的配置
-python test_schema_retrieval.py --config=conf/agent.yml --namespace=production
+python tests/integration/test_schema_retrieval_script.py --config=conf/agent.yml --namespace=production
 
 # 测试不带命名空间的配置
-python test_schema_retrieval.py --config=conf/agent.yml
+python tests/integration/test_schema_retrieval_script.py --config=conf/agent.yml
 
 # 自定义测试查询
-python test_schema_retrieval.py --config=conf/agent.yml --namespace=production --query="客户转化"
+python tests/integration/test_schema_retrieval_script.py --config=conf/agent.yml --namespace=production --query="客户转化"
 ```
 
 ### 参数说明
@@ -47,17 +47,17 @@ python test_schema_retrieval.py --config=conf/agent.yml --namespace=production -
 
 ```bash
 # 1. 测试生产环境（使用命名空间）
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=/Users/lonlyhuang/workspace/myway/Examples/datus-docs/conf/agent.yml \
     --namespace=starrocks_prod
 
 # 2. 测试开发环境
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.dev.yml \
     --namespace=dev_db
 
 # 3. 测试特定业务场景
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.yml \
     --namespace=analytics \
     --query="销售转化率" \
@@ -319,7 +319,7 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
 ### 步骤3：测试检索功能
 
 ```bash
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.prod.yml \
     --namespace=starrocks_prod
 ```
@@ -328,7 +328,7 @@ python test_schema_retrieval.py \
 
 ```bash
 # 测试销售线索相关查询
-python test_schema_retrieval.py \
+python tests/integration/test_schema_retrieval_script.py \
     --config=conf/agent.prod.yml \
     --namespace=starrocks_prod \
     --query="销售线索转化"
