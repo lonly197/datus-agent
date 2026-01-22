@@ -1,122 +1,253 @@
-# Claude Code Configuration - SPARC Development Environment
+# CLAUDE.md
 
-## 🚨 CRITICAL: CONCURRENT EXECUTION & FILE MANAGEMENT
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**ABSOLUTE RULES**:
-1. ALL operations MUST be concurrent/parallel in a single message
+# Datus Agent - AI-Powered SQL Data Engineering Agent
+
+## Project Overview
+
+**Datus** is an open-source data engineering agent that builds evolvable context for your data system. It provides three main interfaces:
+
+- **Datus-CLI**: An AI-powered command-line interface for data engineers—think "Claude Code for data engineers." Write SQL, build subagents, and construct context interactively.
+- **Datus-Chat**: A web chatbot providing multi-turn conversations with built-in feedback mechanisms for data analysts.
+- **Datus-API**: APIs for other agents or applications that need stable, accurate data services.
+
+### Recent Text2SQL Pipeline Hardening
+
+The project has recently undergone comprehensive system hardening for Text2SQL workflows with fixes including:
+- Evidence-Driven Generation with preflight orchestration
+- Robust Error Handling with standardized error results
+- Intelligent Caching with QueryCache integration
+- Configuration Validation with runtime validation
+- Enhanced Observability with structured logging
+
+## Development Environment Setup
+
+### Installation Commands
+
+```bash
+# Development mode (recommended)
+make setup-dev
+# or
+uv pip install -e ".[dev]"
+
+# Install build tools only
+make dev-install
+
+# Build and install from source
+make build
+make install-dist
+
+# Install from PyPI
+pip install datus-agent
+```
+
+### Build & Release Commands
+
+```bash
+# Package management
+make build          # Build the package
+make clean          # Clean build artifacts
+make check          # Check package before upload
+make test           # Test the installation
+
+# Publishing
+make upload-test    # Upload to Test PyPI
+make upload         # Upload to PyPI
+make publish        # Full publish workflow (clean + build + check + upload)
+
+# Quick commands
+make quick-build    # Clean + build
+make quick-test     # Build + test
+make quick-publish  # Clean + build + check + upload
+
+# Show all available commands
+make help
+```
+
+### Testing Commands
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run with verbose output (configured in pytest.ini)
+pytest -s -vv --tb=short --showlocals
+
+# Run acceptance tests
+pytest -m acceptance
+
+# Run specific test file
+pytest tests/test_schema_discovery_node.py
+
+# Run with coverage
+pytest --cov=datus tests/
+
+# Run unit tests only
+pytest tests/unit_tests/
+```
+
+### Code Quality Commands
+
+```bash
+# Format code (Black + isort)
+black datus/ tests/ --line-length=120
+isort datus/ tests/ --profile=black
+
+# Lint code
+flake8 datus/ tests/ --max-line-length=120
+
+# Run all formatters
+./formatter.sh
+
+# Install pre-commit hooks
+pre-commit install
+```
+
+## High-Level Architecture
+
+### Core Components
+
+```
+datus/
+├── agent/              # Core agent logic and workflow orchestration
+│   ├── node/           # Individual workflow nodes (25+ node types)
+│   │   ├── intent_analysis_node.py      # Two-stage intent processing
+│   │   ├── intent_clarification_node.py # Business intent clarification
+│   │   ├── schema_discovery_node.py     # Schema retrieval and linking
+│   │   ├── generate_sql_node.py         # SQL generation
+│   │   ├── execute_sql_node.py          # SQL execution
+│   │   ├── preflight_orchestrator.py   # Preflight tool orchestration
+│   │   └── ... (20+ more nodes)
+│   ├── workflow.py      # Workflow definition and management
+│   ├── plan.py          # Execution plan generation
+│   └── agent.py         # Main agent orchestration
+├── api/                # FastAPI REST API server
+├── cli/                # Command-line interface (Textual/TUI)
+├── configuration/      # Configuration management
+├── schemas/            # Data models and schemas
+├── storage/            # Data storage (LanceDB, Tantivy)
+├── utils/              # Utility functions
+├── prompts/            # LLM prompt templates
+└── models/             # ML models and embeddings
+```
+
+### Key Architectural Patterns
+
+1. **Node-Based Workflows**: Each workflow is composed of discrete nodes that process data sequentially
+2. **Two-Stage Intent Processing**: Fast heuristic detection + LLM-based clarification
+3. **Schema-First Approach**: Schema discovery and validation before SQL generation
+4. **Preflight Orchestration**: Evidence-driven generation with mandatory preflight tools
+5. **Streaming Architecture**: Async/await with SSE for real-time updates
+
+### Database Connectors
+
+Database connectors are in separate packages (see https://github.com/Datus-ai/Datus-adapters):
+- Snowflake, StarRocks, MySQL, DuckDB, SQLite support
+- Custom connectors via adapter pattern
+
+## Code Organization & Best Practices
+
+### Project Structure
+
+```
+/Users/lonlyhuang/workspace/git/Datus-agent/
+├── datus/              # Core Python package
+├── tests/              # Test suite (pytest)
+├── conf/               # Configuration templates
+├── sample_data/        # Demo datasets
+├── build_scripts/      # Build automation
+├── docs/               # Documentation
+└── .github/workflows/  # CI/CD pipelines
+```
+
+### Coding Standards
+
+- **Python Version**: Requires Python >= 3.11 (tested on 3.12)
+- **Line Length**: 120 characters (Black formatter)
+- **Indentation**: 4 spaces
+- **Naming**: snake_case (functions), PascalCase (classes), UPPER_CASE (constants)
+- **File Size**: Keep files under 500 lines
+- **Testing**: Test-first approach with deterministic tests
+
+### Type Safety Pattern
+
+When using types that may cause circular imports:
+
+```python
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datus.schemas.action_history import ActionHistory
+
+try:
+    from datus.schemas.action_history import ActionHistory
+except ImportError:
+    ActionHistory = Any  # Runtime fallback
+```
+
+### Node Factory Registration
+
+When adding new node types, complete all 5 steps:
+
+1. Define node type in `datus/configuration/node_type.py`
+2. Implement node class in `datus/agent/node/new_node.py`
+3. Export in `datus/agent/node/__init__.py`
+4. Import in `datus/agent/node/node.py` factory
+5. Add handler case in `Node.new_instance()`
+
+## SPARC Development Methodology
+
+This project uses SPARC (Specification, Pseudocode, Architecture, Refinement, Completion) with Claude-Flow orchestration.
+
+### SPARC Commands
+
+```bash
+# List available modes
+npx claude-flow sparc modes
+
+# Execute specific mode
+npx claude-flow sparc run <mode> "<task>"
+
+# Run complete TDD workflow
+npx claude-flow sparc tdd "<feature>"
+
+# Batch parallel execution
+npx claude-flow sparc batch <modes> "<task>"
+
+# Full pipeline processing
+npx claude-flow sparc pipeline "<task>"
+```
+
+### Workflow Phases
+
+1. **Specification** - Requirements analysis
+2. **Pseudocode** - Algorithm design
+3. **Architecture** - System design
+4. **Refinement** - TDD implementation
+5. **Completion** - Integration
+
+## 🚨 CRITICAL: Concurrent Execution & File Management
+
+### Absolute Rules
+
+1. **ALL operations MUST be concurrent/parallel in a single message**
 2. **NEVER save working files, text/mds and tests to the root folder**
-3. ALWAYS organize files in appropriate subdirectories
-4. **USE CLAUDE CODE'S TASK TOOL** for spawning agents concurrently, not just MCP
+3. **ALWAYS organize files in appropriate subdirectories**
+4. **USE CLAUDE CODE'S TASK TOOL** for spawning agents concurrently
 
-### ⚡ GOLDEN RULE: "1 MESSAGE = ALL RELATED OPERATIONS"
+### Golden Rule: "1 MESSAGE = ALL RELATED OPERATIONS"
 
 **MANDATORY PATTERNS:**
 - **TodoWrite**: ALWAYS batch ALL todos in ONE call (5-10+ todos minimum)
 - **Task tool (Claude Code)**: ALWAYS spawn ALL agents in ONE message with full instructions
 - **File operations**: ALWAYS batch ALL reads/writes/edits in ONE message
 - **Bash commands**: ALWAYS batch ALL terminal operations in ONE message
-- **Memory operations**: ALWAYS batch ALL memory store/retrieve in ONE message
 
-### 🎯 CRITICAL: Claude Code Task Tool for Agent Execution
+### Claude Code vs MCP Tools
 
-**Claude Code's Task tool is the PRIMARY way to spawn agents:**
-```javascript
-// ✅ CORRECT: Use Claude Code's Task tool for parallel agent execution
-[Single Message]:
-  Task("Research agent", "Analyze requirements and patterns...", "researcher")
-  Task("Coder agent", "Implement core features...", "coder")
-  Task("Tester agent", "Create comprehensive tests...", "tester")
-  Task("Reviewer agent", "Review code quality...", "reviewer")
-  Task("Architect agent", "Design system architecture...", "system-architect")
-```
-
-**MCP tools are ONLY for coordination setup:**
-- `mcp__claude-flow__swarm_init` - Initialize coordination topology
-- `mcp__claude-flow__agent_spawn` - Define agent types for coordination
-- `mcp__claude-flow__task_orchestrate` - Orchestrate high-level workflows
-
-### 📁 File Organization Rules
-
-**NEVER save to root folder. Use these directories:**
-- `/src` - Source code files
-- `/tests` - Test files
-- `/docs` - Documentation and markdown files
-- `/config` - Configuration files
-- `/scripts` - Utility scripts
-- `/examples` - Example code
-
-## Project Overview
-
-This project uses SPARC (Specification, Pseudocode, Architecture, Refinement, Completion) methodology with Claude-Flow orchestration for systematic Test-Driven Development.
-
-## SPARC Commands
-
-### Core Commands
-- `npx claude-flow sparc modes` - List available modes
-- `npx claude-flow sparc run <mode> "<task>"` - Execute specific mode
-- `npx claude-flow sparc tdd "<feature>"` - Run complete TDD workflow
-- `npx claude-flow sparc info <mode>` - Get mode details
-
-### Batchtools Commands
-- `npx claude-flow sparc batch <modes> "<task>"` - Parallel execution
-- `npx claude-flow sparc pipeline "<task>"` - Full pipeline processing
-- `npx claude-flow sparc concurrent <mode> "<tasks-file>"` - Multi-task processing
-
-### Build Commands
-- `npm run build` - Build project
-- `npm run test` - Run tests
-- `npm run lint` - Linting
-- `npm run typecheck` - Type checking
-
-## SPARC Workflow Phases
-
-1. **Specification** - Requirements analysis (`sparc run spec-pseudocode`)
-2. **Pseudocode** - Algorithm design (`sparc run spec-pseudocode`)
-3. **Architecture** - System design (`sparc run architect`)
-4. **Refinement** - TDD implementation (`sparc tdd`)
-5. **Completion** - Integration (`sparc run integration`)
-
-## Code Style & Best Practices
-
-- **Modular Design**: Files under 500 lines
-- **Environment Safety**: Never hardcode secrets
-- **Test-First**: Write tests before implementation
-- **Clean Architecture**: Separate concerns
-- **Documentation**: Keep updated
-
-## 🚀 Available Agents (54 Total)
-
-### Core Development
-`coder`, `reviewer`, `tester`, `planner`, `researcher`
-
-### Swarm Coordination
-`hierarchical-coordinator`, `mesh-coordinator`, `adaptive-coordinator`, `collective-intelligence-coordinator`, `swarm-memory-manager`
-
-### Consensus & Distributed
-`byzantine-coordinator`, `raft-manager`, `gossip-coordinator`, `consensus-builder`, `crdt-synchronizer`, `quorum-manager`, `security-manager`
-
-### Performance & Optimization
-`perf-analyzer`, `performance-benchmarker`, `task-orchestrator`, `memory-coordinator`, `smart-agent`
-
-### GitHub & Repository
-`github-modes`, `pr-manager`, `code-review-swarm`, `issue-tracker`, `release-manager`, `workflow-automation`, `project-board-sync`, `repo-architect`, `multi-repo-swarm`
-
-### SPARC Methodology
-`sparc-coord`, `sparc-coder`, `specification`, `pseudocode`, `architecture`, `refinement`
-
-### Specialized Development
-`backend-dev`, `mobile-dev`, `ml-developer`, `cicd-engineer`, `api-docs`, `system-architect`, `code-analyzer`, `base-template-generator`
-
-### Testing & Validation
-`tdd-london-swarm`, `production-validator`
-
-### Migration & Planning
-`migration-planner`, `swarm-init`
-
-## 🎯 Claude Code vs MCP Tools
-
-### Claude Code Handles ALL EXECUTION:
-- **Task tool**: Spawn and run agents concurrently for actual work
+**Claude Code Handles ALL EXECUTION:**
+- Task tool for spawning and running agents
 - File operations (Read, Write, Edit, MultiEdit, Glob, Grep)
 - Code generation and programming
 - Bash commands and system operations
@@ -124,346 +255,107 @@ This project uses SPARC (Specification, Pseudocode, Architecture, Refinement, Co
 - Project navigation and analysis
 - TodoWrite and task management
 - Git operations
-- Package management
-- Testing and debugging
 
-### MCP Tools ONLY COORDINATE:
-- Swarm initialization (topology setup)
-- Agent type definitions (coordination patterns)
-- Task orchestration (high-level planning)
+**MCP Tools ONLY COORDINATE:**
+- Swarm initialization
+- Agent type definitions
+- Task orchestration
 - Memory management
 - Neural features
-- Performance tracking
-- GitHub integration
 
-**KEY**: MCP coordinates the strategy, Claude Code's Task tool executes with real agents.
+**KEY**: MCP coordinates strategy, Claude Code's Task tool executes with real agents.
 
-## 🚀 Quick Setup
+## 🚀 Available Agents (54 Total)
 
-```bash
-# Add MCP servers (Claude Flow required, others optional)
-claude mcp add claude-flow npx claude-flow@alpha mcp start
-claude mcp add ruv-swarm npx ruv-swarm mcp start  # Optional: Enhanced coordination
-claude mcp add flow-nexus npx flow-nexus@latest mcp start  # Optional: Cloud features
-```
+### Core Development
+`coder`, `reviewer`, `tester`, `planner`, `researcher`
 
-## MCP Tool Categories
+### Specialized Development
+`backend-dev`, `mobile-dev`, `ml-developer`, `cicd-engineer`, `api-docs`, `system-architect`, `code-analyzer`, `base-template-generator`
 
-### Coordination
-`swarm_init`, `agent_spawn`, `task_orchestrate`
+### SPARC Methodology
+`sparc-coord`, `sparc-coder`, `specification`, `pseudocode`, `architecture`, `refinement`
 
-### Monitoring
-`swarm_status`, `agent_list`, `agent_metrics`, `task_status`, `task_results`
+### Testing & Validation
+`tdd-london-swarm`, `production-validator`
 
-### Memory & Neural
-`memory_usage`, `neural_status`, `neural_train`, `neural_patterns`
-
-### GitHub Integration
-`github_swarm`, `repo_analyze`, `pr_enhance`, `issue_triage`, `code_review`
-
-### System
-`benchmark_run`, `features_detect`, `swarm_monitor`
-
-### Flow-Nexus MCP Tools (Optional Advanced Features)
-Flow-Nexus extends MCP capabilities with 70+ cloud-based orchestration tools:
-
-**Key MCP Tool Categories:**
-- **Swarm & Agents**: `swarm_init`, `swarm_scale`, `agent_spawn`, `task_orchestrate`
-- **Sandboxes**: `sandbox_create`, `sandbox_execute`, `sandbox_upload` (cloud execution)
-- **Templates**: `template_list`, `template_deploy` (pre-built project templates)
-- **Neural AI**: `neural_train`, `neural_patterns`, `seraphina_chat` (AI assistant)
-- **GitHub**: `github_repo_analyze`, `github_pr_manage` (repository management)
-- **Real-time**: `execution_stream_subscribe`, `realtime_subscribe` (live monitoring)
-- **Storage**: `storage_upload`, `storage_list` (cloud file management)
-
-**Authentication Required:**
-- Register: `mcp__flow-nexus__user_register` or `npx flow-nexus@latest register`
-- Login: `mcp__flow-nexus__user_login` or `npx flow-nexus@latest login`
-- Access 70+ specialized MCP tools for advanced orchestration
-
-## 🚀 Agent Execution Flow with Claude Code
-
-### The Correct Pattern:
-
-1. **Optional**: Use MCP tools to set up coordination topology
-2. **REQUIRED**: Use Claude Code's Task tool to spawn agents that do actual work
-3. **REQUIRED**: Each agent runs hooks for coordination
-4. **REQUIRED**: Batch all operations in single messages
-
-### Example Full-Stack Development:
-
-```javascript
-// Single message with all agent spawning via Claude Code's Task tool
-[Parallel Agent Execution]:
-  Task("Backend Developer", "Build REST API with Express. Use hooks for coordination.", "backend-dev")
-  Task("Frontend Developer", "Create React UI. Coordinate with backend via memory.", "coder")
-  Task("Database Architect", "Design PostgreSQL schema. Store schema in memory.", "code-analyzer")
-  Task("Test Engineer", "Write Jest tests. Check memory for API contracts.", "tester")
-  Task("DevOps Engineer", "Setup Docker and CI/CD. Document in memory.", "cicd-engineer")
-  Task("Security Auditor", "Review authentication. Report findings via hooks.", "reviewer")
-  
-  // All todos batched together
-  TodoWrite { todos: [...8-10 todos...] }
-  
-  // All file operations together
-  Write "backend/server.js"
-  Write "frontend/App.jsx"
-  Write "database/schema.sql"
-```
-
-## 📋 Agent Coordination Protocol
-
-### Every Agent Spawned via Task Tool MUST:
-
-**1️⃣ BEFORE Work:**
-```bash
-npx claude-flow@alpha hooks pre-task --description "[task]"
-npx claude-flow@alpha hooks session-restore --session-id "swarm-[id]"
-```
-
-**2️⃣ DURING Work:**
-```bash
-npx claude-flow@alpha hooks post-edit --file "[file]" --memory-key "swarm/[agent]/[step]"
-npx claude-flow@alpha hooks notify --message "[what was done]"
-```
-
-**3️⃣ AFTER Work:**
-```bash
-npx claude-flow@alpha hooks post-task --task-id "[task]"
-npx claude-flow@alpha hooks session-end --export-metrics true
-```
-
-## 🎯 Concurrent Execution Examples
-
-### ✅ CORRECT WORKFLOW: MCP Coordinates, Claude Code Executes
-
-```javascript
-// Step 1: MCP tools set up coordination (optional, for complex tasks)
-[Single Message - Coordination Setup]:
-  mcp__claude-flow__swarm_init { topology: "mesh", maxAgents: 6 }
-  mcp__claude-flow__agent_spawn { type: "researcher" }
-  mcp__claude-flow__agent_spawn { type: "coder" }
-  mcp__claude-flow__agent_spawn { type: "tester" }
-
-// Step 2: Claude Code Task tool spawns ACTUAL agents that do the work
-[Single Message - Parallel Agent Execution]:
-  // Claude Code's Task tool spawns real agents concurrently
-  Task("Research agent", "Analyze API requirements and best practices. Check memory for prior decisions.", "researcher")
-  Task("Coder agent", "Implement REST endpoints with authentication. Coordinate via hooks.", "coder")
-  Task("Database agent", "Design and implement database schema. Store decisions in memory.", "code-analyzer")
-  Task("Tester agent", "Create comprehensive test suite with 90% coverage.", "tester")
-  Task("Reviewer agent", "Review code quality and security. Document findings.", "reviewer")
-  
-  // Batch ALL todos in ONE call
-  TodoWrite { todos: [
-    {id: "1", content: "Research API patterns", status: "in_progress", priority: "high"},
-    {id: "2", content: "Design database schema", status: "in_progress", priority: "high"},
-    {id: "3", content: "Implement authentication", status: "pending", priority: "high"},
-    {id: "4", content: "Build REST endpoints", status: "pending", priority: "high"},
-    {id: "5", content: "Write unit tests", status: "pending", priority: "medium"},
-    {id: "6", content: "Integration tests", status: "pending", priority: "medium"},
-    {id: "7", content: "API documentation", status: "pending", priority: "low"},
-    {id: "8", content: "Performance optimization", status: "pending", priority: "low"}
-  ]}
-  
-  // Parallel file operations
-  Bash "mkdir -p app/{src,tests,docs,config}"
-  Write "app/package.json"
-  Write "app/src/server.js"
-  Write "app/tests/server.test.js"
-  Write "app/docs/API.md"
-```
-
-### ❌ WRONG (Multiple Messages):
-```javascript
-Message 1: mcp__claude-flow__swarm_init
-Message 2: Task("agent 1")
-Message 3: TodoWrite { todos: [single todo] }
-Message 4: Write "file.js"
-// This breaks parallel coordination!
-```
-
-## Performance Benefits
-
-- **84.8% SWE-Bench solve rate**
-- **32.3% token reduction**
-- **2.8-4.4x speed improvement**
-- **27+ neural models**
-
-## Hooks Integration
-
-### Pre-Operation
-- Auto-assign agents by file type
-- Validate commands for safety
-- Prepare resources automatically
-- Optimize topology by complexity
-- Cache searches
-
-### Post-Operation
-- Auto-format code
-- Train neural patterns
-- Update memory
-- Analyze performance
-- Track token usage
-
-### Session Management
-- Generate summaries
-- Persist state
-- Track metrics
-- Restore context
-- Export workflows
-
-## Advanced Features (v2.0.0)
-
-- 🚀 Automatic Topology Selection
-- ⚡ Parallel Execution (2.8-4.4x speed)
-- 🧠 Neural Training
-- 📊 Bottleneck Analysis
-- 🤖 Smart Auto-Spawning
-- 🛡️ Self-Healing Workflows
-- 💾 Cross-Session Memory
-- 🔗 GitHub Integration
-
-## Integration Tips
-
-1. Start with basic swarm init
-2. Scale agents gradually
-3. Use memory for context
-4. Monitor progress regularly
-5. Train patterns from success
-6. Enable hooks automation
-7. Use GitHub tools first
-
-## Support
-
-- Documentation: https://github.com/ruvnet/claude-flow
-- Issues: https://github.com/ruvnet/claude-flow/issues
-- Flow-Nexus Platform: https://flow-nexus.ruv.io (registration required for cloud features)
-
----
-
-Remember: **Claude Flow coordinates, Claude Code creates!**
-
-# Datus-Specific Learnings
-
-## Schema Storage
-
-- SchemaStorage has get_schema() for single table, search_similar() for semantic search, search_all() for all schemas, and get_table_schemas() for multiple tables
-- SchemaStorage.update_table_schema() is available for metadata repair (updates or inserts table definitions)
-- When SchemaStorage is empty, implement DDL fallback to retrieve schemas from database connector
-
-## Intent Analysis Architecture
+## Text2SQL Workflow Architecture
 
 ### Two-Stage Intent Processing
 
-The text2sql workflow uses a **two-stage intent analysis** approach:
-
 1. **IntentAnalysisNode** (`datus/agent/node/intent_analysis_node.py`):
-   - **Purpose**: Task type recognition (text2sql vs sql_review vs data_analysis)
-   - **Method**: Fast heuristic-based detection using SQL keywords and patterns
-   - **Output**: Sets `workflow.metadata["detected_intent"]`, `["intent_confidence"]`, `["intent_metadata"]`
-   - **Skip Logic**: Skips when `execution_mode` is pre-specified (e.g., "text2sql")
-   - **LLM Fallback**: Optional LLM classification when heuristic confidence < 0.7
+   - Fast heuristic-based task type detection
+   - Sets `workflow.metadata["detected_intent"]`
+   - Skips when execution_mode is pre-specified
 
 2. **IntentClarificationNode** (`datus/agent/node/intent_clarification_node.py`):
-   - **Purpose**: Business intent clarification (理清用户真实分析意图)
-   - **Method**: LLM-based clarification with structured JSON output
-   - **Capabilities**:
-     - Corrects typos (e.g., "华山" → "华南")
-     - Clarifies ambiguities (e.g., "最近的销售" → "最近30天的销售数据")
-     - Extracts entities (business_terms, time_range, dimensions, metrics)
-     - Normalizes queries for better schema discovery
-   - **Output**: Sets `workflow.metadata["clarified_task"]`, `["intent_clarification"]`, `["original_task"]`
-   - **LLM Caching**: Uses `llm_call_with_retry()` with 1-hour TTL cache
+   - LLM-based business intent clarification
+   - Corrects typos, clarifies ambiguities
+   - Sets `workflow.metadata["clarified_task"]`
+   - Cached with 1-hour TTL
 
-### Workflow Integration
+### Workflow Execution Flow
 
-**text2sql workflow** (`datus/agent/workflow.yml`):
 ```yaml
 text2sql:
-  - intent_analysis       # Step 1: Confirm task type (fast, heuristic)
-  - intent_clarification  # Step 2: Clarify business intent (LLM-based)
-  - schema_discovery      # Step 3: Use clarified intent for schema discovery
-  - schema_validation
-  - generate_sql
-  - execute_sql
-  - result_validation
-  - reflect
-  - output
+  - intent_analysis       # Step 1: Fast heuristic detection
+  - intent_clarification  # Step 2: LLM-based clarification
+  - schema_discovery      # Step 3: Schema retrieval
+  - schema_validation     # Step 4: Schema validation
+  - generate_sql          # Step 5: SQL generation
+  - execute_sql          # Step 6: SQL execution
+  - result_validation    # Step 7: Result validation
+  - reflect              # Step 8: Reflection/retry
+  - output               # Step 9: Output generation
 ```
 
-### Schema Discovery Enhancement
+### Preflight Orchestration
 
-**SchemaDiscoveryNode** uses the clarified intent:
-- Checks `workflow.metadata.get("clarified_task")` first
-- Falls back to `workflow.task.task` if no clarification
-- Logs clarification metadata (business_terms, typos_fixed) for debugging
-- Uses clarified task for semantic search, keyword matching, and LLM inference
+Evidence-driven generation with 4 mandatory tools:
+- `search_table` - Find relevant tables
+- `describe_table` - Get table schemas
+- `search_reference_sql` - Find similar queries
+- `parse_temporal_expressions` - Parse time expressions
 
-### Key Implementation Details
+## Key Implementation Patterns
 
-**IntentAnalysisNode** should skip when execution_mode is set:
+### LLM JSON Parsing
+
+Use standardized `llm_result2json()` utility:
+
 ```python
-def should_skip(self, workflow: Workflow) -> bool:
-    execution_mode = workflow.metadata.get("execution_mode")
-    return execution_mode is not None and execution_mode != ""
+from datus.utils.json_utils import llm_result2json
+
+result = llm_result2json(response_text, expected_type=dict)
+if result is None:
+    return default_value
 ```
 
-**IntentClarificationNode** stores results in workflow.metadata (not context.metadata):
-```python
-self.workflow.metadata["clarified_task"] = clarification_result["clarified_task"]
-self.workflow.metadata["intent_clarification"] = clarification_result
-self.workflow.metadata["original_task"] = original_task
-```
+**DO NOT** use manual string replacement for markdown/JSON cleaning.
 
-**SchemaDiscoveryNode** uses clarified task:
-```python
-clarified_task = self.workflow.metadata.get("clarified_task")
-if clarified_task and clarified_task != task.task:
-    logger.info(f"Using clarified task: '{task.task[:50]}...' → '{clarified_task[:50]}...'")
-    task.task = clarified_task
-```
+### Workflow Termination Pattern
 
-### Performance Considerations
+Ensure output node always executes:
 
-- **IntentAnalysis**: Fast heuristic-based (no LLM call in most cases)
-- **IntentClarification**: LLM-based (cached with 1-hour TTL)
-- **Total Impact**: +1 LLM call per unique query (mitigated by caching)
-- **Benefit**: Improved schema discovery accuracy through clarified intent
+- **PROCEED_TO_OUTPUT** - Recovery exhausted, generate final report
+- **TERMINATE_WITH_ERROR** - Hard failure, no recovery possible
+- Output node acts as "finally" block - always executes
 
-## Code Quality & Security
+### FastAPI Streaming & Task Cancellation
 
-### TYPE_CHECKING Imports Pattern
+For SSE with `asyncio.create_task()`:
 
-When using types from modules that may create circular imports or are only needed for type hints, use the `TYPE_CHECKING` pattern:
+1. DELETE endpoint sets `running_task.meta["cancelled"] = True`
+2. Generator checks `running_task.meta.get("cancelled")` during execution
+3. When detected, raises `asyncio.CancelledError`
+
+Problem: Task and generator are independent execution units. Solution: Cooperative cancellation via meta flag.
+
+### Bounds & Validation
+
+Always add max iteration limits and validate dictionary lookups:
 
 ```python
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from datus.schemas.action_history import ActionHistory, ActionHistoryManager
-
-try:
-    from datus.schemas.action_history import ActionHistory, ActionHistoryManager
-except ImportError:
-    ActionHistory = Any  # Runtime fallback for type hints
-    ActionHistoryManager = Any
-```
-
-This separates type-time imports from runtime imports, preventing circular dependency issues while maintaining type safety.
-
-### Bounds & Validation for Loops
-
-Always add max iteration limits to prevent unbounded loops and validate dictionary lookups:
-
-```python
-# Bad: Unbounded loop
-for i in range(current_idx, len(self.workflow.node_order)):
-    node = self.workflow.nodes.get(node_id)
-    if node:
-        break
-
-# Good: Bounded loop with validation
 max_search_range = min(len(self.workflow.node_order), current_idx + 100)
 for i in range(current_idx, max_search_range):
     node_id = self.workflow.node_order[i]
@@ -471,17 +363,11 @@ for i in range(current_idx, max_search_range):
     if not node:
         logger.warning(f"Node {node_id} in node_order but not in nodes dict, skipping")
         continue
-    # Process node...
 ```
 
-Additionally, validate `split()` results when parsing LLM responses:
+Validate `split()` results when parsing LLM responses:
 
 ```python
-# Bad: Could fail with malformed markdown
-if "```json" in response_text:
-    response_text = response_text.split("```json")[1].split("```")[0].strip()
-
-# Good: Bounds checking with error handling
 if "```json" in response_text:
     parts = response_text.split("```json")
     if len(parts) > 1 and "```" in parts[1]:
@@ -490,138 +376,246 @@ if "```json" in response_text:
         logger.warning("Malformed markdown code block")
 ```
 
-### Node Factory Registration Pattern
+## Schema Discovery & DDL Retrieval
 
-When adding new node types to the workflow, all five steps must be completed:
+### StarRocks Connector Fixes
 
-1. **Define node type constant** in `datus/configuration/node_type.py`:
-   ```python
-   TYPE_NEW_NODE = "new_node"  # Add to ACTION_TYPES list
-   ```
+Fix SQL syntax errors by removing duplicate database name:
+- `SHOW TABLES FROM {db}` → `USE {db}` + `SHOW TABLES`
+- `SHOW CREATE TABLE {db}.{table}` → `SHOW CREATE TABLE {table}`
 
-2. **Implement the node class** in `datus/agent/node/new_node.py`:
-   ```python
-   class NewNode(Node):
-       def execute(self) -> BaseResult: ...
-       async def execute_stream(...) -> AsyncGenerator[ActionHistory, None]: ...
-   ```
+### Schema Storage API
 
-3. **Export in `__init__.py`** (`datus/agent/node/__init__.py`):
-   ```python
-   from .new_node import NewNode
-   __all__ = [..., "NewNode"]
-   ```
+- `get_schema()` - Single table schema
+- `search_similar()` - Semantic search
+- `search_all()` - All schemas
+- `get_table_schemas()` - Multiple tables
+- `update_table_schema()` - Metadata repair
 
-4. **Import in factory method** (`datus/agent/node/node.py`):
-   ```python
-   from datus.agent.node import (
-       ...,
-       NewNode,  # Add to imports
-   )
-   ```
+When SchemaStorage is empty, implement DDL fallback to retrieve schemas from database connector.
 
-5. **Add handler case** in `Node.new_instance()`:
-   ```python
-   elif node_type == NodeType.TYPE_NEW_NODE:
-       return NewNode(node_id, description, node_type, input_data, agent_config)
-   ```
+## Configuration
 
-**Common Error**: Skipping step 4 or 5 causes `ValueError: Invalid node type: new_node` when the workflow tries to instantiate the node.
+### Key Configuration Files
 
-### LLM JSON Parsing Standardization
+- `agent.yml` - Main runtime configuration
+- `conf/*.yml.*` - Configuration templates
+- `pyproject.toml` - Python package configuration
+- `pytest.ini` - Test configuration
 
-When nodes parse JSON responses from LLMs, use the standardized `llm_result2json()` utility from `datus/utils/json_utils.py`:
+### Important Settings
 
-```python
-from datus.utils.json_utils import llm_result2json
+```yaml
+# SQL Query Timeout (default: 60s)
+default_query_timeout_seconds: 60
 
-# Parse LLM JSON response (handles markdown, truncation, format errors)
-result = llm_result2json(response_text, expected_type=dict)
-if result is None:
-    # Fallback handling
-    return default_value
+# Plan Executor Configuration
+plan_executor:
+  keyword_tool_map: {custom mappings}
+  enable_fallback: true
+
+# Models Configuration
+models:
+  providers: [OpenAI, Anthropic, Google]
+
+# Database Connections
+databases:
+  - snowflake: {...}
+  - starrocks: {...}
+  - duckdb: {...}
 ```
 
-**DO NOT** use manual string replacement for markdown/JSON cleaning:
-```python
-# Bad: Fragile string replacement
-sql_query = sql_query.strip().replace("```json\n", "").replace("\n```", "")
-sql_query_dict = json.loads(cleaned_sql)
+### Environment Setup
 
-# Bad: Manual markdown handling without bounds checking
-if "```json" in response_text:
-    response_text = response_text.split("```json")[1].split("```")[0].strip()
+```bash
+# Set up config files
+cp conf/agent.yml.template conf/agent.yml
+
+# Set environment variables
+export DATUS_CONFIG=/path/to/agent.yml
+export OPENAI_API_KEY=your_key
 ```
 
-**Benefits** of `llm_result2json()`:
-- Handles markdown code blocks (```json, ```) automatically
-- Repairs truncated JSON (missing closing brackets)
-- Repairs malformed JSON (json-repair integration)
-- Validates expected types (dict/list)
-- Consistent error handling across all nodes
+## Docker Support
 
-**Nodes updated**: IntentClarificationNode, IntentDetection, GenerateSQLNode, SemanticAgenticNode, SQLSummaryAgenticNode
+### Build Process
 
-### Workflow Termination Pattern
+```bash
+# Download required model (required before build)
+./download_model.sh
+# or
+HF_HUB_ENABLE_HF_TRANSFER=1 hf download --resume-download qdrant/all-MiniLM-L6-v2-onnx --local-dir docker/huggingface/fastembed/qdrant--all-MiniLM-L6-v2-onnx --local-dir-use-symlinks False
 
-When designing workflows with reflection/retry mechanisms, ensure the output node always executes to generate final reports:
+# Build image
+docker build -t datus-agent:latest .
 
-- **PROCEED_TO_OUTPUT** status allows workflow to continue to output node when strategies exhausted
-- Output node acts as a "finally" block - always executes for report generation regardless of success/failure
-- Reflection nodes should use `PROCEED_TO_OUTPUT` instead of `TERMINATE_WITH_ERROR` when max iterations/rounds reached
-- This ensures users receive comprehensive reports with error details, SQL queries, and actionable suggestions
-
-**Termination Status Hierarchy** (`datus/agent/workflow_runner.py`):
-- `CONTINUE` - Normal execution flow
-- `SKIP_TO_REFLECT` - Soft failure, jump to reflection for recovery
-- `PROCEED_TO_OUTPUT` - Recovery exhausted, generate final report
-- `TERMINATE_WITH_ERROR` - Hard failure, no recovery possible
-
-## FastAPI Streaming & Task Cancellation
-
-### Cooperative Cancellation Pattern for SSE
-
-When implementing FastAPI `StreamingResponse` with `asyncio.create_task()`, the generator and task are independent execution units. Cancelling the task doesn't stop the generator.
-
-**Problem pattern:**
-```python
-# chat_research endpoint creates two independent units:
-stream_task = asyncio.create_task(_run_chat_research_task(...))  # Background wait task
-return StreamingResponse(_generate_chat_research_stream(...))   # Generator with actual work
-# DELETE endpoint cancels stream_task, but generator continues running!
+# Run container
+docker run -p 8080:8080 -v /path/to/agent.yml:/root/.datus/conf/agent.yml datus-agent:latest
 ```
 
-**Solution - Cooperative cancellation via meta flag:**
-1. DELETE endpoint sets `running_task.meta["cancelled"] = True` before calling `task.cancel()`
-2. Generator checks `running_task.meta.get("cancelled")` at start and during execution loop
-3. When detected, generator raises `asyncio.CancelledError` to stop workflow gracefully
+Model files are not included in Git repository - must be downloaded locally before building.
 
-**Implementation locations:**
-- DELETE endpoint: `datus/api/service.py` (~1685-1688)
-- Stream generator: `_generate_chat_research_stream` (~227-231) checks at start
-- Workflow loop: `run_chat_research_stream` (~953-958) checks during iteration
+## Testing Guidelines
 
-**Key insight:** `asyncio.create_task()` creates independent Tasks that don't control generators consumed by framework components like `StreamingResponse`. Use cooperative cancellation patterns when these need to coordinate.
+### Test Organization
 
-## Text2SQL Schema Discovery Fixes
+```
+tests/
+├── unit_tests/          # Unit tests
+├── integration/         # Integration tests
+├── api/                # API tests
+├── conftest.py         # Pytest fixtures
+└── test_*.py          # Test files
+```
 
-- Use `get_tables()` not `get_all_table_names()` for database connector API
-- LLM should select from actual database tables, not hallucinate names
-- Event.planId must match TodoItem.id for proper frontend binding
-- Use unified plan ID strategy for preflight tools and error events
+### Test Configuration
 
-## Schema Discovery & DDL Retrieval Fixes
+Configured in `pytest.ini`:
+- Verbose output with `-s -vv`
+- Test discovery in `tests/` directory
+- Logging enabled at INFO level
+- Acceptance tests marked with `@pytest.mark.acceptance`
 
-- Fix StarRocksConnector SQL syntax errors by removing duplicate database name specifications:
-  * SHOW TABLES FROM `{db}` → USE `{db}` + SHOW TABLES
-  * SHOW CREATE TABLE `{db}`.`{table}` → SHOW CREATE TABLE `{table}`
-  * Add proper database context switching with USE statements
-- Implement safe task restoration in SchemaDiscoveryNode using instance variables and finally blocks to prevent parameter pollution in downstream nodes
-- Enhance error logging and debugging capabilities for better troubleshooting
+### Best Practices
 
-# important-instruction-reminders
-Do what has been asked; nothing more, nothing less.
-NEVER create files unless they're absolutely necessary for achieving your goal.
-ALWAYS prefer editing an existing file to creating a new one.
-NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
-Never save working files, text/mds and tests to the root folder.
+- Name tests `test_*.py`
+- Keep tests deterministic
+- Use small, focused fixtures
+- Test both success and error paths
+- Mock external dependencies
+
+## Git Workflow & CI/CD
+
+### Commit Messages
+
+Use conventional commits:
+- `feat(scope): add new feature`
+- `fix(scope): bug fix`
+- `docs(scope): documentation`
+- `test(scope): add tests`
+
+### GitHub Actions
+
+CI/CD workflows in `.github/workflows/`:
+- `run-ut.yml` - Unit tests on self-hosted runner
+- `run-integration.yml` - Integration tests
+- `code-quality.yml` - Code quality checks
+- `python-format-check.yml` - Format validation
+
+### Pre-commit Hooks
+
+Configured in `.pre-commit-config.yaml`:
+- Black (formatter)
+- Flake8 (linter)
+- isort (import sorter)
+
+Install with: `pre-commit install`
+
+## Common Development Tasks
+
+### Adding a New Node Type
+
+1. Create node class in `datus/agent/node/new_node.py`
+2. Add type constant to `datus/configuration/node_type.py`
+3. Register in node factory (`datus/agent/node/node.py`)
+4. Add workflow definition in `datus/agent/workflow.yml`
+5. Write unit tests in `tests/`
+
+### Running Specific Tests
+
+```bash
+# Test schema discovery
+pytest tests/test_schema_discovery_node.py -v
+
+# Test intent analysis
+pytest tests/test_intent_analysis_node.py -v
+
+# Test error handling
+pytest tests/test_error_handling.py -v
+
+# Run all unit tests
+pytest tests/unit_tests/ -v
+
+# Run with coverage
+pytest --cov=datus --cov-report=html tests/
+```
+
+### Debugging Workflows
+
+```bash
+# Enable debug logging
+export DATUS_LOG_LEVEL=DEBUG
+
+# Run with verbose pytest
+pytest tests/test_workflow.py -s -vv --tb=long
+
+# Check SSE compliance
+pytest tests/test_sse_compliance.py -v
+```
+
+## Performance & Monitoring
+
+### Query Caching
+
+- QueryCache integration for improved performance
+- 1-hour TTL for LLM intent clarification
+- Fallback mechanisms for cache failures
+
+### Monitoring
+
+- Structured logging with `structlog`
+- Performance metrics collection
+- Health checks for preflight tools
+- Workflow execution observability
+
+### Optimization
+
+- Lazy loading of embeddings
+- Async/await throughout
+- Streaming responses for long operations
+- Connection pooling for databases
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Build fails**: Run `make clean && make build`
+2. **Tests timeout**: Check `default_query_timeout_seconds` in config
+3. **Schema discovery fails**: Verify database connector is installed
+4. **LLM errors**: Check API keys in environment variables
+
+### Debug Commands
+
+```bash
+# Check configuration
+datus-agent --config-check
+
+# Test database connection
+datus-agent --test-db-connection
+
+# Validate workflow
+datus-agent --validate-workflow
+
+# Check version
+datus-agent --version
+```
+
+## Resources
+
+### Documentation
+- [Official Website](https://datus.ai)
+- [Documentation](https://docs.datus.ai/)
+- [Quickstart Guide](https://docs.datus.ai/getting_started/Quickstart/)
+- [Release Notes](https://docs.datus.ai/release_notes/)
+
+### Community
+- [Slack](https://join.slack.com/t/datus-ai/shared_invite/zt-3g6h4fsdg-iOl5uNoz6A4GOc4xKKWUYg)
+- [GitHub Issues](https://github.com/datus-ai/datus-agent/issues)
+
+### Related Projects
+- [Datus Adapters](https://github.com/Datus-ai/Datus-adapters) - Database connectors
+- [Claude Flow](https://github.com/ruvnet/claude-flow) - SPARC orchestration
+
+---
+
+Remember: **Claude Flow coordinates, Claude Code creates!**
