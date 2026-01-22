@@ -581,11 +581,11 @@ def _fix_truncated_ddl(ddl: str) -> str:
     # Check if DDL appears to be truncated
     ddl_upper = ddl.upper().strip()
 
+    stripped_ddl = ddl.rstrip()
     # Patterns that indicate truncation
     truncation_indicators = [
-        ddl.rstrip().endswith(','),  # Ends with comma (incomplete column list)
-        not ddl.rstrip().endswith(';'),  # No semicolon at end
-        not ('ENGINE=' in ddl_upper or 'PARTITION BY' in ddl_upper),  # Missing StarRocks-specific clauses
+        stripped_ddl.endswith(','),  # Ends with comma (incomplete column list)
+        not stripped_ddl.endswith(')'),  # Missing closing paren
     ]
 
     # Check if missing closing paren for CREATE TABLE
@@ -613,16 +613,31 @@ def _fix_truncated_ddl(ddl: str) -> str:
 
             fixed_ddl = '\n'.join(lines)
 
+        stripped_fixed = fixed_ddl.rstrip()
+        if missing_closing_paren or not stripped_fixed.endswith(')'):
+            if stripped_fixed.endswith(';'):
+                fixed_ddl = stripped_fixed.rstrip(';')
+            fixed_ddl += '\n)'
+
+        fixed_upper = fixed_ddl.upper()
+        starrocks_indicators = [
+            'DUPLICATE KEY' in fixed_upper,
+            'AGGREGATE KEY' in fixed_upper,
+            'UNIQUE KEY' in fixed_upper,
+            'PRIMARY KEY' in fixed_upper,
+            'DISTRIBUTED BY' in fixed_upper,
+            'PARTITION BY' in fixed_upper,
+            'PROPERTIES' in fixed_upper,
+        ]
+
         # Add basic StarRocks table structure if missing
-        if 'ENGINE=' not in fixed_ddl.upper():
-            # If missing closing paren, add it before ENGINE
-            if missing_closing_paren:
-                fixed_ddl += '\n) ENGINE=OLAP;'
-            # If has closing paren but missing ENGINE
-            elif not fixed_ddl.rstrip().endswith(';'):
+        if 'ENGINE=' not in fixed_upper and any(starrocks_indicators):
+            if not fixed_ddl.rstrip().endswith(';'):
                 fixed_ddl += ' ENGINE=OLAP;'
             else:
                 fixed_ddl = fixed_ddl.rstrip(';') + ' ENGINE=OLAP;'
+        elif not fixed_ddl.rstrip().endswith(';'):
+            fixed_ddl += ';'
 
         # Clean up
         fixed_ddl = fixed_ddl.strip()

@@ -37,18 +37,18 @@ _TABLE_NAME_RE = re.compile(
 )
 
 _TABLE_COMMENT_RE = re.compile(
-    r"COMMENT\s*=\s*['\"]([^'\"]+)['\"]\s*$",
+    r"COMMENT\s*(?:=\s*)?['\"]([^'\"]+)['\"]\s*$",
     re.IGNORECASE
 )
 
 # Fallback pattern for corrupted DDL where closing quote might be missing
 _TABLE_COMMENT_LOOSE_RE = re.compile(
-    r"COMMENT\s*=\s*['\"]([^'\"]+)",
+    r"COMMENT\s*(?:=\s*)?['\"]([^'\"]+)",
     re.IGNORECASE
 )
 
 _COLUMN_COMMENT_RE = re.compile(
-    r"COMMENT\s*=\s*['\"]([^'\"]+)['\"]",
+    r"COMMENT\s*(?:=\s*)?['\"]([^'\"]+)['\"]",
     re.IGNORECASE
 )
 
@@ -105,7 +105,7 @@ _STARROCKS_PROPERTIES_RE = re.compile(
 )
 
 # DDL cleanup patterns for _clean_ddl()
-_UNCLOSED_COMMENT_RE = re.compile(r"COMMENT\s*['\"]([^'\"]*)$", re.IGNORECASE | re.MULTILINE)
+_UNCLOSED_COMMENT_RE = re.compile(r"COMMENT\s*(?:=\s*)?['\"]([^'\"]*)$", re.IGNORECASE | re.MULTILINE)
 
 # Comment sanitization patterns for validate_comment()
 _SCRIPT_TAG_RE = re.compile(r'<script[^>]*>.*?</script>', re.IGNORECASE | re.DOTALL)
@@ -150,7 +150,38 @@ def validate_sql_input(sql: Any, max_length: int = MAX_SQL_LENGTH) -> Tuple[bool
     # Check for potential ReDoS patterns (excessive nested parentheses)
     paren_depth = 0
     max_paren_depth = 100  # Reasonable limit for DDL
+    in_single_quote = False
+    in_double_quote = False
+    in_backtick = False
+    escaped = False
     for char in sql:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if in_single_quote:
+            if char == "'":
+                in_single_quote = False
+            continue
+        if in_double_quote:
+            if char == '"':
+                in_double_quote = False
+            continue
+        if in_backtick:
+            if char == "`":
+                in_backtick = False
+            continue
+        if char == "'":
+            in_single_quote = True
+            continue
+        if char == '"':
+            in_double_quote = True
+            continue
+        if char == "`":
+            in_backtick = True
+            continue
         if char == '(':
             paren_depth += 1
             if paren_depth > max_paren_depth:
@@ -265,7 +296,7 @@ def _preserve_chinese_comments(sql: str) -> tuple:
     import re
 
     protected = {}
-    pattern = re.compile(r'COMMENT\s+"([^"]*)"', re.IGNORECASE)
+    pattern = re.compile(r'COMMENT\s*(?:=\s*)?"([^"]*)"', re.IGNORECASE)
 
     def replace_with_placeholder(match):
         content = match.group(0)
@@ -292,6 +323,22 @@ def _restore_chinese_comments(sql: str, protected: dict) -> str:
     for placeholder, original in protected.items():
         result = result.replace(f'COMMENT "{placeholder}"', original)
     return result
+
+
+def _normalize_comment_quotes(sql: str) -> str:
+    """
+    Normalize COMMENT "text" to COMMENT 'text' for sqlglot parsing.
+
+    StarRocks allows double-quoted comments, but sqlglot expects string literals.
+    """
+    pattern = re.compile(r'(COMMENT\s*(?:=\s*)?)"([^"]*)"', re.IGNORECASE)
+
+    def replace(match):
+        prefix = match.group(1)
+        content = match.group(2).replace("'", "''")
+        return f"{prefix}'{content}'"
+
+    return pattern.sub(replace, sql)
 
 
 def _clean_ddl(sql: str) -> str:
@@ -379,10 +426,13 @@ def _clean_ddl(sql: str) -> str:
     if protected_content:
         cleaned = _restore_chinese_comments(cleaned, protected_content)
 
-    # Step 8: Clean up multiple spaces
+    # Step 8: Normalize COMMENT quotes for parsing compatibility
+    cleaned = _normalize_comment_quotes(cleaned)
+
+    # Step 9: Clean up multiple spaces
     cleaned = _MULTI_SPACE_RE.sub(" ", cleaned)
 
-    # Step 9: Final validation - if the SQL still looks incomplete, try to complete it
+    # Step 10: Final validation - if the SQL still looks incomplete, try to complete it
     cleaned = _complete_incomplete_ddl(cleaned)
 
     return cleaned.strip()
@@ -520,7 +570,8 @@ def parse_read_dialect(dialect: str = DBType.SNOWFLAKE) -> str:
 
 def parse_dialect(dialect: str = DBType.SNOWFLAKE) -> str:
     """Map SQL dialect to the dialect for sqlglot parsing."""
-    return (dialect or DBType.SNOWFLAKE).strip().lower()
+    normalized = (dialect or DBType.SNOWFLAKE).strip().lower()
+    return parse_read_dialect(normalized)
 
 
 def parse_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, Any]:
@@ -895,7 +946,38 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
         start_idx = -1
         end_idx = -1
 
+        in_single_quote = False
+        in_double_quote = False
+        in_backtick = False
+        escaped = False
         for i, char in enumerate(sql):
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if in_single_quote:
+                if char == "'":
+                    in_single_quote = False
+                continue
+            if in_double_quote:
+                if char == '"':
+                    in_double_quote = False
+                continue
+            if in_backtick:
+                if char == "`":
+                    in_backtick = False
+                continue
+            if char == "'":
+                in_single_quote = True
+                continue
+            if char == '"':
+                in_double_quote = True
+                continue
+            if char == "`":
+                in_backtick = True
+                continue
             if char == '(':
                 if paren_count == 0:
                     start_idx = i + 1
@@ -909,12 +991,51 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
         if start_idx > 0 and end_idx > start_idx:
             columns_text = sql[start_idx:end_idx]
 
-            # Split by comma, handling nested parentheses
+            # Split by comma, handling nested parentheses and quoted comments
             column_defs = []
             current_def = ""
             paren_depth = 0
+            in_single_quote = False
+            in_double_quote = False
+            in_backtick = False
+            escaped = False
 
             for char in columns_text:
+                if escaped:
+                    escaped = False
+                    current_def += char
+                    continue
+                if char == "\\":
+                    escaped = True
+                    current_def += char
+                    continue
+                if in_single_quote:
+                    if char == "'":
+                        in_single_quote = False
+                    current_def += char
+                    continue
+                if in_double_quote:
+                    if char == '"':
+                        in_double_quote = False
+                    current_def += char
+                    continue
+                if in_backtick:
+                    if char == "`":
+                        in_backtick = False
+                    current_def += char
+                    continue
+                if char == "'":
+                    in_single_quote = True
+                    current_def += char
+                    continue
+                if char == '"':
+                    in_double_quote = True
+                    current_def += char
+                    continue
+                if char == "`":
+                    in_backtick = True
+                    current_def += char
+                    continue
                 if char == '(':
                     paren_depth += 1
                     current_def += char
