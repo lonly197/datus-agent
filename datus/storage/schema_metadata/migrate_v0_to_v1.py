@@ -19,14 +19,15 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.agent_config_loader import load_agent_config
 from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata import SchemaStorage, SchemaWithValueRAG
+from datus.models.base import LLMBaseModel
 from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, parse_dialect
+from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, parse_dialect, validate_comment, validate_table_name
 from datus.utils.constants import DBType
 
 # Import _fix_truncated_ddl to fix truncated DDL before parsing
@@ -346,6 +347,8 @@ def migrate_schema_storage(
     backup_path: Optional[str] = None,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
+    llm_fallback: bool = False,
+    llm_model: Optional[LLMBaseModel] = None,
 ) -> int:
     """
     Migrate schema metadata from v0 to v1 format.
@@ -367,6 +370,94 @@ def migrate_schema_storage(
     Returns:
         Number of records migrated
     """
+    def _llm_fallback_parse_ddl(ddl: str) -> Optional[Dict[str, Any]]:
+        if not llm_fallback or not llm_model:
+            return None
+        if not ddl or not isinstance(ddl, str):
+            return None
+
+        prompt = (
+            "You are a SQL DDL parser. Extract metadata from the CREATE TABLE statement.\n"
+            "Return ONLY a JSON object with this schema:\n"
+            "{\n"
+            '  "table": {"name": "", "comment": ""},\n'
+            '  "columns": [{"name": "", "type": "", "comment": "", "nullable": true}],\n'
+            '  "primary_keys": [],\n'
+            '  "foreign_keys": [],\n'
+            '  "indexes": []\n'
+            "}\n"
+            "Rules:\n"
+            "- Only use information present in the DDL.\n"
+            "- If a field is missing, use empty string or empty list.\n"
+            "- Keep comments exactly as written (may contain Chinese and punctuation).\n"
+            "- If NULL/NOT NULL is not specified, set nullable=true.\n"
+            "DDL:\n"
+            "```sql\n"
+            f"{ddl}\n"
+            "```\n"
+        )
+
+        try:
+            response = llm_model.generate_with_json_output(prompt)
+        except Exception as exc:
+            logger.warning(f"LLM fallback parse failed: {exc}")
+            return None
+
+        if not isinstance(response, dict):
+            return None
+
+        table = response.get("table") if isinstance(response.get("table"), dict) else {}
+        table_name = table.get("name", "") if isinstance(table.get("name"), str) else ""
+        is_valid, _, table_name = validate_table_name(table_name)
+        if not is_valid or not table_name:
+            table_name = ""
+
+        table_comment = table.get("comment", "") if isinstance(table.get("comment"), str) else ""
+        is_valid, _, table_comment = validate_comment(table_comment)
+        if not is_valid or table_comment is None:
+            table_comment = ""
+
+        columns = []
+        raw_columns = response.get("columns", [])
+        if isinstance(raw_columns, list):
+            for col in raw_columns:
+                if not isinstance(col, dict):
+                    continue
+                col_name = col.get("name", "")
+                if not isinstance(col_name, str) or not col_name:
+                    continue
+                col_type = col.get("type", "")
+                if not isinstance(col_type, str):
+                    col_type = ""
+                col_comment = col.get("comment", "")
+                if not isinstance(col_comment, str):
+                    col_comment = ""
+                is_valid, _, col_comment = validate_comment(col_comment)
+                if not is_valid or col_comment is None:
+                    col_comment = ""
+                nullable = col.get("nullable", True)
+                if not isinstance(nullable, bool):
+                    nullable = True
+                columns.append(
+                    {
+                        "name": col_name,
+                        "type": col_type,
+                        "comment": col_comment,
+                        "nullable": nullable,
+                    }
+                )
+
+        if not table_name or not columns:
+            return None
+
+        return {
+            "table": {"name": table_name, "comment": table_comment},
+            "columns": columns,
+            "primary_keys": response.get("primary_keys", []) if isinstance(response.get("primary_keys"), list) else [],
+            "foreign_keys": response.get("foreign_keys", []) if isinstance(response.get("foreign_keys"), list) else [],
+            "indexes": response.get("indexes", []) if isinstance(response.get("indexes"), list) else [],
+        }
+
     try:
         # Step 1: Load source data
         if backup_path and os.path.exists(backup_path):
@@ -422,6 +513,11 @@ def migrate_schema_storage(
                 # Parse enhanced metadata from DDL with dialect detection
                 detected_dialect = detect_dialect_from_ddl(definition)
                 enhanced_metadata = extract_enhanced_metadata_from_ddl(definition, dialect=detected_dialect)
+                if llm_fallback and (not enhanced_metadata["columns"] or not enhanced_metadata["table"].get("name")):
+                    llm_metadata = _llm_fallback_parse_ddl(definition)
+                    if llm_metadata:
+                        enhanced_metadata = llm_metadata
+                        logger.info(f"LLM fallback parsed DDL for table: {table_name}")
 
                 # Extract comment information
                 table_comment = enhanced_metadata["table"].get("comment", "")
@@ -1065,6 +1161,8 @@ def main():
     parser.add_argument("--skip-backup", action="store_true", help="Skip backup creation")
     parser.add_argument("--force", action="store_true", help="Force migration even if v1 already exists")
     parser.add_argument("--import-schemas", action="store_true", help="Import schema metadata from database after migration (recommended for fresh installations)")
+    parser.add_argument("--llm-fallback", action="store_true", help="Use LLM as final fallback for DDL parsing failures")
+    parser.add_argument("--llm-model", help="Optional model name for LLM fallback (defaults to active model)")
 
     args = parser.parse_args()
 
@@ -1098,6 +1196,7 @@ def main():
     logger.info(f"Database path: {db_path}")
     logger.info(f"Extract statistics: {args.extract_statistics}")
     logger.info(f"Extract relationships: {args.extract_relationships}")
+    logger.info(f"LLM fallback: {args.llm_fallback}")
     logger.info("")
 
     # Report current migration state (diagnostics)
@@ -1152,6 +1251,15 @@ def main():
     except Exception as e:
         logger.debug(f"Could not check migration status: {e}")
 
+    llm_model = None
+    if args.llm_fallback:
+        try:
+            llm_model = LLMBaseModel.create_model(agent_config, model_name=args.llm_model)
+        except Exception as e:
+            logger.warning(f"Failed to initialize LLM model for fallback: {e}")
+            logger.warning("Disabling LLM fallback for this run")
+            args.llm_fallback = False
+
     # Perform migration
     logger.info("Starting migration...")
     logger.info("")
@@ -1173,7 +1281,9 @@ def main():
             schema_store,
             backup_path=args.backup_path,
             extract_statistics=args.extract_statistics,
-            extract_relationships=args.extract_relationships
+            extract_relationships=args.extract_relationships,
+            llm_fallback=args.llm_fallback,
+            llm_model=llm_model,
         )
         migration_results["schemas_migrated"] = migrated_schemas
         logger.info(f"✅ Migrated {migrated_schemas} schema records")
