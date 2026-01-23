@@ -8,6 +8,7 @@ import csv
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional, Set
 
 from pydantic import ValidationError
@@ -605,6 +606,8 @@ class Agent:
                     logger.debug(f"Task {task_id} completed successfully")
                 except Exception as exc:
                     task_id = task_item.get(task_id_key) or task_item.get("_task_id")
+                    if task_id is None:
+                        task_id = f"unknown_{len(future_to_task)}"
                     logger.error(f"Task {task_id} generated an exception: {exc}")
         logger.info("Benchmark execution completed.")
         return {"status": "success", "message": "Benchmark tasks executed successfully"}
@@ -846,6 +849,10 @@ class Agent:
                 continue
 
         # Save dataset to file based on format
+        # Validate dataset_name to prevent path traversal attacks
+        if dataset_name != Path(dataset_name).name:
+            raise ValueError(f"Invalid dataset_name '{dataset_name}': must be a simple filename without path separators")
+
         if output_format == "json":
             output_file = f"{dataset_name}.json"
             with open(output_file, "w", encoding="utf-8") as f:

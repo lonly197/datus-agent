@@ -129,6 +129,10 @@ class IntentDetector:
             keyword_threshold: Minimum number of keyword matches to consider SQL intent
             llm_confidence_threshold: Minimum confidence for LLM classification to be accepted
         """
+        # Validate keyword_threshold to prevent potential integer overflow in confidence calculation
+        if keyword_threshold > 100:
+            logger.warning(f"keyword_threshold {keyword_threshold} too high, clamping to 100")
+            keyword_threshold = 100
         self.keyword_threshold = keyword_threshold
         self.llm_confidence_threshold = llm_confidence_threshold
         # Clear cache on initialization

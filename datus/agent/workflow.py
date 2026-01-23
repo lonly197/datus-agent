@@ -75,6 +75,7 @@ class Workflow:
 
         self.nodes[node.id] = node
         node.workflow = self
+        self._cache_dirty = True  # Mark cache as dirty since nodes have changed
 
         if position is not None and 0 <= position <= len(self.node_order):
             self.node_order.insert(position, node.id)
@@ -180,9 +181,12 @@ class Workflow:
     def _rebuild_node_type_cache(self):
         """Rebuild the node type cache."""
         self._last_node_by_type_cache = {}
-        for nid in reversed(range(self.current_node_index)):
-            node = self.nodes[self.node_order[nid]]
-            if node.type not in self._last_node_by_type_cache:
+        # Iterate backwards from current_node_index - 1 to 0
+        for i in range(self.current_node_index - 1, -1, -1):
+            if i >= len(self.node_order):
+                continue
+            node = self.nodes.get(self.node_order[i])
+            if node and node.type not in self._last_node_by_type_cache:
                 self._last_node_by_type_cache[node.type] = node.id
         self._cache_dirty = False
 

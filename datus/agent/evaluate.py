@@ -60,7 +60,7 @@ def evaluate_result(node: Node, workflow: Workflow) -> Dict[str, Any]:
         update_result = update_context_from_node(node, workflow)
 
         # Check for critical failures that should stop the workflow
-        if not update_result["success"]:
+        if not update_result.get("success", True):
             error_msg = str(update_result.get("message", "Unknown error"))
 
             # Determine if this is a critical failure

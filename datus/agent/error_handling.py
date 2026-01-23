@@ -198,9 +198,9 @@ def _create_node_error_result(
         # Fallback if update fails
         pass
 
-    # Generate recovery suggestions and retryable flag based on error type
+    # Generate recovery suggestions based on error type
+    # Note: retryable flag is set based on error type below; caller-provided value is ignored
     recovery_suggestions = []
-    retryable = False
 
     if error_code == ErrorCode.DB_CONNECTION_FAILED:
         recovery_suggestions = [
