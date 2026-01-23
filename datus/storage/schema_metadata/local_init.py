@@ -817,7 +817,7 @@ def _fix_truncated_ddl(ddl: str) -> str:
         fixed_ddl = fixed_ddl.strip()
 
         if fixed_ddl != ddl:
-            logger.info(f"Fixed truncated DDL for table (length: {len(ddl)} -> {len(fixed_ddl)})")
+            logger.debug(f"Fixed truncated DDL for table (length: {len(ddl)} -> {len(fixed_ddl)})")
             return fixed_ddl
 
     return ddl

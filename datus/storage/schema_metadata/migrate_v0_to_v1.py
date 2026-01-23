@@ -355,6 +355,7 @@ def migrate_schema_storage(
     extract_relationships: bool = True,
     llm_fallback: bool = False,
     llm_model: Optional[LLMBaseModel] = None,
+    update_existing: bool = False,
 ) -> int:
     """
     Migrate schema metadata from v0 to v1 format.
@@ -376,6 +377,9 @@ def migrate_schema_storage(
     Returns:
         Number of records migrated
     """
+    def _escape_where_value(value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
     def _llm_fallback_parse_ddl(ddl: str) -> Optional[Dict[str, Any]]:
         if not llm_fallback or not llm_model:
             return None
@@ -554,6 +558,13 @@ def migrate_schema_storage(
         migrated_count = 0
         batch_size = 100
         batch_updates = []
+        batch_status = []
+        existing_identifiers = set()
+        try:
+            existing_data = storage._search_all(where=None, select_fields=["identifier"])
+            existing_identifiers = {row.get("identifier", "") for row in existing_data.to_pylist() if row.get("identifier")}
+        except Exception as exc:
+            logger.debug(f"Could not load existing identifiers: {exc}")
 
         for i, row in enumerate(backup_records):
             try:
@@ -565,13 +576,28 @@ def migrate_schema_storage(
                 table_type = row["table_type"]
                 definition = row["definition"]
                 qualified_table = ".".join(part for part in [database_name, schema_name, table_name] if part)
-                logger.info(
-                    f"[{i + 1}/{total_records}] Migrating {qualified_table} ({table_type})"
-                )
+                logger.info(f"[{i + 1}/{total_records}] Processing {qualified_table} ({table_type})")
+
+                if identifier in existing_identifiers and not update_existing:
+                    logger.info(f"  - SKIP: already exists in storage")
+                    continue
+                if identifier in existing_identifiers and update_existing:
+                    try:
+                        escaped_identifier = _escape_where_value(identifier)
+                        storage.table.delete(f'identifier = "{escaped_identifier}"')
+                    except Exception as exc:
+                        logger.warning(f"  - UPDATE: failed to remove existing record: {exc}")
+                    else:
+                        logger.info("  - UPDATE: replacing existing record")
 
                 # Fix truncated DDL before parsing
                 # This handles incomplete DDL statements from SHOW CREATE TABLE
+                original_definition = definition
                 definition = _fix_truncated_ddl(definition)
+                if definition != original_definition:
+                    logger.info(
+                        f"  - DDL FIXED: length {len(original_definition)} -> {len(definition)}"
+                    )
 
                 # Parse enhanced metadata from DDL with dialect detection
                 detected_dialect = detect_dialect_from_ddl(definition)
@@ -641,14 +667,26 @@ def migrate_schema_storage(
                     update_data = {key: value for key, value in update_data.items() if key in table_fields}
 
                 # LanceDB handles embedding automatically via table's embedding function config
+                action = "UPDATE" if identifier in existing_identifiers and update_existing else "INSERT"
                 batch_updates.append(update_data)
+                batch_status.append((qualified_table, action))
                 migrated_count += 1
 
                 # Batch insert (no delete needed since table was recreated)
                 if len(batch_updates) >= batch_size:
-                    storage.table.add(batch_updates)
-                    logger.info(f"Migrated batch of {len(batch_updates)} records (total: {migrated_count}/{len(backup_records)})")
+                    try:
+                        storage.table.add(batch_updates)
+                    except Exception as exc:
+                        for table_name, table_action in batch_status:
+                            logger.error(f"  - {table_action} FAILED: {table_name} ({exc})")
+                    else:
+                        for table_name, table_action in batch_status:
+                            logger.info(f"  - {table_action} OK: {table_name}")
+                        logger.info(
+                            f"Migrated batch of {len(batch_updates)} records (total: {migrated_count}/{len(backup_records)})"
+                        )
                     batch_updates = []
+                    batch_status = []
 
             except Exception as e:
                 logger.error(f"Failed to migrate record {i}: {e}")
@@ -656,8 +694,15 @@ def migrate_schema_storage(
 
         # Flush remaining records
         if batch_updates:
-            storage.table.add(batch_updates)
-            logger.info(f"Migrated final batch of {len(batch_updates)} records")
+            try:
+                storage.table.add(batch_updates)
+            except Exception as exc:
+                for table_name, table_action in batch_status:
+                    logger.error(f"  - {table_action} FAILED: {table_name} ({exc})")
+            else:
+                for table_name, table_action in batch_status:
+                    logger.info(f"  - {table_action} OK: {table_name}")
+                logger.info(f"Migrated final batch of {len(batch_updates)} records")
 
         logger.info(f"Migration completed: {migrated_count} records upgraded to v1")
         return migrated_count
@@ -1362,6 +1407,7 @@ def main():
             extract_relationships=args.extract_relationships,
             llm_fallback=args.llm_fallback,
             llm_model=llm_model,
+            update_existing=args.force,
         )
         migration_results["schemas_migrated"] = migrated_schemas
         logger.info(f"✅ Migrated {migrated_schemas} schema records")
