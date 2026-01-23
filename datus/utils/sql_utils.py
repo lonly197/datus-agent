@@ -158,34 +158,63 @@ def validate_sql_input(sql: Any, max_length: int = MAX_SQL_LENGTH) -> Tuple[bool
     in_single_quote = False
     in_double_quote = False
     in_backtick = False
+    in_line_comment = False
+    in_block_comment = False
     escaped = False
+    prev_char = ""
     for char in sql:
+        if in_line_comment:
+            if char == "\n":
+                in_line_comment = False
+            prev_char = char
+            continue
+        if in_block_comment:
+            if prev_char == "*" and char == "/":
+                in_block_comment = False
+            prev_char = char
+            continue
         if escaped:
             escaped = False
+            prev_char = char
             continue
         if char == "\\":
             escaped = True
+            prev_char = char
             continue
         if in_single_quote:
             if char == "'":
                 in_single_quote = False
+            prev_char = char
             continue
         if in_double_quote:
             if char == '"':
                 in_double_quote = False
+            prev_char = char
             continue
         if in_backtick:
             if char == "`":
                 in_backtick = False
+            prev_char = char
+            continue
+        if prev_char == "-" and char == "-":
+            in_line_comment = True
+            prev_char = char
+            continue
+        if prev_char == "/" and char == "*":
+            in_block_comment = True
+            prev_char = char
             continue
         if char == "'":
             in_single_quote = True
+            prev_char = char
             continue
         if char == '"':
             in_double_quote = True
+            prev_char = char
             continue
         if char == "`":
             in_backtick = True
+            prev_char = char
             continue
         if char == '(':
             paren_depth += 1
@@ -195,6 +224,7 @@ def validate_sql_input(sql: Any, max_length: int = MAX_SQL_LENGTH) -> Tuple[bool
             paren_depth -= 1
             if paren_depth < 0:
                 return False, "Unbalanced parentheses in SQL"
+        prev_char = char
 
     # Check for NULL bytes (could indicate binary injection)
     if '\x00' in sql:
@@ -687,7 +717,11 @@ def parse_dialect(dialect: str = DBType.SNOWFLAKE) -> str:
     return parse_read_dialect(normalized)
 
 
-def parse_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, Any]:
+def parse_metadata_from_ddl(
+    sql: str,
+    dialect: str = DBType.SNOWFLAKE,
+    warn_on_invalid: bool = True,
+) -> Dict[str, Any]:
     """
     Parse SQL CREATE TABLE statement and return structured table and column information.
 
@@ -701,7 +735,10 @@ def parse_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[s
     # Validate input
     is_valid, error_msg = validate_sql_input(sql)
     if not is_valid:
-        logger.warning(f"Invalid SQL input: {error_msg}")
+        if warn_on_invalid:
+            logger.warning(f"Invalid SQL input: {error_msg}")
+        else:
+            logger.debug(f"Invalid SQL input: {error_msg}")
         return {"table": {"name": ""}, "columns": []}
 
     dialect = parse_dialect(dialect)
@@ -779,7 +816,11 @@ def parse_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[s
         return {"table": {"name": ""}, "columns": []}
 
 
-def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, Any]:
+def extract_enhanced_metadata_from_ddl(
+    sql: str,
+    dialect: str = DBType.SNOWFLAKE,
+    warn_on_invalid: bool = True,
+) -> Dict[str, Any]:
     """
     Extract comprehensive metadata from DDL including comments, constraints, and relationships.
 
@@ -797,7 +838,10 @@ def extract_enhanced_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE
     # Validate input
     is_valid, error_msg = validate_sql_input(sql)
     if not is_valid:
-        logger.warning(f"Invalid SQL input: {error_msg}")
+        if warn_on_invalid:
+            logger.warning(f"Invalid SQL input: {error_msg}")
+        else:
+            logger.debug(f"Invalid SQL input: {error_msg}")
         return {
             "table": {"name": "", "comment": ""},
             "columns": [],

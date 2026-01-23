@@ -550,6 +550,7 @@ def migrate_schema_storage(
                 f"{', '.join(missing_required)}"
             )
 
+        total_records = len(backup_records)
         migrated_count = 0
         batch_size = 100
         batch_updates = []
@@ -563,6 +564,10 @@ def migrate_schema_storage(
                 table_name = row["table_name"]
                 table_type = row["table_type"]
                 definition = row["definition"]
+                qualified_table = ".".join(part for part in [database_name, schema_name, table_name] if part)
+                logger.info(
+                    f"[{i + 1}/{total_records}] Migrating {qualified_table} ({table_type})"
+                )
 
                 # Fix truncated DDL before parsing
                 # This handles incomplete DDL statements from SHOW CREATE TABLE
@@ -570,7 +575,11 @@ def migrate_schema_storage(
 
                 # Parse enhanced metadata from DDL with dialect detection
                 detected_dialect = detect_dialect_from_ddl(definition)
-                enhanced_metadata = extract_enhanced_metadata_from_ddl(definition, dialect=detected_dialect)
+                enhanced_metadata = extract_enhanced_metadata_from_ddl(
+                    definition,
+                    dialect=detected_dialect,
+                    warn_on_invalid=False,
+                )
                 if llm_fallback and (not enhanced_metadata["columns"] or not enhanced_metadata["table"].get("name")):
                     llm_metadata = _llm_fallback_parse_ddl(definition)
                     if llm_metadata:
