@@ -25,6 +25,7 @@ from datus.utils.context_lock import safe_context_update
 from datus.utils.error_handler import LLMMixin, NodeExecutionResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
+from datus.utils.constants import DBType
 from datus.utils.sql_utils import extract_table_names
 
 logger = get_logger(__name__)
@@ -1098,6 +1099,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             # Initialize RAG for storage operations
             rag = SchemaWithValueRAG(agent_config=self.agent_config)
             schemas_to_store = []
+            seen_identifiers = set()
             
             # Define list of (connector, db_name, catalog, schema) tuples to process
             connectors_to_process = []
@@ -1118,6 +1120,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             for connector, db_name, catalog, schema in connectors_to_process:
                 try:
+                    dialect = getattr(connector, "dialect", None) or getattr(task, "database_type", None)
+                    db_candidates = self._filter_candidate_tables_for_db(candidate_tables, db_name, dialect)
                     if hasattr(connector, "get_tables_with_ddl"):
                         logger.info(f"Using get_tables_with_ddl to retrieve all table DDLs from {db_name}...")
                         tables_with_ddl = connector.get_tables_with_ddl()
@@ -1125,9 +1129,13 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         for tbl_info in tables_with_ddl:
                             table_name = tbl_info.get("name", "")
                             if table_name:
+                                identifier = f"{catalog or ''}.{db_name}..{table_name}.table"
+                                if identifier in seen_identifiers:
+                                    continue
+                                seen_identifiers.add(identifier)
                                 schemas_to_store.append(
                                     {
-                                        "identifier": f"{catalog or ''}.{db_name}..{table_name}.table",
+                                        "identifier": identifier,
                                         "catalog_name": catalog or "",
                                         "database_name": db_name,
                                         "schema_name": schema or "",
@@ -1138,9 +1146,15 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                                 )
                     elif hasattr(connector, "get_table_ddl") or hasattr(connector, "get_ddl"):
                         logger.info(f"Retrieving DDL for candidate tables individually from {db_name}...")
-                        for table_name in candidate_tables:
+                        if not db_candidates:
+                            continue
+                        lookup_seen = set()
+                        for table_name in db_candidates:
                             # Handle potential prefix
                             lookup_name = table_name.split(".")[-1] if "." in table_name else table_name
+                            if lookup_name in lookup_seen:
+                                continue
+                            lookup_seen.add(lookup_name)
                             try:
                                 ddl = None
                                 if hasattr(connector, "get_table_ddl"):
@@ -1149,9 +1163,13 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                                     ddl = connector.get_ddl(lookup_name)
                                 
                                 if ddl:
+                                    identifier = f"{catalog or ''}.{db_name}..{lookup_name}.table"
+                                    if identifier in seen_identifiers:
+                                        continue
+                                    seen_identifiers.add(identifier)
                                     schemas_to_store.append(
                                         {
-                                            "identifier": f"{catalog or ''}.{db_name}..{lookup_name}.table",
+                                            "identifier": identifier,
                                             "catalog_name": catalog or "",
                                             "database_name": db_name,
                                             "schema_name": schema or "",
@@ -1172,12 +1190,14 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
                 # Retry schema search with populated storage
                 target_database = "" if is_multi_db else (task.database_name or "")
+                target_catalog = "" if is_multi_db else (task.catalog_name or "")
+                target_schema = "" if is_multi_db else (task.schema_name or "")
                 
                 schemas, values = rag.search_tables(
                     tables=candidate_tables,
-                    catalog_name=task.catalog_name or "",
+                    catalog_name=target_catalog,
                     database_name=target_database,
-                    schema_name=task.schema_name or "",
+                    schema_name=target_schema,
                     dialect=task.database_type if hasattr(task, "database_type") else None,
                 )
 
@@ -1204,12 +1224,64 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             else:
                 # Enhanced fallback when get_tables_with_ddl returns 0 tables
                 for connector, db_name, catalog, schema in connectors_to_process:
-                    await self._enhanced_ddl_fallback(candidate_tables, task, connector, db_name=db_name)
+                    await self._enhanced_ddl_fallback(
+                        candidate_tables,
+                        task,
+                        connector,
+                        db_name=db_name,
+                        catalog_name=catalog,
+                        schema_name=schema,
+                    )
 
         except Exception as e:
             logger.warning(f"DDL fallback failed: {e}")
 
-    async def _enhanced_ddl_fallback(self, candidate_tables: List[str], task, connector, db_name: str = None) -> None:
+    def _filter_candidate_tables_for_db(
+        self,
+        candidate_tables: List[str],
+        db_name: str,
+        dialect: Optional[str],
+    ) -> List[str]:
+        """
+        Filter candidate tables to those explicitly matching the current database.
+
+        If no explicit database-qualified candidates match, return unqualified entries
+        so we still attempt a best-effort fallback.
+        """
+        explicit_matches: List[str] = []
+        implicit_matches: List[str] = []
+
+        for table in candidate_tables:
+            parts = table.split(".")
+            db_candidate = None
+            if len(parts) >= 4:
+                db_candidate = parts[1]
+            elif len(parts) == 3:
+                if dialect == DBType.STARROCKS:
+                    db_candidate = parts[1]
+                else:
+                    db_candidate = parts[0]
+            elif len(parts) == 2:
+                if dialect in (DBType.SQLITE, DBType.MYSQL, DBType.STARROCKS):
+                    db_candidate = parts[0]
+
+            if db_candidate:
+                if db_candidate == db_name:
+                    explicit_matches.append(table)
+            else:
+                implicit_matches.append(table)
+
+        return explicit_matches if explicit_matches else implicit_matches
+
+    async def _enhanced_ddl_fallback(
+        self,
+        candidate_tables: List[str],
+        task,
+        connector,
+        db_name: str = None,
+        catalog_name: str = "",
+        schema_name: str = "",
+    ) -> None:
         """
         Enhanced fallback strategy when get_tables_with_ddl returns 0 tables.
 
@@ -1230,6 +1302,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             # Use provided db_name or fall back to task.database_name
             current_db = db_name or task.database_name or ""
+            current_catalog = catalog_name or task.catalog_name or ""
+            current_schema = schema_name or task.schema_name or ""
+            dialect = getattr(connector, "dialect", None) or getattr(task, "database_type", None)
 
             # Check if multiple databases are configured (for target_database logic)
             db_configs = self.agent_config.current_db_configs()
@@ -1238,9 +1313,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             # Strategy 1: Get all tables and try individual DDL retrieval
             try:
                 all_tables = connector.get_tables(
-                    catalog_name=task.catalog_name or "",
+                    catalog_name=current_catalog,
                     database_name=current_db,
-                    schema_name=task.schema_name or "",
+                    schema_name=current_schema,
                 )
 
                 if all_tables:
@@ -1282,10 +1357,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                             if ddl:
                                 schemas_to_store.append(
                                     {
-                                        "identifier": f"{task.catalog_name or ''}.{current_db}..{table_name}.table",
-                                        "catalog_name": task.catalog_name or "",
+                                        "identifier": f"{current_catalog or ''}.{current_db}..{table_name}.table",
+                                        "catalog_name": current_catalog or "",
                                         "database_name": current_db,
-                                        "schema_name": task.schema_name or "",
+                                        "schema_name": current_schema or "",
                                         "table_name": table_name,
                                         "table_type": "table",
                                         "definition": ddl,
@@ -1302,12 +1377,14 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
                         # Retry schema search
                         target_database = "" if is_multi_db else (task.database_name or "")
+                        target_catalog = "" if is_multi_db else (task.catalog_name or "")
+                        target_schema = "" if is_multi_db else (task.schema_name or "")
 
                         schemas, values = rag.search_tables(
                             tables=candidate_tables,
-                            catalog_name=task.catalog_name or "",
+                            catalog_name=target_catalog,
                             database_name=target_database,
-                            schema_name=task.schema_name or "",
+                            schema_name=target_schema,
                             dialect=task.database_type if hasattr(task, "database_type") else None,
                         )
 
@@ -1324,17 +1401,19 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             if all_tables and candidate_tables:
                 logger.warning(f"All DDL retrieval attempts failed for {current_db}, storing table names for LLM reference")
                 rag = SchemaWithValueRAG(agent_config=self.agent_config)
+                db_candidates = self._filter_candidate_tables_for_db(candidate_tables, current_db, dialect)
+                candidate_lookup = {name.split(".")[-1] for name in db_candidates}
 
                 # Create minimal schema entries with just table names
                 minimal_schemas = []
                 for table_name in all_tables:
-                    if table_name in candidate_tables:
+                    if table_name in candidate_lookup:
                         minimal_schemas.append(
                             {
-                                "identifier": f"{task.catalog_name or ''}.{current_db}..{table_name}.table",
-                                "catalog_name": task.catalog_name or "",
+                                "identifier": f"{current_catalog or ''}.{current_db}..{table_name}.table",
+                                "catalog_name": current_catalog or "",
                                 "database_name": current_db,
-                                "schema_name": task.schema_name or "",
+                                "schema_name": current_schema or "",
                                 "table_name": table_name,
                                 "table_type": "table",
                                 "definition": f"CREATE TABLE {table_name} (-- DDL retrieval failed, table name only)",
