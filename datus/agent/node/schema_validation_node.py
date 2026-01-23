@@ -141,7 +141,7 @@ class SchemaValidationNode(Node, LLMMixin):
             action_id=f"{self.id}_prereq_ok",
             role=ActionRole.TOOL,
             messages="Workflow prerequisites validated",
-            action_type="schema_validation",
+            action_type="schema_validation_prereq",
             input={},
             status=ActionStatus.SUCCESS,
             output={},
@@ -348,8 +348,11 @@ class SchemaValidationNode(Node, LLMMixin):
             "missing_definitions": missing_definitions,
             "query_terms": query_terms,
             "coverage_score": schema_coverage["coverage_score"],
+            "coverage_threshold": coverage_threshold,
             "covered_terms": schema_coverage["covered_terms"],
             "uncovered_terms": schema_coverage["uncovered_terms"],
+            "term_evidence": schema_coverage.get("term_evidence", {}),
+            "table_coverage": schema_coverage.get("table_coverage", {}),
         }
 
         # Add recommendations if insufficient
@@ -385,6 +388,10 @@ class SchemaValidationNode(Node, LLMMixin):
         """Create appropriate action based on validation result."""
         table_count = validation_result["table_count"]
         coverage_score = validation_result["coverage_score"]
+        candidate_tables_count = 0
+        if self.workflow and hasattr(self.workflow, "metadata") and self.workflow.metadata:
+            candidate_tables_count = len(self.workflow.metadata.get("discovered_tables", []))
+        query_context = self._build_query_context(task)
 
         if validation_result["is_sufficient"]:
             return ActionHistory(
@@ -395,6 +402,12 @@ class SchemaValidationNode(Node, LLMMixin):
                 input={
                     "task": task.task[:50] if task else "",
                     "table_count": table_count,
+                    "candidate_tables_count": candidate_tables_count,
+                    "catalog": getattr(task, "catalog_name", ""),
+                    "database": getattr(task, "database_name", ""),
+                    "schema": getattr(task, "schema_name", "") or None,
+                    "coverage_threshold": validation_result.get("coverage_threshold"),
+                    "query_context": query_context,
                 },
                 status=ActionStatus.SUCCESS,
                 output=validation_result,
@@ -408,10 +421,32 @@ class SchemaValidationNode(Node, LLMMixin):
                 input={
                     "task": task.task[:50] if task else "",
                     "table_count": table_count,
+                    "candidate_tables_count": candidate_tables_count,
+                    "catalog": getattr(task, "catalog_name", ""),
+                    "database": getattr(task, "database_name", ""),
+                    "schema": getattr(task, "schema_name", "") or None,
+                    "coverage_threshold": validation_result.get("coverage_threshold"),
+                    "query_context": query_context,
                 },
                 status=ActionStatus.SOFT_FAILED,  # Allow reflection
                 output=validation_result,
             )
+
+    def _build_query_context(self, task) -> Dict[str, Any]:
+        context: Dict[str, Any] = {"task": task.task if task else ""}
+        if self.workflow and hasattr(self.workflow, "metadata") and self.workflow.metadata:
+            clarified_task = self.workflow.metadata.get("clarified_task")
+            if clarified_task:
+                context["clarified_task"] = clarified_task
+            clarification = self.workflow.metadata.get("intent_clarification", {})
+            if isinstance(clarification, dict):
+                entities = clarification.get("entities", {})
+                if entities:
+                    context["business_terms"] = entities.get("business_terms", [])
+                    context["dimensions"] = entities.get("dimensions", [])
+                    context["metrics"] = entities.get("metrics", [])
+                    context["time_range"] = entities.get("time_range")
+        return context
 
     def _handle_execution_error(self, error: Exception) -> ActionHistory:
         """Handle unexpected execution errors."""
@@ -523,7 +558,13 @@ class SchemaValidationNode(Node, LLMMixin):
         """
         if not query_terms:
             logger.debug("No query terms provided, returning perfect coverage")
-            return {"coverage_score": 1.0, "covered_terms": [], "uncovered_terms": []}
+            return {
+                "coverage_score": 1.0,
+                "covered_terms": [],
+                "uncovered_terms": [],
+                "term_evidence": {},
+                "table_coverage": {},
+            }
 
         logger.debug(f"Checking schema coverage for {len(query_terms)} query terms: {query_terms}")
 
@@ -538,19 +579,34 @@ class SchemaValidationNode(Node, LLMMixin):
 
         covered = []
         uncovered = []
+        term_evidence: Dict[str, Dict[str, Any]] = {}
 
         # Build a set of all schema terms (table names, column names, AND comments)
         schema_terms = set()
         comment_terms = {}  # Track which schema provided each comment term
+        term_sources: Dict[str, List[Dict[str, Any]]] = {}
+
+        def add_term_source(term: str, table_name: str, source: str, column_name: Optional[str] = None) -> None:
+            term_lower = term.lower()
+            schema_terms.add(term_lower)
+            term_sources.setdefault(term_lower, [])
+            term_sources[term_lower].append(
+                {
+                    "table": table_name,
+                    "source": source,
+                    "column": column_name,
+                }
+            )
         for schema in schemas:
             # Add table name
-            schema_terms.add(schema.table_name.lower())
+            add_term_source(schema.table_name, schema.table_name, "table_name")
 
             # Add column names from definition
             if schema.definition:
                 # Extract column names from CREATE TABLE statement
                 columns = re.findall(r"`(\w+)`", schema.definition)
-                schema_terms.update([c.lower() for c in columns])
+                for col_name in columns:
+                    add_term_source(col_name, schema.table_name, "column_name", column_name=col_name)
 
                 # ✅ ENHANCED: Extract Chinese comments from DDL using sqlglot
                 try:
@@ -563,7 +619,7 @@ class SchemaValidationNode(Node, LLMMixin):
                     if hasattr(parsed, "comment") and parsed.comment:
                         table_comment = str(parsed.comment).strip()
                         if table_comment:
-                            schema_terms.add(table_comment.lower())
+                            add_term_source(table_comment, schema.table_name, "table_comment")
                             comment_terms[table_comment.lower()] = f"table:{schema.table_name}"
                             logger.debug(f"Extracted table comment '{table_comment}' from {schema.table_name}")
 
@@ -573,8 +629,13 @@ class SchemaValidationNode(Node, LLMMixin):
                             if hasattr(column, "comment") and column.comment:
                                 col_comment = str(column.comment).strip()
                                 if col_comment:
-                                    schema_terms.add(col_comment.lower())
                                     col_name = column.name if hasattr(column, "name") else "unknown"
+                                    add_term_source(
+                                        col_comment,
+                                        schema.table_name,
+                                        "column_comment",
+                                        column_name=col_name,
+                                    )
                                     comment_terms[col_comment.lower()] = f"column:{schema.table_name}.{col_name}"
                                     logger.debug(
                                         f"Extracted column comment '{col_comment}' from {schema.table_name}.{col_name}"
@@ -599,15 +660,29 @@ class SchemaValidationNode(Node, LLMMixin):
                 else:
                     logger.debug(f"Term '{term}' matched directly (case-insensitive)")
                 covered.append(term)
+                term_evidence[term] = {
+                    "match_type": "direct",
+                    "matched_terms": [term_lower],
+                    "sources": term_sources.get(term_lower, []),
+                }
                 continue
 
             # ✅ Semantic match via centralized business term mapping (Chinese → English)
             english_terms = get_schema_term_mapping(term)
             if english_terms:
                 # Check if any of the mapped English terms are in the schema
-                if any(eng_term.lower() in schema_terms for eng_term in english_terms):
+                matched_english = [eng for eng in english_terms if eng.lower() in schema_terms]
+                if matched_english:
                     logger.debug(f"Term '{term}' matched via semantic mapping: {english_terms}")
                     covered.append(term)
+                    matched_sources = []
+                    for eng_term in matched_english:
+                        matched_sources.extend(term_sources.get(eng_term.lower(), []))
+                    term_evidence[term] = {
+                        "match_type": "semantic",
+                        "matched_terms": matched_english,
+                        "sources": matched_sources,
+                    }
                     continue
                 else:
                     logger.debug(f"Term '{term}' has mapping {english_terms} but no match found in schema")
@@ -626,6 +701,11 @@ class SchemaValidationNode(Node, LLMMixin):
                                 if schema and schema.table_name.lower() in explanation:
                                     covered.append(term)
                                     is_covered_by_kb = True
+                                    term_evidence[term] = {
+                                        "match_type": "external_knowledge",
+                                        "matched_terms": [term_lower],
+                                        "sources": [{"table": schema.table_name, "source": "external_knowledge"}],
+                                    }
                                     logger.info(
                                         f"Term '{term}' covered by ExtKnowledge mapping to table '{schema.table_name}'"
                                     )
@@ -646,6 +726,11 @@ class SchemaValidationNode(Node, LLMMixin):
                         logger.debug(f"Term '{term}' matched partially with '{schema_term}'")
                         covered.append(term)
                         found_partial = True
+                        term_evidence[term] = {
+                            "match_type": "partial",
+                            "matched_terms": [schema_term],
+                            "sources": term_sources.get(schema_term, []),
+                        }
                         break
 
                 if not found_partial:
@@ -664,10 +749,22 @@ class SchemaValidationNode(Node, LLMMixin):
             f"uncovered_terms={uncovered}"
         )
 
+        table_coverage: Dict[str, List[str]] = {}
+        for term, evidence in term_evidence.items():
+            for source in evidence.get("sources", []):
+                table = source.get("table")
+                if not table:
+                    continue
+                table_coverage.setdefault(table, [])
+                if term not in table_coverage[table]:
+                    table_coverage[table].append(term)
+
         return {
             "coverage_score": coverage_score,
             "covered_terms": covered,
             "uncovered_terms": uncovered,
+            "term_evidence": term_evidence,
+            "table_coverage": table_coverage,
         }
 
     def execute(self) -> BaseResult:
