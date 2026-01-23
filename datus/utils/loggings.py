@@ -352,9 +352,16 @@ def print_rich_exception(
     error_description: str = "Processed failed",
     file_logger: Optional[structlog.BoundLogger] = None,
 ) -> None:
+    """Print a concise, user-friendly error with a log file hint.
+
+    Args:
+        console: Rich Console object for printing to terminal
+        ex: The exception that occurred
+        error_description: Brief description of what failed
+        file_logger: Optional logger for error logging (defaults to module logger)
+    """
     if not file_logger:
         file_logger = get_logger(__name__)
-    """Print a concise, user-friendly error with a log file hint."""
 
     file_logger.error(f"{error_description}, Reason: {ex}")
     log_file = _get_current_log_file()

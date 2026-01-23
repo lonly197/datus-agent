@@ -189,10 +189,10 @@ class SubAgentManager:
         file_path = self._prompt_manager.user_templates_dir / file_name
 
         if not file_path.exists():
+            logger.debug("Prompt template file not found, skipping deletion: %s", file_path)
             return
         try:
             file_path.unlink()
-        except OSError as exc:  # pragma: no cover - defensive logging
+            logger.debug("Successfully deleted prompt template: %s", file_path)
+        except OSError as exc:
             logger.warning("Failed to delete prompt template '%s': %s", file_path, exc)
-        else:
-            return

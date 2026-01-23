@@ -21,7 +21,7 @@ class ErrorCode(Enum):
         "1000001",
         "Unexcepted value of {field_name}, excepted value: {except_values}, your value: {your_value}",
     )
-    COMMON_FILE_NOT_FOUND = ("100002", "{config_name} file not found: {file_name}")
+    COMMON_FILE_NOT_FOUND = ("1000002", "{config_name} file not found: {file_name}")
     COMMON_FIELD_REQUIRED = ("100003", "Missing required field: {field_name}")
     COMMON_UNSUPPORTED = ("100004", "Unsupported value `{your_value}` for field `{field_name}`")
     COMMON_ENV = ("100005", "The environment variable {env_var} is not set")
@@ -112,14 +112,14 @@ class ErrorCode(Enum):
 
     # Database errors - Constraints (SQLAlchemy IntegrityError)
     DB_CONSTRAINT_VIOLATION = (
-        "500008",
+        "500010",
         "Database constraint violation occurred. Error details: {error_message}",
     )
 
     # Database errors - Transaction (SQLAlchemy transaction issues)
     DB_TRANSACTION_FAILED = ("500009", "Database transaction failed. Error details: {error_message}")
 
-    DB_TABLE_NOT_EXISTS = ("500010", "Table {table_name} does not exist.")
+    DB_TABLE_NOT_EXISTS = ("500011", "Table {table_name} does not exist.")
 
     def __init__(self, code: str, desc: str):
         self.code = code

@@ -56,7 +56,8 @@ def create_openai_client(
                 logger.debug("Disabled retries on httpx pool")
 
     logger.debug(f"Created OpenAI client with max_retries=0 for {base_url}")
-    return client
+
+    # Wrap with langsmith if available for tracing
     if not HAS_LANGSMITH:
         return client
     try:

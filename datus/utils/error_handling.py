@@ -103,9 +103,16 @@ def unified_error_handler(node_type: str, operation: str):
                 raise
             except json.JSONDecodeError as e:
                 # Handle JSON parsing errors specifically
+                logger.debug(
+                    f"JSON parsing error details: {e}",
+                    extra={
+                        "json_error": str(e),
+                        "doc_preview": (e.doc[:500] + "...") if len(e.doc) > 500 else e.doc,
+                        "pos": e.pos,
+                    },
+                )
                 error_details = {
                     "json_error": str(e),
-                    "doc": e.doc[:500] + "..." if len(e.doc) > 500 else e.doc,
                     "pos": e.pos,
                 }
                 error_result = _create_node_error_result(

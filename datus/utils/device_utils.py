@@ -31,9 +31,9 @@ def get_device():
                 _DEVICE = "cuda"
                 return _DEVICE
         except FileNotFoundError:
-            logger.warn("nvidia-smi not found")
+            logger.warning("nvidia-smi not found")
         except Exception as e:
-            logger.warn(f"Error getting device: {e}")
+            logger.warning(f"Error getting device: {e}")
 
         # Check for AMD GPU
         try:
@@ -42,9 +42,9 @@ def get_device():
                 _DEVICE = "rocm"
                 return _DEVICE
         except FileNotFoundError:
-            logger.warn("rocm-smi not found")
+            logger.warning("rocm-smi not found")
         except Exception as e:
-            logger.warn(f"Error getting device: {e}")
+            logger.warning(f"Error getting device: {e}")
     elif platform.system() == "Windows":
         # Check for NVIDIA GPU
         try:
@@ -58,7 +58,7 @@ def get_device():
                 _DEVICE = "cuda"
                 return _DEVICE
         except Exception as e:
-            logger.warn(f"Error getting device: {str(e)}")
+            logger.warning(f"Error getting device: {str(e)}")
 
         # Check for AMD GPU
         try:
@@ -72,7 +72,7 @@ def get_device():
                 _DEVICE = "rocm"
                 return _DEVICE
         except Exception as e:
-            logger.warn(f"Error getting device: {str(e)}")
+            logger.warning(f"Error getting device: {str(e)}")
 
     _DEVICE = "cpu"
     return _DEVICE

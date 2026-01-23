@@ -29,9 +29,15 @@ def read_csv_and_clean_text(csv_path: str | Path) -> List[Dict[str, Any]]:
 
 
 def file_encoding(file_path: Path) -> str:
+    """Detect file encoding using charset_normalizer.
+
+    For large files, only reads the first 8192 bytes for efficient detection.
+    Falls back to utf-8 if detection fails.
+    """
     if not file_path.exists() or (not file_path.is_file()):
         return ""
-    raw = file_path.read_bytes()
+    # Read only first 8KB for encoding detection to handle large files efficiently
+    raw = file_path.read_bytes()[:8192]
     if raw.startswith(b"\xef\xbb\xbf"):
         return "utf-8-sig"
     from charset_normalizer import from_bytes

@@ -417,11 +417,17 @@ def load_jsonl(file_path) -> List[Dict[str, Any]]:
 
 
 def load_jsonl_iterator(file_path):
-    data = []
+    """Iterator version of load_jsonl for memory-efficient large file processing.
+
+    Args:
+        file_path: Path to the JSONL file
+
+    Yields:
+        Parsed JSON objects one at a time
+    """
     with open(file_path, "r", encoding="utf-8") as file:
         for line in file:
             yield json.loads(line)
-    return data
 
 
 def load_jsonl_dict(file_path, key_field: str = "instance_id") -> Dict[str, Dict[str, Any]]:
