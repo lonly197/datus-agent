@@ -30,6 +30,7 @@ from datus.tools.db_tools.db_manager import get_db_manager
 from datus.tools.func_tool import ContextSearchTools, DBFuncTool
 from datus.utils.async_utils import ensure_not_cancelled
 from datus.utils.loggings import get_logger
+from datus.utils.plan_id import PlanIdManager
 from datus.utils.text_utils import strip_markdown_code_block
 
 logger = get_logger(__name__)
@@ -1488,7 +1489,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
                 # Phase 1: Create Plan Structure for Preflight Tools
                 # Generate plan_id for this execution
-                plan_id = str(uuid.uuid4())
+                plan_id = PlanIdManager.new_plan_id()
                 required_tools = self.workflow.metadata.get("required_tool_sequence", [])
 
                 # Create TodoItems for each preflight tool

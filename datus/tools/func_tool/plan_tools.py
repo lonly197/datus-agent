@@ -183,6 +183,18 @@ class PlanTool:
         if not todos:
             return FuncToolResult(success=0, error="Cannot create todo list: no todo items provided")
 
+        existing_list = self.storage.get_todo_list()
+        content_id_map: Dict[str, List[str]] = {}
+        if existing_list:
+            for existing_item in existing_list.items:
+                content_id_map.setdefault(existing_item.content, []).append(existing_item.id)
+
+        def reuse_id(content: str) -> Optional[str]:
+            ids = content_id_map.get(content)
+            if ids:
+                return ids.pop(0)
+            return None
+
         todo_list = TodoList()
 
         # Create todo list with LLM-specified status
@@ -241,32 +253,42 @@ class PlanTool:
                 logger.warning(f"Todo '{content}' requires LLM reasoning but no reasoning_type specified")
                 reasoning_type = "general"
 
+            todo_id = todo_item.get("id") or reuse_id(content)
+            if todo_id is not None:
+                todo_id = str(todo_id)
+
             if status == "completed":
                 # Create completed item - should only be for actually executed steps
-                new_item = TodoItem(
-                    content=content,
-                    status=TodoStatus.COMPLETED,
-                    requires_tool=requires_tool,
-                    requires_llm_reasoning=requires_llm_reasoning,
-                    reasoning_type=reasoning_type,
-                    tool_calls=tool_calls,
-                    task_type=task_type,
-                    analysis_context=analysis_context,
-                )
+                todo_kwargs = {
+                    "content": content,
+                    "status": TodoStatus.COMPLETED,
+                    "requires_tool": requires_tool,
+                    "requires_llm_reasoning": requires_llm_reasoning,
+                    "reasoning_type": reasoning_type,
+                    "tool_calls": tool_calls,
+                    "task_type": task_type,
+                    "analysis_context": analysis_context,
+                }
+                if todo_id:
+                    todo_kwargs["id"] = todo_id
+                new_item = TodoItem(**todo_kwargs)
                 todo_list.items.append(new_item)
                 logger.info(f"Keeping completed step: {content}")
             else:
                 # Create pending step - for steps that still need execution
                 # allow all metadata propagation when creating pending item
-                item = TodoItem(
-                    content=content,
-                    requires_tool=requires_tool,
-                    requires_llm_reasoning=requires_llm_reasoning,
-                    reasoning_type=reasoning_type,
-                    tool_calls=tool_calls,
-                    task_type=task_type,
-                    analysis_context=analysis_context,
-                )
+                todo_kwargs = {
+                    "content": content,
+                    "requires_tool": requires_tool,
+                    "requires_llm_reasoning": requires_llm_reasoning,
+                    "reasoning_type": reasoning_type,
+                    "tool_calls": tool_calls,
+                    "task_type": task_type,
+                    "analysis_context": analysis_context,
+                }
+                if todo_id:
+                    todo_kwargs["id"] = todo_id
+                item = TodoItem(**todo_kwargs)
                 todo_list.items.append(item)
                 logger.info(f"Added pending step: {content}")
 

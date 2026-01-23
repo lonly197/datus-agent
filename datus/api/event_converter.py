@@ -20,6 +20,7 @@ from sqlglot import exp
 
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
+from datus.utils.plan_id import PlanIdManager
 from datus.utils.sql_utils import parse_metadata_from_ddl
 
 if TYPE_CHECKING:
@@ -85,7 +86,6 @@ class DeepResearchEventConverter:
     ]
 
     def __init__(self):
-        self.plan_id = str(uuid.uuid4())
         self.tool_call_map: Dict[str, str] = {}  # action_id -> tool_call_id
         self.logger = get_logger(__name__)
         # small rolling cache to deduplicate near-identical assistant messages
@@ -99,7 +99,7 @@ class DeepResearchEventConverter:
         self.failed_virtual_steps: set[str] = set()
 
         # Fixed virtual plan ID for all PlanUpdateEvents (fixes event association issue)
-        self.virtual_plan_id = str(uuid.uuid4())
+        self.virtual_plan_id = PlanIdManager.new_plan_id()
 
         # State for agentic workflow TodoItem tracking
         # Tracks the currently executing TodoItem ID for proper event binding
@@ -1944,9 +1944,13 @@ class DeepResearchEventConverter:
                     if isinstance(tlist, dict) and "items" in tlist:
                         for todo_data in tlist["items"]:
                             if isinstance(todo_data, dict):
+                                todo_id = todo_data.get("id")
+                                if not todo_id:
+                                    self.logger.warning("Skipping todo item without id in todo_list: %s", todo_data)
+                                    continue
                                 todos.append(
                                     TodoItem(
-                                        id=todo_data.get("id", str(uuid.uuid4())),
+                                        id=str(todo_id),
                                         content=todo_data.get("content", ""),
                                         status=TodoStatus(todo_data.get("status", "pending")),
                                     )
@@ -1954,13 +1958,17 @@ class DeepResearchEventConverter:
                 elif "updated_item" in plan_data:
                     ui = plan_data["updated_item"]
                     if isinstance(ui, dict):
-                        todos.append(
-                            TodoItem(
-                                id=ui.get("id", str(uuid.uuid4())),
-                                content=ui.get("content", ""),
-                                status=TodoStatus(ui.get("status", "pending")),
+                        todo_id = ui.get("id")
+                        if not todo_id:
+                            self.logger.warning("Skipping updated_item without id: %s", ui)
+                        else:
+                            todos.append(
+                                TodoItem(
+                                    id=str(todo_id),
+                                    content=ui.get("content", ""),
+                                    status=TodoStatus(ui.get("status", "pending")),
+                                )
                             )
-                        )
 
                 if todos:
                     # For plan tools, emit tool events AND plan update event
@@ -2037,9 +2045,13 @@ class DeepResearchEventConverter:
                 if todo_data_source:
                     for todo_data in todo_data_source:
                         if isinstance(todo_data, dict):
+                            todo_id = todo_data.get("id")
+                            if not todo_id:
+                                self.logger.warning("Skipping plan_update todo without id: %s", todo_data)
+                                continue
                             todos.append(
                                 TodoItem(
-                                    id=todo_data.get("id", str(uuid.uuid4())),
+                                    id=str(todo_id),
                                     content=todo_data.get("content", ""),
                                     status=TodoStatus(todo_data.get("status", "pending")),
                                 )
