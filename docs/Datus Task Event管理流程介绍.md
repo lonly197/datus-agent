@@ -1,7 +1,7 @@
 # Datus Task Event 管理流程介绍
 
-> **文档版本**: v2.0
-> **更新日期**: 2026-01-22
+> **文档版本**: v2.1
+> **更新日期**: 2026-01-23
 > **相关模块**: `datus/api/event_converter.py`, `datus/api/models.py`, `datus/agent/cancellation_registry.py`
 
 ---
@@ -49,8 +49,8 @@ Datus Task Event 系统是连接后端工作流执行和前端用户界面的核
 2. **工具调用可见**: 让用户看到系统调用了哪些工具（schema_discovery, execute_sql 等）
 3. **Preflight工具跟踪**: 展示预检工具调用（搜索表、描述表、验证SQL等）
 4. **任务进度追踪**: 通过 PlanUpdateEvent 更新 TodoList 状态
-5. **错误反馈**: 通过 ErrorEvent/SqlExecutionErrorEvent 及时通知用户执行错误
-6. **SQL执行细粒度事件**: Start/Progress/Result/Error 四个阶段
+5. **错误反馈**: 通过 ErrorEvent 及时通知用户执行错误
+6. **SQL执行跟踪**: 通过 ToolCallEvent/ToolCallResultEvent 接收 execute_sql 工具调用和结果
 
 ### 1.2 为什么需要 Event 系统
 
@@ -140,16 +140,20 @@ class BaseEvent(BaseModel):
 DeepResearchEvent (Union Type)
 ├── ChatEvent                    # 聊天消息
 ├── PlanUpdateEvent              # 计划更新（TodoList）
-├── ToolCallEvent                # 工具调用开始
-├── ToolCallResultEvent          # 工具调用结果
-├── SqlExecutionStartEvent       # SQL执行开始 (v2.0新增)
-├── SqlExecutionProgressEvent    # SQL执行进度 (v2.0新增)
-├── SqlExecutionResultEvent      # SQL执行结果 (v2.0新增)
-├── SqlExecutionErrorEvent       # SQL执行错误 (v2.0新增)
+├── ToolCallEvent                # 工具调用开始（包括 execute_sql）
+├── ToolCallResultEvent          # 工具调用结果（包括 execute_sql 结果）
 ├── ErrorEvent                   # 错误事件
 ├── CompleteEvent                # 完成事件
 └── ReportEvent                  # 报告事件
+
+# SQL执行专用事件（仅 CLI/测试使用，API 层通过 ToolCallEvent 传输）
+├── SqlExecutionStartEvent       # CLI 场景：SQL执行开始
+├── SqlExecutionProgressEvent    # CLI 场景：SQL执行进度
+├── SqlExecutionResultEvent      # CLI 场景：SQL执行结果
+└── SqlExecutionErrorEvent       # CLI 场景：SQL执行错误
 ```
+
+> **重要说明**：API 层（event_converter.py）将 `sql_execution` 转换为 `ToolCallEvent` + `ToolCallResultEvent`，前端通过这两个事件接收 SQL 执行信息。`SqlExecution*` 事件仅在 CLI 场景（plan_hooks.py）和测试中使用。
 
 ### 2.4 Task Store
 
@@ -388,13 +392,9 @@ VIRTUAL_STEPS = [
 
 | 事件类型 | 用途 | planId 来源 |
 |---------|------|-------------|
-| `ToolCallEvent` (Text2SQL) | 工具调用开始 | `virtual_step_id` (如 "step_schema") |
+| `ToolCallEvent` (Text2SQL) | 工具调用开始（包括 execute_sql） | `virtual_step_id` (如 "step_schema", "step_exec") |
 | `ToolCallEvent` (Agentic) | 工具调用开始 | `todo_id` (从 action 提取) |
-| `ToolCallResultEvent` | 工具调用结果 | 同对应的 ToolCallEvent |
-| `SqlExecutionStartEvent` | SQL执行开始 | `virtual_step_id` ("step_exec") |
-| `SqlExecutionProgressEvent` | SQL执行进度 | `virtual_step_id` ("step_exec") |
-| `SqlExecutionResultEvent` | SQL执行结果 | `virtual_step_id` ("step_exec") |
-| `SqlExecutionErrorEvent` | SQL执行错误 | `virtual_step_id` ("step_exec") |
+| `ToolCallResultEvent` | 工具调用结果（包括 execute_sql 结果） | 同对应的 ToolCallEvent |
 | SQL验证 `ChatEvent` | SQL验证结果 | `virtual_step_id` (如 "step_exec") |
 
 #### B. 任务特定事件 (使用 todo_id)
@@ -573,17 +573,19 @@ ERROR > COMPLETED > IN_PROGRESS > PENDING
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.4 SQL执行事件 (v2.0新增)
+### 5.4 SQL执行事件 (CLI/测试专用)
+
+> **重要**：API 层（event_converter.py）不使用这些事件，前端通过 `ToolCallEvent`/`ToolCallResultEvent` 接收 SQL 执行信息。
 
 ```python
-# SQL执行开始事件
+# SQL执行开始事件（CLI 场景）
 class SqlExecutionStartEvent(BaseEvent):
     event: DeepResearchEventType = SQL_EXECUTION_START
     sqlQuery: str                  # 执行的SQL语句
     databaseName: Optional[str]    # 目标数据库
     estimatedRows: Optional[int]   # 预估行数
 
-# SQL执行进度事件
+# SQL执行进度事件（CLI 场景）
 class SqlExecutionProgressEvent(BaseEvent):
     event: DeepResearchEventType = SQL_EXECUTION_PROGRESS
     sqlQuery: str                  # 执行的SQL语句
@@ -591,7 +593,7 @@ class SqlExecutionProgressEvent(BaseEvent):
     currentStep: str               # 当前执行步骤描述
     elapsedTime: Optional[int]     # 已耗时（毫秒）
 
-# SQL执行结果事件
+# SQL执行结果事件（CLI 场景）
 class SqlExecutionResultEvent(BaseEvent):
     event: DeepResearchEventType = SQL_EXECUTION_RESULT
     sqlQuery: str                  # 执行的SQL语句
@@ -601,7 +603,7 @@ class SqlExecutionResultEvent(BaseEvent):
     hasMoreData: bool              # 是否有更多数据
     dataPreview: Optional[str]     # 文本预览
 
-# SQL执行错误事件
+# SQL执行错误事件（CLI 场景）
 class SqlExecutionErrorEvent(BaseEvent):
     event: DeepResearchEventType = SQL_EXECUTION_ERROR
     sqlQuery: str                  # 失败的SQL语句
@@ -609,6 +611,49 @@ class SqlExecutionErrorEvent(BaseEvent):
     errorType: str                 # 错误类型（syntax/permission/timeout等）
     suggestions: List[str]         # 修复建议
     canRetry: bool                 # 是否可重试
+```
+
+**API 层实际实现**：
+
+```python
+# event_converter.py 中 sql_execution 的处理（lines 1767-1797）
+elif action.action_type == "sql_execution":
+    # ✅ 使用 ToolCallEvent + ToolCallResultEvent
+    events.append(
+        ToolCallEvent(
+            id=f"{event_id}_call",
+            planId=self._get_unified_plan_id(action, force_associate=True),
+            timestamp=timestamp,
+            toolCallId=tool_call_id,
+            toolName="execute_sql",
+            input=tool_input,
+        )
+    )
+
+    events.append(
+        ToolCallResultEvent(
+            id=f"{event_id}_result",
+            planId=self._get_unified_plan_id(action, force_associate=True),
+            timestamp=timestamp,
+            toolCallId=tool_call_id,
+            data=action.output,
+            error=action.status == ActionStatus.FAILED,
+        )
+    )
+```
+
+**前端接收 SQL 执行流程**：
+
+```
+sql_execution action
+       ↓
+ToolCallEvent (toolName="execute_sql", toolCallId="xxx")
+       ↓
+[前端渲染：SQL执行工具调用]
+       ↓
+ToolCallResultEvent (data={row_count, result, ...}, error=bool)
+       ↓
+[前端渲染：SQL执行结果/错误]
 ```
 
 ---
@@ -911,22 +956,17 @@ async for event in service.run_workflow_stream(req, current_client, task_id):
 ┌─────────────────────────────────────────────────────────────────┐
 │ 6. preflight_validate_sql_syntax (ActionRole.TOOL)              │
 ├─────────────────────────────────────────────────────────────────┤
-│ 输出: SqlExecutionStartEvent                                    │
+│ 输出: ToolCallEvent                                              │
 │   .planId = "step_exec"  ✅                                     │
-│   .sqlQuery = "SELECT SUM(amount) FROM ..."                     │
-│   .estimatedRows = None                                         │
+│   .toolCallId = "xxx"                                           │
+│   .toolName = "preflight_validate_sql_syntax"                   │
+│   .input = {"sql_query": "SELECT SUM(amount) FROM ..."}         │
 │                                                                  │
-│ 输出: SqlExecutionProgressEvent                                  │
+│ 输出: ToolCallResultEvent                                        │
 │   .planId = "step_exec"                                         │
-│   .progress = 0.5                                               │
-│   .currentStep = "验证SQL语法"                                  │
-│                                                                  │
-│ 输出: SqlExecutionResultEvent                                    │
-│   .planId = "step_exec"                                         │
-│   .sqlQuery = "SELECT SUM(amount) FROM ..."                     │
-│   .rowCount = 0                                                 │
-│   .executionTime = 150                                          │
-│   .data = None                                                  │
+│   .toolCallId = "xxx"                                           │
+│   .data = {"valid": true, "warnings": [...]}                    │
+│   .error = false                                                │
 │                                                                  │
 │ 前端关联: 绑定到 TodoItem(id="step_exec")                         │
 └─────────────────────────────────────────────────────────────────┘
@@ -1184,10 +1224,10 @@ class DeepResearchEventType(str, Enum):
     PLAN_UPDATE = "plan_update"
     TOOL_CALL = "tool_call"
     TOOL_CALL_RESULT = "tool_call_result"
-    SQL_EXECUTION_START = "sql_execution_start"       # v2.0新增
-    SQL_EXECUTION_PROGRESS = "sql_execution_progress" # v2.0新增
-    SQL_EXECUTION_RESULT = "sql_execution_result"     # v2.0新增
-    SQL_EXECUTION_ERROR = "sql_execution_error"       # v2.0新增
+    SQL_EXECUTION_START = "sql_execution_start"       # 仅 CLI/测试使用
+    SQL_EXECUTION_PROGRESS = "sql_execution_progress" # 仅 CLI/测试使用
+    SQL_EXECUTION_RESULT = "sql_execution_result"     # 仅 CLI/测试使用
+    SQL_EXECUTION_ERROR = "sql_execution_error"       # 仅 CLI/测试使用
     COMPLETE = "complete"
     REPORT = "report"
     ERROR = "error"
@@ -1200,7 +1240,19 @@ class DeepResearchEventType(str, Enum):
 | 2026-01-17 | v1.0 | 初始版本，记录 plan_id 一致性修复 |
 | 2026-01-17 | v1.1 | 新增 `_get_unified_plan_id()` 方法 |
 | 2026-01-17 | v1.2 | 新增虚拟步骤 ID 映射 |
-| 2026-01-22 | v2.0 | 新增 Preflight 工具映射、SQL执行事件、失败步骤跟踪、任务取消机制 |
+| 2026-01-22 | v2.0 | 新增 Preflight 工具映射、失败步骤跟踪、任务取消机制 |
+| 2026-01-23 | v2.1 | 修正 SQL 执行事件描述，明确前端通过 ToolCallEvent 接收 SQL 执行信息 |
+
+### D. 事件使用场景对照
+
+| 事件类型 | API 层 (event_converter) | CLI 层 (plan_hooks) | 前端实际接收 |
+|---------|-------------------------|---------------------|-------------|
+| ToolCallEvent | ✅ 用于所有工具调用 | ✅ | ✅ 前端渲染 |
+| ToolCallResultEvent | ✅ 用于所有工具结果 | ✅ | ✅ 前端渲染 |
+| SqlExecutionStartEvent | ❌ 不使用 | ✅ | ❌ 不直接渲染 |
+| SqlExecutionProgressEvent | ❌ 不使用 | ✅ | ❌ 不直接渲染 |
+| SqlExecutionResultEvent | ❌ 不使用 | ✅ | ❌ 不直接渲染 |
+| SqlExecutionErrorEvent | ❌ 不使用 | ✅ | ❌ 不直接渲染 |
 
 ---
 

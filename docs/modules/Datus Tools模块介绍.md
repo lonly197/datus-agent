@@ -1,7 +1,7 @@
 # Datus Tools 模块介绍
 
-> **文档版本**: v2.0
-> **更新日期**: 2026-01-22
+> **文档版本**: v2.1
+> **更新日期**: 2026-01-23
 > **相关模块**: `datus/tools/`
 
 ---
@@ -177,6 +177,8 @@ class FuncToolResult(BaseModel):
 
 #### 2.3 数据库函数工具 (DBFuncTool)
 
+**位置**: `datus/tools/func_tool/database.py`
+
 支持 Sub-Agent 作用域的数据库函数工具：
 
 ```python
@@ -192,13 +194,23 @@ class DBFuncTool:
         self.metrics_rag = SemanticMetricsRAG(agent_config, sub_agent_name)
 ```
 
-**提供的工具函数：**
-| 函数名 | 描述 |
-|--------|------|
-| `search_table` | 搜索相关表 |
-| `describe_table` | 获取表结构 |
-| `search_reference_sql` | 搜索参考SQL |
-| `parse_temporal_expressions` | 解析时间表达式 |
+**提供的工具函数**：
+
+| 函数名 | 功能 | 输入 | 输出 |
+|--------|------|------|------|
+| `search_table` | 语义搜索表 | query_text, catalog, database, schema | 匹配的表列表 |
+| `list_databases` | 列出数据库 | catalog | 数据库列表 |
+| `list_schemas` | 列出 schema | catalog, database | schema 列表 |
+| `list_tables` | 列出表 | catalog, database, schema | 表、视图和物化视图列表 |
+| `describe_table` | 获取表详情 | table_name | DDL、列信息、样例数据 |
+| `read_query` | 执行 SQL | sql_query | 查询结果 |
+| `get_table_ddl` | 获取 DDL | table_name | DDL 定义 |
+| `check_table_exists` | 检查表存在性 | table_name | 是否存在 |
+| `search_tables_by_comment` | 搜索表注释 | comment | 匹配的表 |
+| `validate_sql_syntax` | 验证 SQL 语法 | sql_query | 语法检查结果 |
+| `analyze_query_plan` | 分析执行计划 | sql_query | EXPLAIN 结果 |
+| `check_table_conflicts` | 检查表冲突 | table_name | 冲突检测结果 |
+| `validate_partitioning` | 验证分区策略 | table_name | 分区验证结果 |
 
 #### 2.4 增强预检工具 (EnhancedPreflightTools)
 
@@ -215,6 +227,87 @@ class EnhancedPreflightTools:
     async def validate_partitioning(self, table_name: str, ...) -> FuncToolResult:
         """验证分区策略并提供建议"""
 ```
+
+---
+
+#### 2.5 上下文搜索工具 (ContextSearchTools)
+
+**位置**: `datus/tools/func_tool/context_search.py`
+
+**核心功能**：
+
+| 工具名称 | 功能 | 说明 |
+|---------|------|------|
+| `list_subject_tree` | 领域层级结构 | 展示度量、参考 SQL 和外部知识的领域层级 |
+| `search_metrics` | 搜索业务指标 | 搜索业务指标和 KPI |
+| `search_reference_sql` | 搜索参考 SQL | 搜索历史相似查询 |
+| `search_external_knowledge` | 搜索外部知识 | 搜索外部知识库 |
+
+**使用场景**：
+- 业务指标发现
+- SQL 查询参考查找
+- 领域知识检索
+
+#### 2.6 文件系统工具 (FilesystemFuncTool)
+
+**位置**: `datus/tools/func_tool/filesystem_tool.py`
+
+**核心功能**：
+
+| 工具名称 | 功能 |
+|---------|------|
+| `read_file` | 读取文件内容 |
+| `read_multiple_files` | 批量读取多个文件 |
+| `write_file` | 创建或覆盖文件 |
+| `edit_file` | 精确编辑文件内容 |
+| `create_directory` | 创建目录 |
+| `list_directory` | 列出目录内容 |
+| `directory_tree` | 显示目录树结构 |
+| `move_file` | 移动或重命名文件/目录 |
+| `search_files` | 递归搜索匹配模式的文件 |
+
+**使用场景**：
+- 文件内容读取和编辑
+- 项目文件管理
+- 代码文件搜索
+- 配置管理
+
+**安全特性**：提供路径沙箱保护，防止目录遍历攻击
+
+#### 2.7 生成工具 (GenerationTools)
+
+**位置**: `datus/tools/func_tool/generation_tools.py`
+
+**核心功能**：
+
+| 工具名称 | 功能 |
+|---------|------|
+| `check_semantic_model_exists` | 检查语义模型是否存在 |
+| `check_metric_exists` | 检查指标是否存在 |
+| `end_generation` | 完成生成过程 |
+| `generate_sql_summary_id` | 生成 SQL 摘要的唯一 ID |
+
+**使用场景**：
+- 语义模型管理工作流
+- 指标定义管理
+- 生成过程控制
+
+#### 2.8 计划工具 (PlanTool)
+
+**位置**: `datus/tools/func_tool/plan_tools.py`
+
+**核心功能**：
+
+| 工具名称 | 功能 |
+|---------|------|
+| `todo_read` | 读取任务列表 |
+| `todo_write` | 创建或更新任务列表 |
+| `todo_update` | 更新任务状态 |
+
+**使用场景**：
+- 多步骤任务规划和管理
+- 工作流执行跟踪
+- 任务状态管理
 
 ---
 
@@ -730,6 +823,14 @@ call_result = mcp_tool.call_tool(
 ---
 
 ## 版本更新记录
+
+### v2.1 (2026-01-23)
+- 合并 Datus内置工具详细清单.md 内容
+- 新增 DBFuncTool 详细工具函数表格（12个工具）
+- 新增上下文搜索工具 (ContextSearchTools)
+- 新增文件系统工具 (FilesystemFuncTool)
+- 新增生成工具 (GenerationTools)
+- 新增计划工具 (PlanTool)
 
 ### v2.0 (2026-01-22)
 - 完整重写，基于最新代码架构

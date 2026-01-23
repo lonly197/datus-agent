@@ -1,7 +1,7 @@
 # Datus Agent Node 模块介绍
 
-> **文档版本**: v2.0
-> **更新日期**: 2026-01-22
+> **文档版本**: v2.1
+> **更新日期**: 2026-01-23
 > **相关模块**: `datus/agent/node/`, `datus/configuration/node_type.py`
 
 ---
@@ -107,8 +107,43 @@ Datus Agent Node 模块是整个数据工程智能代理系统的**核心执行�
 | 类别 | 数量 | 功能描述 | 继承关系 |
 |------|------|----------|----------|
 | **控制流节点** | 6个 | 工作流流程控制（开始、并行、选择、回退等） | 直接继承Node |
-| **功能执行节点** | 17+ | 具体业务功能（意图分析、SQL生成、执行等） | 直接继承Node |
-| **代理节点** | 3+ | 会话管理、工具集成、MCP支持 | 继承AgenticNode |
+| **功能执行节点** | 18个 | 具体业务功能（意图分析、SQL生成、执行等） | 直接继承Node |
+| **代理节点** | 4个 | 会话管理、工具集成、MCP支持 | 继承AgenticNode |
+
+### 节点类型快速参考表
+
+| 节点类型 | 功能 | 说明 |
+|---------|------|------|
+| **控制流节点** | | |
+| `start` | 开始 | 工作流起点 |
+| `hitl` | 人工介入 | Human in the loop |
+| `reflect` | 反思 | 评估和自我反思 |
+| `parallel` | 并行 | 并行执行子节点 |
+| `selection` | 选择 | 从多个候选中选择最佳结果 |
+| `subworkflow` | 子工作流 | 执行嵌套工作流 |
+| **SQL 工作流节点** | | |
+| `intent_analysis` | 意图分析 | 使用启发式分析查询意图 |
+| `intent_clarification` | 意图澄清 | 修复错别字、澄清歧义、提取实体 |
+| `schema_discovery` | Schema 发现 | 发现相关 Schema 和表 |
+| `schema_validation` | Schema 验证 | 验证 Schema 充分性 |
+| `schema_linking` | Schema 链接 | 理解查询并找到相关 Schema |
+| `generate_sql` | SQL 生成 | 生成 SQL 查询 |
+| `sql_validate` | SQL 验证 | 验证 SQL 语法和语义 |
+| `execute_sql` | SQL 执行 | 执行 SQL 查询 |
+| `result_validation` | 结果验证 | 验证 SQL 执行结果质量 |
+| `output` | 输出 | 向用户返回结果 |
+| `reasoning` | 推理分析 | 推理分析 |
+| `fix` | 修复 | 修复 SQL 查询 |
+| `search_metrics` | 搜索指标 | 搜索业务指标 |
+| `compare` | 比较 | 与预期比较 SQL |
+| `date_parser` | 日期解析 | 解析查询中的时间表达式 |
+| `knowledge_enhancement` | 知识增强 | 统一和丰富知识 |
+| `doc_search` | 文档搜索 | 搜索相关文档 |
+| **Agentic 节点** | | |
+| `chat` | 对话 AI | 带工具调用的对话交互 |
+| `gensql` | 生成 SQL | 带工具调用的 SQL 生成 |
+| `semantic` | 语义模型 | 带工具调用的语义模型生成 |
+| `sql_summary` | SQL 摘要 | 带工具调用的 SQL 摘要生成 |
 
 ---
 
@@ -939,3 +974,21 @@ text2sql:
 ---
 
 **文档维护**: 本文档应随 `datus/agent/node/` 和 `datus/configuration/node_type.py` 的修改同步更新。
+
+---
+
+## 版本更新记录
+
+### v2.1 (2026-01-23)
+- 合并 Datus内置工具详细清单.md 内容
+- 新增节点类型快速参考表（28个节点类型）
+- 调整节点分类数量（控制流6个、功能执行18个、Agentic 4个）
+- 新增 SQL Summary 节点类型
+
+### v2.0 (2026-01-22)
+- 完整重写，基于最新代码架构
+- 新增节点基类和工厂模式
+- 新增流式执行支持
+- 新增 Preflight 编排器
+- 新增 Agentic Node 代理节点
+- 新增完整 Text2SQL 流程图
