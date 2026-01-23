@@ -6,7 +6,7 @@
 SchemaDiscoveryNode implementation for discovering relevant schema and tables.
 """
 
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
@@ -194,7 +194,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 return
 
             # Get candidate tables based on intent and task
-            candidate_tables = await self._discover_candidate_tables(task, intent)
+            candidate_tables, candidate_details, discovery_stats = await self._discover_candidate_tables(task, intent)
 
             # If we have candidate tables, load their schemas
             if candidate_tables:
@@ -234,13 +234,16 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     "intent": intent,
                     "catalog": task.catalog_name,
                     "database": task.database_name,
-                    "schema": task.schema_name,
+                    "schema": task.schema_name or None,
+                    "query_context": self._build_query_context(task),
                 },
                 status=ActionStatus.SUCCESS,
                 output={
                     "candidate_tables": candidate_tables,
                     "table_count": len(candidate_tables),
                     "intent": intent,
+                    "table_candidates": candidate_details,
+                    "discovery_stats": discovery_stats,
                 },
             )
 
@@ -251,6 +254,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     "candidate_tables": candidate_tables,
                     "table_count": len(candidate_tables),
                     "intent": intent,
+                    "table_candidates": candidate_details,
+                    "discovery_stats": discovery_stats,
                 },
             )
 
@@ -292,7 +297,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 # Clear the stored original task
                 self._original_task_text = None
 
-    async def _discover_candidate_tables(self, task, intent: str) -> List[str]:
+    async def _discover_candidate_tables(
+        self, task, intent: str
+    ) -> Tuple[List[str], List[Dict[str, Any]], Dict[str, Any]]:
         """
         Discover candidate tables based on task and intent.
 
@@ -306,12 +313,41 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         # For now, use a simple heuristic approach
         # In production, this could use semantic search or LLM-based table discovery
 
-        candidate_tables = []
+        candidate_details: Dict[str, Dict[str, Any]] = {}
+        candidate_order: List[str] = []
+        discovery_stats: Dict[str, Any] = {}
+
+        def record_candidate(
+            table_name: str,
+            source: str,
+            score: Optional[float] = None,
+            matched_terms: Optional[List[str]] = None,
+        ) -> None:
+            if table_name not in candidate_details:
+                candidate_details[table_name] = {
+                    "table_name": table_name,
+                    "sources": [],
+                    "scores": {},
+                    "matched_terms": [],
+                    "order_index": len(candidate_order),
+                }
+                candidate_order.append(table_name)
+            entry = candidate_details[table_name]
+            if source not in entry["sources"]:
+                entry["sources"].append(source)
+            if score is not None:
+                entry["scores"][source] = score
+            if matched_terms:
+                for term in matched_terms:
+                    if term not in entry["matched_terms"]:
+                        entry["matched_terms"].append(term)
 
         # 1. If tables are explicitly mentioned in the task, use those (Highest Priority)
         if hasattr(task, "tables") and task.tables:
-            candidate_tables.extend(task.tables)
+            for table_name in task.tables:
+                record_candidate(table_name, "explicit")
             logger.info(f"Using explicitly specified tables: {task.tables}")
+            discovery_stats["explicit_tables"] = len(task.tables)
 
         # If intent is text2sql or sql (from intent analysis), try to discover tables
         if intent in ["text2sql", "sql"] and hasattr(task, "task"):
@@ -342,49 +378,65 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 logger.info(f"[LLM Matching] Using LLM-based schema matching for large datasets")
                 llm_tables = await self._llm_based_schema_matching(task.task, final_matching_rate)
                 if llm_tables:
-                    candidate_tables.extend(llm_tables)
+                    for table_name in llm_tables:
+                        record_candidate(table_name, "llm_schema_matching")
                     logger.info(f"[LLM Matching] Found {len(llm_tables)} tables via LLM inference")
+                discovery_stats["llm_schema_matching_tables"] = len(llm_tables or [])
 
             # --- Stage 1: Fast Cache/Keyword & Semantic (Hybrid Search) ---
             # Align with design: semantic search uses top_n=20 by default.
             top_n = 20
 
             # 1. Semantic Search (High Priority)
-            semantic_tables = await self._semantic_table_discovery(task.task, top_n=top_n)
+            semantic_tables, semantic_stats = await self._semantic_table_discovery(task.task, top_n=top_n)
             if semantic_tables:
-                candidate_tables.extend(semantic_tables)
-                logger.info(f"[Stage 1] Found {len(semantic_tables)} tables via semantic search (top_n={top_n})")
+                for result in semantic_tables:
+                    record_candidate(result["table_name"], "semantic", score=result.get("score"))
+                logger.info(
+                    f"[Stage 1] Found {len(semantic_tables)} tables via semantic search (top_n={top_n})"
+                )
+            discovery_stats.update(semantic_stats)
 
             # 2. Keyword Matching (Medium Priority)
             # Optimization: Always run keyword search to improve recall (Hybrid Search)
             keyword_tables = self._keyword_table_discovery(task_text)
             if keyword_tables:
-                candidate_tables.extend(keyword_tables)
+                for table_name, matched_terms in keyword_tables.items():
+                    record_candidate(table_name, "keyword", matched_terms=matched_terms)
                 logger.info(f"[Stage 1] Found {len(keyword_tables)} tables via keyword matching")
+            discovery_stats["keyword_tables"] = len(keyword_tables)
 
             # 3. LLM Inference (Stage 1.5) - Enhance recall for Chinese/Ambiguous queries
             llm_tables = await self._llm_based_table_discovery(task.task)
             if llm_tables:
-                candidate_tables.extend(llm_tables)
+                for table_name in llm_tables:
+                    record_candidate(table_name, "llm")
                 logger.info(f"[Stage 1.5] Found {len(llm_tables)} tables via LLM inference")
+            discovery_stats["llm_tables"] = len(llm_tables or [])
 
-            # Deduplicate
-            candidate_tables = list(set(candidate_tables))
+            candidate_tables = candidate_order[:]
 
             # --- Stage 2: Deep Metadata Scan (Context Search) ---
             # ✅ Optimized: More aggressive trigger condition (was <3, now <10)
             # This ensures better recall by using context search more frequently
-            if len(candidate_tables) < 10:
+            context_threshold = 10
+            if self.agent_config and hasattr(self.agent_config, "schema_discovery_config"):
+                context_threshold = self.agent_config.schema_discovery_config.context_search_threshold
+            if len(candidate_tables) < context_threshold:
                 logger.info(
-                    f"[Stage 2] Tables found ({len(candidate_tables)}) below threshold (10), initiating Context Search..."
+                    f"[Stage 2] Tables found ({len(candidate_tables)}) below threshold ({context_threshold}), "
+                    f"initiating Context Search..."
                 )
                 context_tables = await self._context_based_discovery(task.task)
                 if context_tables:
-                    candidate_tables.extend(context_tables)
+                    for table_name in context_tables:
+                        record_candidate(table_name, "context_search")
                     logger.info(f"[Stage 2] Found {len(context_tables)} tables via context search")
+                discovery_stats["context_tables"] = len(context_tables or [])
+            else:
+                discovery_stats["context_tables"] = 0
 
-            # Deduplicate
-            candidate_tables = list(set(candidate_tables))
+            candidate_tables = candidate_order[:]
 
             # 4. Fallback: Get All Tables (Low Priority)
             # Only if absolutely no tables found from previous stages
@@ -392,11 +444,102 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 logger.info("[Stage 3] No tables found, attempting Fallback (Get All Tables)...")
                 fallback_tables = await self._fallback_get_all_tables(task)
                 if fallback_tables:
-                    candidate_tables.extend(fallback_tables)
+                    for table_name in fallback_tables:
+                        record_candidate(table_name, "fallback")
                     logger.warning(f"[Stage 3] Used fallback: {len(fallback_tables)} tables")
+                discovery_stats["fallback_tables"] = len(fallback_tables or [])
+            else:
+                discovery_stats["fallback_tables"] = 0
 
-        # If no candidates found, return empty list (downstream nodes will handle)
-        return list(set(candidate_tables))  # Remove duplicates
+        max_tables = None
+        if self.agent_config and hasattr(self.agent_config, "schema_discovery_config"):
+            max_tables = getattr(self.agent_config.schema_discovery_config, "max_candidate_tables", None)
+
+        candidate_tables, candidate_details_list = self._finalize_candidates(
+            candidate_details, candidate_order, max_tables
+        )
+        discovery_stats["pre_limit_count"] = len(candidate_details)
+        discovery_stats["max_candidate_tables"] = max_tables
+        discovery_stats["final_table_count"] = len(candidate_tables)
+        logger.info(
+            "Schema discovery summary: "
+            f"explicit={discovery_stats.get('explicit_tables', 0)}, "
+            f"semantic={discovery_stats.get('semantic_tables', 0)}, "
+            f"keyword={discovery_stats.get('keyword_tables', 0)}, "
+            f"llm={discovery_stats.get('llm_tables', 0)}, "
+            f"context={discovery_stats.get('context_tables', 0)}, "
+            f"fallback={discovery_stats.get('fallback_tables', 0)}, "
+            f"final={discovery_stats.get('final_table_count', 0)}"
+        )
+        return candidate_tables, candidate_details_list, discovery_stats
+
+    def _finalize_candidates(
+        self,
+        candidate_details: Dict[str, Dict[str, Any]],
+        candidate_order: List[str],
+        max_tables: Optional[int],
+    ) -> Tuple[List[str], List[Dict[str, Any]]]:
+        priority_map = {
+            "explicit": 5,
+            "semantic": 4,
+            "keyword": 3,
+            "llm_schema_matching": 3,
+            "llm": 2,
+            "context_search": 2,
+            "fallback": 1,
+        }
+        details_list: List[Dict[str, Any]] = []
+        for table_name in candidate_order:
+            entry = candidate_details[table_name]
+            sources = entry.get("sources", [])
+            priority = max((priority_map.get(source, 0) for source in sources), default=0)
+            semantic_score = entry.get("scores", {}).get("semantic", 0.0)
+            details_list.append(
+                {
+                    "table_name": table_name,
+                    "sources": sources,
+                    "scores": entry.get("scores", {}),
+                    "matched_terms": entry.get("matched_terms", []),
+                    "priority": priority,
+                    "semantic_score": semantic_score,
+                    "order_index": entry.get("order_index", 0),
+                }
+            )
+
+        details_list.sort(
+            key=lambda item: (
+                item["priority"],
+                item["semantic_score"],
+                len(item["matched_terms"]),
+                -item["order_index"],
+            ),
+            reverse=True,
+        )
+
+        if isinstance(max_tables, int) and max_tables > 0 and len(details_list) > max_tables:
+            logger.info(f"Limiting candidate tables from {len(details_list)} to {max_tables}")
+            details_list = details_list[:max_tables]
+
+        candidate_tables = [item["table_name"] for item in details_list]
+        for idx, item in enumerate(details_list, start=1):
+            item["rank"] = idx
+        return candidate_tables, details_list
+
+    def _build_query_context(self, task) -> Dict[str, Any]:
+        context: Dict[str, Any] = {"task": task.task}
+        if self.workflow and hasattr(self.workflow, "metadata") and self.workflow.metadata:
+            clarified_task = self.workflow.metadata.get("clarified_task")
+            if clarified_task:
+                context["clarified_task"] = clarified_task
+            clarification = self.workflow.metadata.get("intent_clarification", {})
+            if isinstance(clarification, dict):
+                entities = clarification.get("entities", {})
+                if entities:
+                    context["business_terms"] = entities.get("business_terms", [])
+                    context["dimensions"] = entities.get("dimensions", [])
+                    context["metrics"] = entities.get("metrics", [])
+                    context["time_range"] = entities.get("time_range")
+        return context
 
     async def _context_based_discovery(self, query: str) -> List[str]:
         """
@@ -519,7 +662,9 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             logger.info(f"Updated context with {len(new_schemas)} new schemas")
 
-    async def _semantic_table_discovery(self, task_text: str, top_n: int = 20) -> List[str]:
+    async def _semantic_table_discovery(
+        self, task_text: str, top_n: int = 20
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Discover tables using semantic vector search with comment enhancement.
 
@@ -541,7 +686,12 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             if not self.agent_config:
                 return []
 
-            tables = []
+            tables: List[Dict[str, Any]] = []
+            stats: Dict[str, Any] = {
+                "semantic_top_n": top_n,
+                "semantic_tables": 0,
+                "semantic_total_hits": 0,
+            }
 
             # Get similarity threshold from configuration (with backward compatibility)
             if hasattr(self.agent_config, "schema_discovery_config"):
@@ -566,6 +716,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 )
             else:
                 similarity_threshold = base_similarity_threshold
+            stats["semantic_similarity_threshold"] = similarity_threshold
 
             # ✅ NEW: Detect query domain for business tag filtering
             query_tags = infer_business_tags(task_text, [])
@@ -647,30 +798,43 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         if scored_tables:
                             # Sort by final score and extract table names
                             scored_tables.sort(key=lambda x: x[1], reverse=True)
-                            tables.extend([t[0] for t in scored_tables[:top_n]])
+                            tables.extend(
+                                [
+                                    {"table_name": name, "score": score}
+                                    for name, score in scored_tables[:top_n]
+                                ]
+                            )
                             logger.info(
                                 f"Semantic search found {len(scored_tables)}/{len(table_names)} tables "
                                 f"via enhanced metadata (threshold={similarity_threshold}, tags={query_tags}): "
                                 f"{[t[0] for t in scored_tables[:5]]}"
                             )
+                            stats["semantic_tables"] = len(scored_tables[:top_n])
+                            stats["semantic_total_hits"] = len(table_names)
                         else:
                             logger.warning(
                                 f"No tables passed similarity threshold ({similarity_threshold}). "
                                 f"Using all {len(table_names)} results as fallback."
                             )
-                            tables.extend(table_names)
+                            tables.extend([{"table_name": name, "score": 0.0} for name in table_names])
+                            stats["semantic_tables"] = len(table_names)
+                            stats["semantic_total_hits"] = len(table_names)
                     else:
                         # No _distance column, use all results
                         found_tables = schema_results.column("table_name").to_pylist()
-                        tables.extend(found_tables)
+                        tables.extend([{"table_name": name, "score": 0.0} for name in found_tables])
                         logger.info(
                             f"Semantic search found tables via metadata (no distance filtering): {found_tables}"
                         )
+                        stats["semantic_tables"] = len(found_tables)
+                        stats["semantic_total_hits"] = len(found_tables)
 
                 except Exception as filter_error:
                     logger.warning(f"Similarity filtering failed: {filter_error}. Using all results.")
                     found_tables = schema_results.column("table_name").to_pylist()
-                    tables.extend(found_tables)
+                    tables.extend([{"table_name": name, "score": 0.0} for name in found_tables])
+                    stats["semantic_tables"] = len(found_tables)
+                    stats["semantic_total_hits"] = len(found_tables)
 
             # 2. Use ContextSearchTools for metrics/business logic search (complementary)
             context_search = ContextSearchTools(self.agent_config)
@@ -681,12 +845,12 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     # For now, we rely primarily on SchemaWithValueRAG
                     pass
 
-            return list(set(tables))
+            return tables, stats
         except Exception as e:
             logger.warning(f"Semantic table discovery failed: {e}")
-            return []
+            return [], {"semantic_tables": 0, "semantic_total_hits": 0}
 
-    def _keyword_table_discovery(self, task_text: str) -> List[str]:
+    def _keyword_table_discovery(self, task_text: str) -> Dict[str, List[str]]:
         """
         Discover tables using keyword matching and External Knowledge.
 
@@ -696,7 +860,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         Returns:
             List of table names
         """
-        candidate_tables = []
+        candidate_tables: Dict[str, List[str]] = {}
 
         # 1. Check hardcoded configuration
         from datus.configuration.business_term_config import \
@@ -704,15 +868,17 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
         for keyword, table_name in TABLE_KEYWORD_PATTERNS.items():
             if keyword in task_text:
-                candidate_tables.append(table_name)
-                if table_name.endswith("s"):
-                    candidate_tables.append(table_name[:-1])
-                else:
-                    candidate_tables.append(table_name + "s")
+                for name in {table_name, table_name[:-1] if table_name.endswith("s") else f"{table_name}s"}:
+                    candidate_tables.setdefault(name, [])
+                    if keyword not in candidate_tables[name]:
+                        candidate_tables[name].append(keyword)
 
                 business_mappings = get_business_term_mapping(keyword)
                 if business_mappings:
-                    candidate_tables.extend(business_mappings)
+                    for name in business_mappings:
+                        candidate_tables.setdefault(name, [])
+                        if keyword not in candidate_tables[name]:
+                            candidate_tables[name].append(keyword)
 
         # 2. Check External Knowledge Store
         try:
@@ -728,7 +894,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 for item in results:
                     explanation = item.get("explanation", "")
                     potential_tables = self._extract_potential_tables_from_text(explanation)
-                    candidate_tables.extend(potential_tables)
+                    for name in potential_tables:
+                        candidate_tables.setdefault(name, [])
+                        if "external_knowledge" not in candidate_tables[name]:
+                            candidate_tables[name].append("external_knowledge")
 
         except (ConnectionError, TimeoutError) as e:
             logger.warning(f"External knowledge search failed (network): {e}")
@@ -737,15 +906,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             logger.warning(f"External knowledge search failed: {e}")
             # Continue with hardcoded mappings as fallback
 
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_tables = []
-        for table in candidate_tables:
-            if table not in seen:
-                seen.add(table)
-                unique_tables.append(table)
-
-        return unique_tables
+        return candidate_tables
 
     def _extract_potential_tables_from_text(self, text: str) -> List[str]:
         """Helper to extract potential table names (snake_case words) from text."""
@@ -912,10 +1073,12 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             )
 
             # Limit to reasonable number to avoid context overflow
-            MAX_TABLES = 50
-            if len(all_tables) > MAX_TABLES:
-                logger.warning(f"Too many tables ({len(all_tables)}), limiting to first {MAX_TABLES} for fallback")
-                return all_tables[:MAX_TABLES]
+            max_tables = 50
+            if self.agent_config and hasattr(self.agent_config, "schema_discovery_config"):
+                max_tables = self.agent_config.schema_discovery_config.fallback_table_limit
+            if len(all_tables) > max_tables:
+                logger.warning(f"Too many tables ({len(all_tables)}), limiting to first {max_tables} for fallback")
+                return all_tables[:max_tables]
 
             return all_tables
 
@@ -1039,23 +1202,11 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             if not connector:
                 return 0
 
-            if hasattr(connector, "get_tables_with_ddl"):
-                tables_with_ddl = connector.get_tables_with_ddl()
-                ddl_by_table = {}
-                for tbl_info in tables_with_ddl:
-                    table_name = tbl_info.get("table_name") or tbl_info.get("name")
-                    if table_name:
-                        ddl_by_table[str(table_name)] = tbl_info.get("ddl", "")
-                for table in table_names:
-                    ddl = ddl_by_table.get(table)
-                    if ddl:
-                        schema_storage.update_table_schema(table, ddl)
-                        repaired_count += 1
-                        logger.info(f"Repaired metadata for table: {table}")
-            else:
+            per_table_supported = hasattr(connector, "get_table_ddl") or hasattr(connector, "get_ddl")
+
+            if per_table_supported:
                 for table in table_names:
                     try:
-                        # Try to fetch DDL using connector
                         ddl = None
                         if hasattr(connector, "get_table_ddl"):
                             ddl = connector.get_table_ddl(table)
@@ -1068,6 +1219,19 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                             logger.info(f"Repaired metadata for table: {table}")
                     except Exception as e:
                         logger.debug(f"Failed to repair metadata for table {table}: {e}")
+            elif hasattr(connector, "get_tables_with_ddl"):
+                tables_with_ddl = connector.get_tables_with_ddl()
+                ddl_by_table = {}
+                for tbl_info in tables_with_ddl:
+                    table_name = tbl_info.get("table_name") or tbl_info.get("name")
+                    if table_name:
+                        ddl_by_table[str(table_name)] = tbl_info.get("ddl", "")
+                for table in table_names:
+                    ddl = ddl_by_table.get(table)
+                    if ddl:
+                        schema_storage.update_table_schema(table, ddl)
+                        repaired_count += 1
+                        logger.info(f"Repaired metadata for table: {table}")
 
         except Exception as e:
             logger.error(f"Metadata repair process failed: {e}")
@@ -1122,7 +1286,43 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 try:
                     dialect = getattr(connector, "dialect", None) or getattr(task, "database_type", None)
                     db_candidates = self._filter_candidate_tables_for_db(candidate_tables, db_name, dialect)
-                    if hasattr(connector, "get_tables_with_ddl"):
+                    if db_candidates and (hasattr(connector, "get_table_ddl") or hasattr(connector, "get_ddl")):
+                        logger.info(f"Retrieving DDL for candidate tables individually from {db_name}...")
+                        lookup_seen = set()
+                        for table_name in db_candidates:
+                            lookup_name = table_name.split(".")[-1] if "." in table_name else table_name
+                            if lookup_name in lookup_seen:
+                                continue
+                            lookup_seen.add(lookup_name)
+                            try:
+                                ddl = None
+                                if hasattr(connector, "get_table_ddl"):
+                                    ddl = connector.get_table_ddl(lookup_name)
+                                elif hasattr(connector, "get_ddl"):
+                                    ddl = connector.get_ddl(lookup_name)
+
+                                if ddl:
+                                    identifier = f"{catalog or ''}.{db_name}..{lookup_name}.table"
+                                    if identifier in seen_identifiers:
+                                        continue
+                                    seen_identifiers.add(identifier)
+                                    schemas_to_store.append(
+                                        {
+                                            "identifier": identifier,
+                                            "catalog_name": catalog or "",
+                                            "database_name": db_name,
+                                            "schema_name": schema or "",
+                                            "table_name": lookup_name,
+                                            "table_type": "table",
+                                            "definition": ddl,
+                                        }
+                                    )
+                            except Exception as e:
+                                logger.debug(f"Failed to get DDL for table {lookup_name} from {db_name}: {e}")
+                    elif hasattr(connector, "get_tables_with_ddl"):
+                        if candidate_tables and not db_candidates:
+                            logger.info(f"Skipping full DDL scan for {db_name}; no candidates for this database")
+                            continue
                         logger.info(f"Using get_tables_with_ddl to retrieve all table DDLs from {db_name}...")
                         tables_with_ddl = connector.get_tables_with_ddl()
                         
@@ -1144,42 +1344,6 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                                         "definition": tbl_info.get("ddl", ""),
                                     }
                                 )
-                    elif hasattr(connector, "get_table_ddl") or hasattr(connector, "get_ddl"):
-                        logger.info(f"Retrieving DDL for candidate tables individually from {db_name}...")
-                        if not db_candidates:
-                            continue
-                        lookup_seen = set()
-                        for table_name in db_candidates:
-                            # Handle potential prefix
-                            lookup_name = table_name.split(".")[-1] if "." in table_name else table_name
-                            if lookup_name in lookup_seen:
-                                continue
-                            lookup_seen.add(lookup_name)
-                            try:
-                                ddl = None
-                                if hasattr(connector, "get_table_ddl"):
-                                    ddl = connector.get_table_ddl(lookup_name)
-                                elif hasattr(connector, "get_ddl"):
-                                    ddl = connector.get_ddl(lookup_name)
-                                
-                                if ddl:
-                                    identifier = f"{catalog or ''}.{db_name}..{lookup_name}.table"
-                                    if identifier in seen_identifiers:
-                                        continue
-                                    seen_identifiers.add(identifier)
-                                    schemas_to_store.append(
-                                        {
-                                            "identifier": identifier,
-                                            "catalog_name": catalog or "",
-                                            "database_name": db_name,
-                                            "schema_name": schema or "",
-                                            "table_name": lookup_name,
-                                            "table_type": "table",
-                                            "definition": ddl,
-                                        }
-                                    )
-                            except Exception as e:
-                                logger.debug(f"Failed to get DDL for table {lookup_name} from {db_name}: {e}")
                 except Exception as e:
                     logger.warning(f"Error processing database {db_name}: {e}")
 
@@ -1310,23 +1474,38 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             db_configs = self.agent_config.current_db_configs()
             is_multi_db = len(db_configs) > 1
 
-            # Strategy 1: Get all tables and try individual DDL retrieval
+            # Strategy 1: Retrieve DDL for candidates (or limited tables if no candidates)
             try:
-                all_tables = connector.get_tables(
-                    catalog_name=current_catalog,
-                    database_name=current_db,
-                    schema_name=current_schema,
-                )
+                candidate_limit = 50
+                if self.agent_config and hasattr(self.agent_config, "schema_discovery_config"):
+                    candidate_limit = self.agent_config.schema_discovery_config.fallback_table_limit
 
-                if all_tables:
-                    logger.info(f"Found {len(all_tables)} tables in {current_db}, trying individual DDL retrieval...")
+                if candidate_tables:
+                    target_tables = [name.split(".")[-1] for name in candidate_tables]
+                else:
+                    all_tables = connector.get_tables(
+                        catalog_name=current_catalog,
+                        database_name=current_db,
+                        schema_name=current_schema,
+                    )
+                    if len(all_tables) > candidate_limit:
+                        logger.warning(
+                            f"Too many tables ({len(all_tables)}), limiting to first {candidate_limit} for DDL fallback"
+                        )
+                        all_tables = all_tables[:candidate_limit]
+                    target_tables = all_tables
+
+                if target_tables:
+                    logger.info(
+                        f"Trying individual DDL retrieval for {len(target_tables)} tables in {current_db}..."
+                    )
 
                     rag = SchemaWithValueRAG(agent_config=self.agent_config)
                     schemas_to_store = []
                     retrieved_count = 0
 
                     # Try to get DDL for each table
-                    for table_name in all_tables:
+                    for table_name in target_tables:
                         try:
                             # Try different DDL retrieval methods
                             ddl = None
@@ -1398,7 +1577,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 logger.warning(f"Enhanced DDL fallback strategy failed for {current_db}: {e}")
 
             # Strategy 2: Final fallback - store just table names for LLM reference
-            if all_tables and candidate_tables:
+            if candidate_tables:
                 logger.warning(f"All DDL retrieval attempts failed for {current_db}, storing table names for LLM reference")
                 rag = SchemaWithValueRAG(agent_config=self.agent_config)
                 db_candidates = self._filter_candidate_tables_for_db(candidate_tables, current_db, dialect)
@@ -1406,7 +1585,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
                 # Create minimal schema entries with just table names
                 minimal_schemas = []
-                for table_name in all_tables:
+                for table_name in candidate_lookup:
                     if table_name in candidate_lookup:
                         minimal_schemas.append(
                             {
@@ -1521,6 +1700,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         if not hasattr(workflow, "metadata"):
                             workflow.metadata = {}
                         workflow.metadata["discovered_tables"] = output["candidate_tables"]
+                        if output.get("table_candidates"):
+                            workflow.metadata["discovered_table_details"] = output["table_candidates"]
+                        if output.get("discovery_stats"):
+                            workflow.metadata["schema_discovery_stats"] = output["discovery_stats"]
                         return {"table_count": len(output["candidate_tables"])}
 
                     result = safe_context_update(

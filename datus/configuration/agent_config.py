@@ -92,6 +92,7 @@ class SchemaDiscoveryConfig:
     semantic_similarity_threshold: float = 0.5
     context_search_threshold: int = 10
     fallback_table_limit: int = 50
+    max_candidate_tables: int = 12
 
     # Chinese query processing (v2.5.1)
     # Dynamic similarity threshold adjustment for Chinese queries
