@@ -459,12 +459,13 @@ class DatusAPIService:
             try:
                 # Import here to avoid circular imports
                 from datus.agent.intent_detection import detect_sql_intent
+                from datus.models.base import LLMBaseModel
                 from datus.storage.ext_knowledge.store import ExtKnowledgeStore
 
                 # Get model for LLM fallback (use target model from config)
                 model = None
                 try:
-                    model = agent.global_config.get_model()
+                    model = LLMBaseModel.create_model(model_name="default", agent_config=agent.global_config)
                 except Exception as e:
                     logger.warning(f"Could not get model for intent detection: {e}")
 
