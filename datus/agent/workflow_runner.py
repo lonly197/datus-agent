@@ -188,6 +188,86 @@ class WorkflowRunner:
         """Increment the completed nodes counter."""
         self._completed_nodes_count += 1
 
+    def _ensure_output_node_execution(self, metadata: Dict) -> None:
+        """
+        Ensure the output node executes even when workflow exits early.
+
+        This guarantees that the SQL generation report is always generated
+        and returned to the user, regardless of whether the workflow
+        completed all nodes or exited due to max_steps limit or other reasons.
+
+        Args:
+            metadata: The metadata dict that will be passed to _finalize_workflow
+        """
+        if not self.workflow or not self.workflow.nodes:
+            return
+
+        # Find the output node (can be named 'output' or 'Return the results to the user')
+        output_node = None
+        for node in self.workflow.nodes.values():
+            if node.type == "output":
+                output_node = node
+                break
+
+        if not output_node:
+            logger.debug("No output node found in workflow")
+            return
+
+        # Check if output node needs to be executed
+        if output_node.status in ["completed", "skipped"]:
+            logger.debug(f"Output node already executed (status: {output_node.status})")
+            return
+
+        if output_node.status == "failed":
+            logger.warning(f"Output node previously failed, attempting to re-execute")
+            # Reset status to allow re-execution
+            output_node.status = "pending"
+            output_node.result = None
+
+        # Find output node index in node_order
+        output_idx = None
+        for idx, node_id in enumerate(self.workflow.node_order):
+            if node_id == output_node.id:
+                output_idx = idx
+                break
+
+        if output_idx is None:
+            # Output node not in node_order, try to add it
+            output_idx = len(self.workflow.node_order)
+            self.workflow.node_order.append(output_node.id)
+            logger.info(f"Added output node to node_order at index {output_idx}")
+
+        # Update current_node_index to output node position
+        old_index = self.workflow.current_node_index
+        self.workflow.current_node_index = output_idx
+        logger.info(
+            f"Forcing output node execution: "
+            f"old_index={old_index}, new_index={output_idx}, "
+            f"node_order_len={len(self.workflow.node_order)}"
+        )
+
+        # Setup input for output node
+        from datus.agent.evaluate import setup_node_input
+        setup_node_input(output_node, self.workflow)
+
+        # Execute output node
+        try:
+            logger.info(f"Executing pending output node: {output_node.description}")
+            output_node.run()
+
+            if output_node.status == "completed":
+                self._increment_completed_count()
+                logger.info(f"Output node executed successfully")
+
+                # Update final_result in metadata if available
+                if hasattr(output_node, "result") and output_node.result:
+                    if isinstance(output_node.result, dict):
+                        metadata["output_result"] = output_node.result
+            else:
+                logger.warning(f"Output node execution returned status: {output_node.status}")
+        except Exception as e:
+            logger.error(f"Failed to execute output node: {e}", exc_info=True)
+
     def _ensure_prerequisites(self, sql_task: Optional[SqlTask], check_storage: bool) -> bool:
         if check_storage:
             self.global_config.check_init_storage_config("database")
@@ -592,6 +672,10 @@ class WorkflowRunner:
         if step_count >= max_steps:
             logger.warning(f"Workflow execution stopped after reaching max steps: {max_steps}")
 
+        # CRITICAL: Ensure output node executes even when workflow exits early
+        # This guarantees the SQL generation report is always generated
+        self._ensure_output_node_execution({})
+
         metadata = self._finalize_workflow(step_count)
         return metadata.get("final_result", {})
 
@@ -775,6 +859,10 @@ class WorkflowRunner:
 
                 if step_count >= max_steps:
                     logger.warning(f"Workflow execution stopped after reaching max steps: {max_steps}")
+
+                # CRITICAL: Ensure output node executes even when workflow exits early
+                # This guarantees the SQL generation report is always generated
+                self._ensure_output_node_execution(metadata)
 
                 metadata = self._finalize_workflow(step_count)
                 workflow_succeeded = True
