@@ -492,11 +492,63 @@ def migrate_schema_storage(
             logger.info(f"Found {len(backup_records)} records to migrate")
 
         # Step 2: Create fresh v1 table (assumes cleanup has been run)
+        required_fields = [
+            "identifier",
+            "catalog_name",
+            "database_name",
+            "schema_name",
+            "table_name",
+            "table_type",
+            "definition",
+            "table_comment",
+            "column_comments",
+            "column_enums",
+            "business_tags",
+            "row_count",
+            "sample_statistics",
+            "relationship_metadata",
+            "metadata_version",
+            "last_updated",
+        ]
+        core_fields = {
+            "identifier",
+            "catalog_name",
+            "database_name",
+            "schema_name",
+            "table_name",
+            "table_type",
+            "definition",
+        }
+        if storage.table_name in storage.db.table_names(limit=100):
+            existing_schema = storage.db.open_table(storage.table_name).schema
+            existing_fields = set(existing_schema.names)
+            missing_required = [field for field in required_fields if field not in existing_fields]
+            if missing_required:
+                logger.warning(
+                    "Existing schema is missing v1 fields; recreating table: "
+                    f"{', '.join(missing_required)}"
+                )
+                try:
+                    storage.db.drop_table(storage.table_name)
+                except Exception as exc:
+                    logger.error(f"Failed to drop existing table: {exc}")
+                    logger.warning("Migration will proceed by omitting missing fields from inserts")
+
         # Reset initialization to force table creation with v1 schema
         storage.table = None
         storage._table_initialized = False
         storage._ensure_table_ready()
         logger.info(f"Created fresh v1 table: {storage.table_name}")
+        table_fields = set(storage.table.schema.names)
+        missing_core = [field for field in core_fields if field not in table_fields]
+        if missing_core:
+            raise RuntimeError(f"Schema missing required fields: {', '.join(missing_core)}")
+        missing_required = [field for field in required_fields if field not in table_fields]
+        if missing_required:
+            logger.warning(
+                "Table schema still missing fields; inserts will omit: "
+                f"{', '.join(missing_required)}"
+            )
 
         migrated_count = 0
         batch_size = 100
@@ -576,6 +628,8 @@ def migrate_schema_storage(
                     "metadata_version": 1,  # Mark as v1
                     "last_updated": int(time.time())
                 }
+                if missing_required:
+                    update_data = {key: value for key, value in update_data.items() if key in table_fields}
 
                 # LanceDB handles embedding automatically via table's embedding function config
                 batch_updates.append(update_data)
