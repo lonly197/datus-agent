@@ -117,7 +117,15 @@ class ResultValidationNode(Node):
             latest_sql_context = context.sql_contexts[-1]
 
             # Step 3: Validate the SQL execution result
-            validation_result = self._validate_sql_result(task.task if task else "", latest_sql_context)
+            schema_validation = None
+            if self.workflow and hasattr(self.workflow, "metadata") and self.workflow.metadata:
+                schema_validation = self.workflow.metadata.get("schema_validation")
+
+            validation_result = self._validate_sql_result(
+                task.task if task else "",
+                latest_sql_context,
+                schema_validation,
+            )
 
             # Emit result
             if validation_result["is_valid"]:
@@ -196,7 +204,12 @@ class ResultValidationNode(Node):
             )
             self.result = BaseResult(success=False, error=str(e))
 
-    def _validate_sql_result(self, task: str, sql_context: SQLContext) -> Dict[str, Any]:
+    def _validate_sql_result(
+        self,
+        task: str,
+        sql_context: SQLContext,
+        schema_validation: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Validate the SQL execution result.
 
@@ -207,7 +220,14 @@ class ResultValidationNode(Node):
         - error: str (if any)
         - suggestion: str (if invalid)
         """
-        result = {"is_valid": False, "reason": "", "row_count": 0, "error": None, "suggestion": None}
+        result = {
+            "is_valid": False,
+            "reason": "",
+            "row_count": 0,
+            "error": None,
+            "suggestion": None,
+            "risk_level": "none",
+        }
 
         # Check if there was an execution error
         # Note: We need to check the SQL execution context, not just the SQL query
@@ -217,6 +237,14 @@ class ResultValidationNode(Node):
         # For now, we'll validate based on what we can infer
         if sql_context.sql_query:
             result["sql_query"] = sql_context.sql_query
+        result["row_count"] = sql_context.row_count or 0
+
+        if sql_context.sql_error:
+            result["is_valid"] = False
+            result["reason"] = "SQL execution failed"
+            result["error"] = sql_context.sql_error
+            result["suggestion"] = "Check table/column names and SQL syntax"
+            return result
 
         # Check if this is a DDL/DML query (no results expected)
         if self._is_ddl_or_dml_query(sql_context.sql_query):
@@ -236,7 +264,28 @@ class ResultValidationNode(Node):
         # Basic validation: if we have a SQL query, consider it valid for now
         # More sophisticated validation would require access to execution results
         result["is_valid"] = True
-        result["reason"] = "SQL query generated successfully"
+        result["reason"] = "SQL query executed successfully"
+
+        if result["row_count"] == 0:
+            result["reason"] = "SQL executed successfully (empty result)"
+            result["risk_level"] = "low"
+            result["suggestion"] = "Result set is empty; verify filters or test data availability"
+
+            if schema_validation and isinstance(schema_validation, dict):
+                coverage_score = schema_validation.get("coverage_score")
+                coverage_threshold = schema_validation.get("coverage_threshold")
+                if isinstance(coverage_score, (int, float)) and isinstance(coverage_threshold, (int, float)):
+                    if coverage_score <= coverage_threshold:
+                        result["risk_level"] = "medium"
+                        result["suggestion"] = (
+                            "Empty result with low schema coverage; verify term-to-field mapping or refine schema"
+                        )
+                result["validation_context"] = {
+                    "coverage_score": coverage_score,
+                    "coverage_threshold": coverage_threshold,
+                    "covered_terms": schema_validation.get("covered_terms", []),
+                    "uncovered_terms": schema_validation.get("uncovered_terms", []),
+                }
 
         return result
 

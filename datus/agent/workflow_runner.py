@@ -666,6 +666,7 @@ class WorkflowRunner:
                 self._increment_completed_count()
 
             is_soft_failure = False
+            jump_to_reflect = False
             if current_node.status == "failed":
                 # Use new termination status API
                 termination_status = self._handle_node_failure(current_node)
@@ -686,6 +687,9 @@ class WorkflowRunner:
                 logger.info(f"Node requested termination via metadata: {metadata_termination_status}")
                 if metadata_termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
                     is_soft_failure = True
+                    jump_to_reflect = True
+                    # Clear termination status to avoid repeated jumps
+                    self.workflow.metadata.pop("termination_status", None)
                 elif metadata_termination_status == WorkflowTerminationStatus.PROCEED_TO_OUTPUT:
                     # Strategies exhausted - continue to output node for report generation
                     logger.info("Strategies exhausted, proceeding to output node for report generation")
@@ -702,6 +706,12 @@ class WorkflowRunner:
                         termination_status=WorkflowTerminationStatus.TERMINATE_SUCCESS
                     )
                     break
+
+            if jump_to_reflect:
+                jumped = self._jump_to_reflect_node()
+                if jumped:
+                    logger.info("Skipping to reflect node due to termination request")
+                    continue
 
             evaluation = evaluate_result(current_node, self.workflow)
             logger.debug(f"Evaluation result for {current_node.type}: {evaluation}")
@@ -837,6 +847,7 @@ class WorkflowRunner:
                             self._increment_completed_count()
 
                         is_soft_failure = False
+                        jump_to_reflect = False
                         if current_node.status == "failed":
                             # Use new termination status API
                             termination_status = self._handle_node_failure(current_node, node_start_action)
@@ -857,6 +868,9 @@ class WorkflowRunner:
                             logger.info(f"Node requested termination via metadata: {metadata_termination_status}")
                             if metadata_termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
                                 is_soft_failure = True
+                                jump_to_reflect = True
+                                # Clear termination status to avoid repeated jumps
+                                self.workflow.metadata.pop("termination_status", None)
                             elif metadata_termination_status == WorkflowTerminationStatus.PROCEED_TO_OUTPUT:
                                 # Strategies exhausted - jump directly to output node for report generation
                                 logger.info("Strategies exhausted, jumping to output node for report generation")
@@ -888,6 +902,12 @@ class WorkflowRunner:
                                 "execution_successful": True,
                             },
                         )
+
+                        if jump_to_reflect:
+                            jumped = self._jump_to_reflect_node()
+                            if jumped:
+                                logger.info("Skipping to reflect node due to termination request")
+                                continue
 
                     except Exception as e:
                         # Regular exception (CancelledError will propagate naturally)

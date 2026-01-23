@@ -1471,7 +1471,13 @@ class DeepResearchEventConverter:
             # Should have both ToolCallEvent and ToolCallResultEvent
             has_call = any(e.event == "tool_call" for e in events)
             has_result = any(e.event == "tool_call_result" for e in events)
-            if not (has_call and has_result):
+            if has_call and has_result:
+                return True
+            # Allow processing updates to emit only tool_call
+            if has_call and not has_result:
+                return True
+            # Result without call is unexpected
+            if has_result and not has_call:
                 self.logger.warning(f"Action {action_type} missing tool call/result events")
                 return False
         return True
@@ -1810,35 +1816,36 @@ class DeepResearchEventConverter:
 
         # Handle SQL Execution (convert to ToolCallEvent)
         elif action.action_type == "sql_execution":
-            tool_call_id = str(uuid.uuid4())
+            tool_call_id = action.action_id
             tool_input = {}
             if action.input and isinstance(action.input, dict):
                 tool_input = action.input
 
-            # Use unified plan ID strategy (fix for Text2SQL workflow)
             exec_plan_id = self._get_unified_plan_id(action, force_associate=True)
 
-            events.append(
-                ToolCallEvent(
-                    id=f"{event_id}_call",
-                    planId=exec_plan_id,
-                    timestamp=timestamp,
-                    toolCallId=tool_call_id,
-                    toolName="execute_sql",
-                    input=tool_input,
+            if action.status == ActionStatus.PROCESSING:
+                events.append(
+                    ToolCallEvent(
+                        id=f"{event_id}_call",
+                        planId=exec_plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        toolName="execute_sql",
+                        input=tool_input,
+                    )
                 )
-            )
 
-            events.append(
-                ToolCallResultEvent(
-                    id=f"{event_id}_result",
-                    planId=exec_plan_id,
-                    timestamp=timestamp,
-                    toolCallId=tool_call_id,
-                    data=action.output,
-                    error=action.status == ActionStatus.FAILED,
+            if action.status in (ActionStatus.SUCCESS, ActionStatus.FAILED):
+                events.append(
+                    ToolCallResultEvent(
+                        id=f"{event_id}_result",
+                        planId=exec_plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        data=action.output,
+                        error=action.status == ActionStatus.FAILED,
+                    )
                 )
-            )
 
         # Handle Preflight Tool Execution
         elif action.action_type.startswith("preflight_"):
