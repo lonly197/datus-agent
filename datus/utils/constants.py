@@ -76,6 +76,7 @@ class LLMProvider(str, Enum):
     GEMINI = "gemini"
     LLAMA = "llama"
     GPT = "gpt"  # Alternative name for OpenAI
+    MINIMAX = "minimax"
 
 
 class EmbeddingProvider(str, Enum):
