@@ -1,7 +1,7 @@
 # Datus Schemas 模块介绍
 
-> **文档版本**: v2.0
-> **更新日期**: 2026-01-22
+> **文档版本**: v2.1
+> **更新日期**: 2026-01-23
 > **相关模块**: `datus/schemas/`
 > **代码仓库**: [Datus Agent](https://github.com/Datus-ai/Datus-agent)
 
@@ -78,7 +78,7 @@ Datus Schemas 模块基于 **Pydantic v2** 提供类型安全的数据模型定�
 | `semantic_agentic_node_models.py` | 语义 Agentic 节点模型 |
 | `chat_agentic_node_models.py` | 聊天 Agentic 节点模型 |
 | `sql_summary_agentic_node_models.py` | SQL 摘要 Agentic 节点模型 |
-| `tool_models.py` | 工具模型 |
+| `tool_models.py` | 工具模型 (预留) |
 | `visualization.py` | 可视化模型 |
 
 ---
@@ -169,7 +169,7 @@ class SqlTask(BaseModel):
     schema_name: str                     # 模式名
     output_dir: str                      # 输出目录
     external_knowledge: str              # 外部知识
-    tables: Optional[List[str]]          # 要使用的表名列表
+    tables: Optional[List[str]] = Field(default=[], description="List of table names to use")
     schema_linking_type: TABLE_TYPE      # 模式链接类型
     current_date: Optional[str]          # 当前日期引用
     date_ranges: str                     # 解析的日期范围
@@ -203,6 +203,10 @@ class TableSchema(BaseTableSchema):
 
     def to_prompt(self, dialect: str = "snowflake", include_ddl: bool = True) -> str:
         """转换为 LLM prompt 字符串"""
+
+    @classmethod
+    def table_names_to_prompt(cls, schemas: List[TableSchema]) -> str:
+        """仅返回表名列表"""
 
     @classmethod
     def list_to_prompt(cls, schemas: List[TableSchema], dialect: str = "snowflake") -> str:
@@ -305,7 +309,9 @@ class Context(BaseModel):
     parallel_results: Optional[Dict[str, Any]]  # 并行执行结果
     last_selected_result: Optional[Any]     # 最后选择的结果
     selection_metadata: Optional[Dict[str, Any]]  # 选择过程元数据
-    preflight_results: Optional[Dict[str, Any]]   # 预检工具执行结果
+    preflight_results: Optional[Dict[str, Any]] = Field(
+        default=None, description="Results from preflight tool execution"
+    )
 
     def update_schema_and_values(...)
     def update_last_sql_context(...)
@@ -371,6 +377,19 @@ class ExecuteSQLResult(BaseResult):
 
     def compact_result(self) -> str:
         """返回紧凑的执行结果字符串表示"""
+```
+
+#### SQLValidateInput / SQLValidateResult
+
+SQL 验证节点的输入输出模型。
+
+```python
+class SQLValidateInput(BaseInput):
+    sql_query: str
+    dialect: Optional[str]           # 数据库方言
+    check_table_existence: bool = True   # 检查表是否存在
+    check_column_existence: bool = True  # 检查列是否存在
+    check_dangerous_operations: bool = True  # 检查危险操作
 ```
 
 #### ReflectionInput / ReflectionResult
@@ -451,6 +470,7 @@ class ActionHistory(BaseModel):
         messages: str,
         input_data: dict,
         output_data: dict = None,
+        output: dict = None,  # Backward compatibility
         status: ActionStatus = ActionStatus.PROCESSING,
     ) -> "ActionHistory"
 
@@ -683,6 +703,21 @@ class GenSQLNodeResult(BaseResult):
     response: str                    # AI 助手响应
     sql: Optional[str]               # 生成或引用的 SQL 查询
     tokens_used: int = 0             # 使用的总 tokens
+```
+
+#### VisualizationInput / VisualizationOutput
+
+可视化推荐模型。
+
+```python
+class VisualizationInput(BaseInput):
+    data: DataLike                   # DataFrame, List[Dict], 或 PyArrow Table
+
+class VisualizationOutput(BaseResult):
+    chart_type: str                  # 图表类型
+    x_col: str                       # X轴列名
+    y_cols: list[str]                # Y轴列名列表
+    reason: str                      # 推荐理由
 ```
 
 ---
@@ -987,6 +1022,24 @@ class SubAgentConfig(BaseModel):
     @property
     def tool_list(self) -> List[str]
 ```
+
+---
+
+## 版本更新记录
+
+### v2.1 (2026-01-23)
+- 新增 `table_names_to_prompt` 方法到 TableSchema
+- 新增 `SQLValidateInput` 模型文档
+- 新增 `VisualizationInput/Output` 可视化模型
+- 修正 `tool_models.py` 为预留模型
+- 修正 `preflight_results` 类型为 `Dict[str, Any]`
+
+### v2.0 (2026-01-22)
+- 完整重写，基于最新代码架构
+- 新增核心节点模型 (SqlTask, TableSchema, SQLContext 等)
+- 新增专用节点模型 (Agentic Node, Schema Linking 等)
+- 新增动作历史和代理配置模型
+- 新增 Pydantic v2 完整集成
 
 ---
 

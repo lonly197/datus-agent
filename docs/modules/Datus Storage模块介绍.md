@@ -1,7 +1,7 @@
 # Datus Storage 模块介绍
 
-> **文档版本**: v2.0
-> **更新日期**: 2026-01-22
+> **文档版本**: v2.1
+> **更新日期**: 2026-01-23
 > **相关模块**: `datus/storage/`
 > **代码仓库**: [Datus Agent](https://github.com/Datus-ai/Datus-agent)
 
@@ -60,27 +60,34 @@ Datus Storage 模块是一个基于 **LanceDB 向量数据库** 的多层知识�
 | `definition` | string | DDL 定义 (含中文注释增强) |
 | `table_comment` | string | 表注释 |
 | `column_comments` | string | 列注释 JSON |
+| `column_enums` | string | 列枚举值 JSON |
 | `business_tags` | list[string] | 业务标签 |
 | `row_count` | int64 | 行数统计 |
 | `sample_statistics` | string | 列统计 JSON |
+| `relationship_metadata` | string | 外键和关联路径 JSON |
+| `metadata_version` | int32 | 元数据版本 (0=旧版, 1=增强) |
+| `last_updated` | int64 | 更新时间戳 |
 | `vector` | list[float32] | 向量嵌入 |
 
 **核心方法**:
 ```python
 # 语义搜索表结构
-search_similar(query_text, database_name, schema_name, top_n)
+search_similar(query_text, catalog_name, database_name, schema_name, top_n, table_type, reranker)
 
-# 获取单个表结构
-get_schema(table_name, catalog_name, database_name, schema_name)
-
-# 批量获取表结构
-get_table_schemas(table_names, catalog_name, database_name, schema_name)
-
-# 更新表结构 (元数据修复)
-update_table_schema(table_name, definition, table_comment, column_comments, ...)
+# 内部搜索（支持 reranker）
+do_search_similar(query_text, top_n, where, reranker)
 
 # 获取所有表
-search_all(catalog_name, database_name, schema_name, table_type)
+search_all(catalog_name, database_name, schema_name, table_type, select_fields)
+
+# 创建索引
+create_indices()
+
+# 批量存储
+store_batch(data)
+
+# 更新记录
+update(where, update_values, unique_filter)
 ```
 
 ### 2. SchemaValueStorage - 样本数据存储
@@ -200,11 +207,15 @@ CREATE TABLE subject_nodes (
     node_id INTEGER PRIMARY KEY AUTOINCREMENT,
     parent_id INTEGER,              -- 父节点 ID (NULL 表示根节点)
     name TEXT NOT NULL,             -- 节点名称
-    description TEXT,               -- 描述
-    created_at TEXT,                -- 创建时间
-    updated_at TEXT,                -- 更新时间
+    description TEXT DEFAULT '',    -- 描述
+    created_at TEXT NOT NULL,       -- 创建时间
+    updated_at TEXT NOT NULL,       -- 更新时间
     UNIQUE(parent_id, name)         -- 同一父节点下名称唯一
 )
+
+-- 索引
+CREATE INDEX idx_subject_parent_id ON subject_nodes(parent_id)
+CREATE UNIQUE INDEX idx_subject_parent_name ON subject_nodes(parent_id, name)
 ```
 
 **核心方法**:
@@ -308,9 +319,26 @@ sub_agents:
 
 ```python
 # 代码位置: datus/storage/cache.py
+
+# LRU 缓存装饰器
 @lru_cache(maxsize=12)
 def _cached_storage(factory, path, model_name):
     return factory(path, get_embedding_model(model_name))
+
+# StorageCacheHolder - 子代理存储持有者
+class StorageCacheHolder:
+    def storage_instance(sub_agent_name: Optional[str] = None) -> T:
+        # 检查子代理是否有作用域上下文
+        # 如果有，使用子代理独立存储路径
+        # 否则，使用全局存储并通过 LRU 缓存返回
+
+# StorageCache - 主缓存管理类
+class StorageCache:
+    def schema_storage(sub_agent_name: Optional[str] = None) -> SchemaStorage
+    def schema_value_storage(sub_agent_name: Optional[str] = None) -> SchemaValueStorage
+    def metrics_storage(sub_agent_name: Optional[str] = None) -> MetricStorage
+    def semantic_storage(sub_agent_name: Optional[str] = None) -> SemanticModelStorage
+    def reference_sql_storage(sub_agent_name: Optional[str] = None) -> ReferenceSqlStorage
 ```
 
 ---
@@ -428,6 +456,17 @@ datus-agent bootstrap-kb --namespace my_database --kb_update_strategy overwrite
 datus-agent bootstrap-kb --namespace my_database --kb_update_strategy incremental
 ```
 
+### 子代理 KB 初始化
+
+```python
+# 代码位置: datus/storage/sub_agent_kb_bootstrap.py
+from datus.storage.sub_agent_kb_bootstrap import SubAgentKBBootstrap
+
+# 初始化子代理知识库
+bootstrap = SubAgentKBBootstrap(agent_config)
+bootstrap.bootstrap_sub_agent_kb(sub_agent_name, kb_update_strategy)
+```
+
 ---
 
 ## 最佳实践
@@ -516,38 +555,24 @@ class SchemaStorage(BaseMetadataStorage):
         reranker: Optional[Reranker] = None,
     ) -> pa.Table
 
-    def get_schema(
+    def do_search_similar(
         self,
-        table_name: str,
-        catalog_name: str = "",
-        database_name: str = "",
-        schema_name: str = ""
+        query_text: str,
+        top_n: int = 5,
+        where: WhereExpr = None,
+        reranker: Optional[Reranker] = None,
     ) -> pa.Table
 
-    def get_table_schemas(
+    def search_all(
         self,
-        table_names: List[str],
-        catalog_name: str = "",
-        database_name: str = "",
-        schema_name: str = ""
-    ) -> pa.Table
-
-    def update_table_schema(
-        self,
-        table_name: str,
-        definition: str,
         catalog_name: str = "",
         database_name: str = "",
         schema_name: str = "",
-        table_type: TABLE_TYPE = "table",
-        table_comment: str = "",
-        column_comments: Optional[Dict[str, str]] = None,
-        business_tags: Optional[List[str]] = None,
-        row_count: int = 0,
-        sample_statistics: Optional[Dict[str, Dict]] = None,
-        relationship_metadata: Optional[Dict[str, Any]] = None,
-        metadata_version: int = 1,
-    ) -> bool
+        table_type: TABLE_TYPE = "full",
+        select_fields: Optional[List[str]] = None,
+    ) -> pa.Table
+
+    def create_indices(self) -> None
 ```
 
 ### MetricStorage
@@ -571,6 +596,41 @@ class MetricStorage(BaseSubjectEmbeddingStore):
     def batch_store_metrics(self, metrics: List[Dict[str, Any]]) -> None
 ```
 
+### ReferenceSqlStorage
+
+```python
+class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
+    def search_reference_sql(
+        self,
+        query_text: Optional[str] = None,
+        subject_path: Optional[List[str]] = None,
+        top_n: Optional[int] = 5,
+        selected_fields: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]
+
+    def search_all_reference_sql(
+        self,
+        subject_path: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]
+
+    def batch_store_sql(
+        self,
+        sql_items: List[Dict[str, Any]],
+        subject_path_field: str = "subject_path",
+    ) -> None
+```
+
+### StorageCache
+
+```python
+class StorageCache:
+    def schema_storage(self, sub_agent_name: Optional[str] = None) -> SchemaStorage
+    def schema_value_storage(self, sub_agent_name: Optional[str] = None) -> SchemaValueStorage
+    def metrics_storage(self, sub_agent_name: Optional[str] = None) -> MetricStorage
+    def semantic_storage(self, sub_agent_name: Optional[str] = None) -> SemanticModelStorage
+    def reference_sql_storage(self, sub_agent_name: Optional[str] = None) -> ReferenceSqlStorage
+```
+
 ### SubjectTreeStore
 
 ```python
@@ -582,6 +642,8 @@ class SubjectTreeStore:
         description: str = ""
     ) -> Dict[str, Any]
 
+    def get_node(self, node_id: int) -> Optional[Dict[str, Any]]
+
     def get_node_by_path(self, path: List[str]) -> Optional[Dict[str, Any]]
 
     def find_or_create_path(self, path_components: List[str]) -> int
@@ -589,6 +651,9 @@ class SubjectTreeStore:
     def get_full_path(self, node_id: int) -> List[str]
 
     def rename(self, old_path: List[str], new_path: List[str]) -> bool
+
+    def get_tree_structure(self) -> Dict[str, Any]
+    def get_simple_tree_structure(self) -> Dict[str, Any]
 ```
 
 ---
@@ -597,12 +662,38 @@ class SubjectTreeStore:
 
 ### v0 → v1 主要变化
 
-1. **增强元数据**: 添加 `table_comment`, `column_comments`, `business_tags` 等字段
+1. **增强元数据**: 添加 `table_comment`, `column_comments`, `column_enums`, `business_tags` 等字段
 2. **中文注释**: DDL 自动添加中文注释前缀
 3. **主题树集成**: 指标和 SQL 支持层次化主题组织
 4. **子代理隔离**: 支持独立的知识库作用域
-5. **智能索引**: 根据数据量自动选择索引类型
+5. **智能索引**: 根据数据量自动选择索引类型 (IVF_PQ / IVF_FLAT)
 6. **缓存优化**: LRU 缓存提升性能
+7. **新增字段**: `metadata_version`, `last_updated`, `relationship_metadata`
+
+---
+
+## 版本更新记录
+
+### v2.1 (2026-01-23)
+- 新增 `column_enums` 字段到 SchemaStorage (列枚举值)
+- 新增 `last_updated` 字段 (更新时间戳)
+- 新增 `relationship_metadata` 字段 (外键和关联路径)
+- 新增 `do_search_similar` 内部搜索方法
+- 新增 `search_all` 方法的 `select_fields` 参数
+- 新增 ReferenceSqlStorage API 参考
+- 新增 StorageCache API 参考
+- 新增 SubAgentKBBootstrap 初始化说明
+- 完善 SubjectTreeStore 数据库索引定义
+- 修正缓存机制文档 (StorageCacheHolder, StorageCache)
+
+### v2.0 (2026-01-22)
+- 完整重写，基于最新代码架构
+- 新增 LanceDB 向量存储核心实现
+- 新增多层知识存储系统 (Schema, Metric, ReferenceSQL, Document)
+- 新增主题树层次化组织
+- 新增子代理作用域存储
+- 新增智能索引策略
+- 新增中文注释增强
 
 ---
 
