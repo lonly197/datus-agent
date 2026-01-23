@@ -141,6 +141,9 @@ class IntentClarificationNode(Node, LLMMixin):
             self.workflow.metadata["original_task"] = original_task
             self.workflow.metadata["clarified_task"] = clarified_task
 
+            has_entities = self._has_entity_content(clarification_result.get("entities", {}))
+            has_corrections = self._has_correction_content(clarification_result.get("corrections", {}))
+
             # Emit success action
             yield ActionHistory(
                 action_id=f"{self.id}_clarification",
@@ -149,8 +152,8 @@ class IntentClarificationNode(Node, LLMMixin):
                 action_type="intent_clarification",
                 input={
                     "original_task": original_task[:100],
-                    "has_entities": bool(clarification_result.get("entities")),
-                    "has_corrections": bool(clarification_result.get("corrections")),
+                    "has_entities": has_entities,
+                    "has_corrections": has_corrections,
                 },
                 status=ActionStatus.SUCCESS,
                 output=clarification_result,
@@ -276,6 +279,12 @@ class IntentClarificationNode(Node, LLMMixin):
 
                     return clarification_result
 
+                logger.warning(
+                    "Intent clarification JSON parsing failed on attempt %s. Raw response: %s",
+                    attempt + 1,
+                    response_text,
+                )
+
             except Exception as e:
                 logger.warning(f"Intent clarification attempt {attempt + 1} failed: {e}")
 
@@ -387,6 +396,7 @@ class IntentClarificationNode(Node, LLMMixin):
             r"每天",
             r"每周",
             r"每月",
+            r"每个?月",
             r"每年",
         ]
         for pattern in time_patterns:
@@ -396,7 +406,7 @@ class IntentClarificationNode(Node, LLMMixin):
                 break
 
         # Extract business terms (quoted content in single or double quotes, or Chinese quotes)
-        quoted_terms = re.findall(r"""['"]([^'"]*?)['"]""", task_text)
+        quoted_terms = re.findall(r"""['"‘’“”]([^'"‘’“”]*?)['"‘’“”]""", task_text)
         if quoted_terms:
             entities["business_terms"] = quoted_terms
 
@@ -407,6 +417,28 @@ class IntentClarificationNode(Node, LLMMixin):
                 entities["metrics"].append(keyword)
 
         return entities
+
+    @staticmethod
+    def _has_entity_content(entities: Dict[str, Any]) -> bool:
+        if not isinstance(entities, dict):
+            return False
+        if entities.get("time_range"):
+            return True
+        for key in ("business_terms", "dimensions", "metrics"):
+            value = entities.get(key) or []
+            if isinstance(value, list) and len(value) > 0:
+                return True
+        return False
+
+    @staticmethod
+    def _has_correction_content(corrections: Dict[str, Any]) -> bool:
+        if not isinstance(corrections, dict):
+            return False
+        for key in ("typos_fixed", "ambiguities_resolved"):
+            value = corrections.get(key) or []
+            if isinstance(value, list) and len(value) > 0:
+                return True
+        return False
 
     def execute(self) -> BaseResult:
         """Execute intent clarification synchronously."""
