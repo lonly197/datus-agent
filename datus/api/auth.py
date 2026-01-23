@@ -6,7 +6,6 @@
 Authentication module for Datus Agent API.
 """
 import os
-import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -23,10 +22,9 @@ logger = get_logger(__name__)
 # Default clients configuration (empty by default for security)
 DEFAULT_CLIENTS: Dict[str, str] = {}
 
-# Default JWT configuration
-# Security: Generate a random key if none is provided to prevent using known defaults
+# Default JWT configuration (must be overridden by auth_clients.yml)
 DEFAULT_JWT_CONFIG = {
-    "secret_key": secrets.token_hex(32),
+    "secret_key": "",
     "algorithm": "HS256",
     "expiration_hours": 2,
 }
@@ -61,12 +59,13 @@ def load_auth_config(config_path: Optional[str] = None) -> Dict:
         try:
             with open(yaml_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f)
-                return config
+                return config or {}
         except Exception as e:
-            print(f"Warning: Failed to load auth config from {yaml_path}: {e}")
+            raise RuntimeError(f"Failed to load auth config from {yaml_path}: {e}") from e
 
-    # Return default configuration if no config file found or failed to load
-    return {"clients": DEFAULT_CLIENTS, "jwt": DEFAULT_JWT_CONFIG}
+    raise FileNotFoundError(
+        f"Missing auth config file at {yaml_path}. Create auth_clients.yml with jwt.secret_key configured."
+    )
 
 
 class AuthService:
@@ -74,12 +73,16 @@ class AuthService:
 
     def __init__(self, config_path: Optional[str] = None):
         """Initialize with configuration from file."""
-        self.config = load_auth_config()
+        self.config = load_auth_config(config_path=config_path)
         self.clients = self.config.get("clients", DEFAULT_CLIENTS)
 
         # Load JWT configuration
-        jwt_config = self.config.get("jwt", DEFAULT_JWT_CONFIG)
-        self.jwt_secret = os.getenv("JWT_SECRET_KEY", jwt_config.get("secret_key"))
+        jwt_config = self.config.get("jwt", {})
+        self.jwt_secret = os.getenv("JWT_SECRET_KEY", jwt_config.get("secret_key", "")).strip()
+        if not self.jwt_secret:
+            raise RuntimeError(
+                "JWT secret is not configured. Set jwt.secret_key in auth_clients.yml to start the API server."
+            )
         self.jwt_algorithm = jwt_config.get("algorithm", "HS256")
         self.jwt_expiration_hours = jwt_config.get("expiration_hours", 2)
 
