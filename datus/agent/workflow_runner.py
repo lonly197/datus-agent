@@ -544,6 +544,61 @@ class WorkflowRunner:
         )
         return False
 
+    def _jump_to_output_node(self) -> bool:
+        """
+        Jump directly to the output node in the workflow execution path.
+
+        When strategies are exhausted or reasoning fails, we want to skip
+        all remaining nodes and go directly to the output node for report generation.
+
+        Returns:
+            True if successfully jumped to the output node, False otherwise
+        """
+        if not self.workflow or not self.workflow.nodes:
+            return False
+
+        # Find the output node
+        output_node_id = None
+        for node_id, node in self.workflow.nodes.items():
+            if node.type == "output":
+                output_node_id = node_id
+                break
+
+        if not output_node_id:
+            logger.warning("No output node found in workflow")
+            return False
+
+        # Find output node index in node_order
+        current_idx = self.workflow.current_node_index
+        if current_idx is None:
+            return False
+
+        # Search forward in node_order for the output node
+        max_search_range = min(len(self.workflow.node_order), current_idx + 100)
+
+        for i in range(current_idx + 1, max_search_range):
+            node_id = self.workflow.node_order[i]
+            if node_id == output_node_id:
+                # Jump directly to output node
+                self.workflow.current_node_index = i
+                logger.info(
+                    f"Jumping to output node '{output_node_id}' at index {i} for report generation"
+                )
+                return True
+
+        # If output node is before current position (shouldn't happen normally),
+        # try to add it to the end
+        if output_node_id not in self.workflow.node_order:
+            self.workflow.node_order.append(output_node_id)
+            self.workflow.current_node_index = len(self.workflow.node_order) - 1
+            logger.info(
+                f"Added output node to node_order at index {self.workflow.current_node_index}"
+            )
+            return True
+
+        logger.warning(f"Output node not found after current position in node_order")
+        return False
+
     def _terminate_workflow(
         self,
         termination_status: WorkflowTerminationStatus,
@@ -803,10 +858,16 @@ class WorkflowRunner:
                             if metadata_termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
                                 is_soft_failure = True
                             elif metadata_termination_status == WorkflowTerminationStatus.PROCEED_TO_OUTPUT:
-                                # Strategies exhausted - continue to output node for report generation
-                                logger.info("Strategies exhausted, proceeding to output node for report generation")
-                                # Clear termination status to allow normal continuation
+                                # Strategies exhausted - jump directly to output node for report generation
+                                logger.info("Strategies exhausted, jumping to output node for report generation")
+                                # Clear termination status
                                 self.workflow.metadata.pop("termination_status", None)
+
+                                # Jump directly to output node
+                                if self._jump_to_output_node():
+                                    logger.info("Successfully jumped to output node")
+                                else:
+                                    logger.warning("Failed to jump to output node, will continue normally")
                             elif metadata_termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
                                 self._terminate_workflow(
                                     termination_status=WorkflowTerminationStatus.TERMINATE_WITH_ERROR,

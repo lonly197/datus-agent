@@ -92,10 +92,27 @@ class ReasonSQLNode(Node):
                 return {"success": True, "message": "Updated reasoning context"}
             else:
                 # reasoning failed, use a final try with generate_sql
-                self._regenerate_sql_with_all_context(workflow)
+                # CRITICAL: If reasoning fails, proceed to output instead of endless regeneration
+                # This prevents step count exhaustion and ensures report generation
+                from datus.agent.workflow_runner import WorkflowTerminationStatus
+
+                logger.warning(
+                    f"Reasoning failed after {getattr(workflow, 'reflection_round', 0)} rounds. "
+                    f"Proceeding to output node for report generation instead of regeneration."
+                )
+
+                # Set termination status to proceed to output
+                if not hasattr(workflow, "metadata") or workflow.metadata is None:
+                    workflow.metadata = {}
+                workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+                workflow.metadata["termination_reason"] = (
+                    f"Reasoning node failed after {getattr(workflow, 'reflection_round', 0)} reflection rounds. "
+                    f"Skipping further regeneration and proceeding to output."
+                )
+
                 return {
-                    "success": True,
-                    "message": "Reasoning failed, regenerated SQL with all context",
+                    "success": False,
+                    "message": "Reasoning failed, proceeding to output for report generation",
                 }
         except Exception as e:
             logger.error(f"Failed to update reasoning context: {str(e)}")
