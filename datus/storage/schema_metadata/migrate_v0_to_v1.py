@@ -26,7 +26,7 @@ from datus.configuration.agent_config_loader import load_agent_config
 from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata import SchemaStorage, SchemaWithValueRAG
 from datus.models.base import LLMBaseModel
-from datus.utils.loggings import get_logger
+from datus.utils.loggings import configure_logging, get_logger
 from datus.utils.sql_utils import (
     extract_enhanced_metadata_from_ddl,
     extract_enum_values_from_comment,
@@ -1242,6 +1242,7 @@ def main():
     parser.add_argument("--llm-model", help="Optional model name for LLM fallback (defaults to active model)")
 
     args = parser.parse_args()
+    configure_logging(debug=False)
 
     # Load agent configuration
     try:
