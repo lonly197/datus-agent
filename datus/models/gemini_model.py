@@ -15,13 +15,31 @@ logger = get_logger(__name__)
 
 
 class GeminiModel(OpenAICompatibleModel):
-    """Google Gemini model implementation"""
+    """Google Gemini model implementation
+
+    Note: This class inherits from OpenAICompatibleModel for code reuse but
+    uses Google's native genai client instead of OpenAI-compatible API.
+    """
 
     def __init__(self, model_config: ModelConfig, **kwargs):
-        super().__init__(model_config, **kwargs)
-        # Initialize Gemini-specific client
+        # Initialize only what's needed, skip OpenAI client creation
+        self.model_config = model_config
+        self.model_name = model_config.model
+        self.api_key = self._get_api_key()
+        self.base_url = self._get_base_url()
+        self.default_headers = self.model_config.default_headers
+
+        # Initialize Gemini-specific client (skip OpenAI clients)
+        import google.genai as genai
+
         self.client = genai.Client(api_key=self.api_key)
         self.gemini_model = self.client.models.generate_content
+
+        # Context for tracing
+        self.current_node = None
+
+        # Cache for model info
+        self._model_info = None
 
     def _get_api_key(self) -> str:
         """Get Gemini API key from config or environment."""
@@ -66,7 +84,7 @@ class GeminiModel(OpenAICompatibleModel):
     def token_count(self, prompt: str) -> int:
         try:
             response = self.client.models.count_tokens(model=self.model_name, contents=prompt)
-            return response.total_tokens
+            return getattr(response, "total_tokens", len(prompt) // 4)
         except Exception as e:
             logger.warning(f"Error counting tokens with Gemini: {str(e)}")
             return len(prompt) // 4
