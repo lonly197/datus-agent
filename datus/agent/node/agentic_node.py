@@ -332,11 +332,15 @@ class AgenticNode(Node):
             return {}
 
         nodes_config = agent_config.agentic_nodes
-        if node_name not in nodes_config:
+        if node_name in nodes_config:
+            node_config = nodes_config[node_name]
+        else:
+            raw_node = agent_config.nodes.get(node_name) if hasattr(agent_config, "nodes") else None
+            node_config = getattr(raw_node, "raw", {}) if raw_node else {}
+
+        if not node_config:
             logger.info(f"Node configuration '{node_name}' not found in agent.yml, using default configuration")
             return {}
-
-        node_config = nodes_config[node_name]
 
         # Extract configuration in stages
         config = {}

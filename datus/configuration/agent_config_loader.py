@@ -17,11 +17,21 @@ logger = get_logger(__name__)
 
 
 def load_node_config(node_type: str, data: dict) -> NodeConfig:
+    raw_config = dict(data) if data and isinstance(data, dict) else {}
     if data and isinstance(data, dict) and "model" in data.keys():
-        model = data.pop("model")
-        return NodeConfig(model=model, input=NodeType.type_input(node_type, data, ignore_require_check=True))
-    else:
-        return NodeConfig(model="", input=NodeType.type_input(node_type, data, ignore_require_check=True))
+        model = data.get("model", "")
+        input_data = dict(data)
+        input_data.pop("model", None)
+        return NodeConfig(
+            model=model,
+            input=NodeType.type_input(node_type, input_data, ignore_require_check=True),
+            raw=raw_config,
+        )
+    return NodeConfig(
+        model="",
+        input=NodeType.type_input(node_type, data, ignore_require_check=True),
+        raw=raw_config,
+    )
 
 
 class ConfigurationManager:

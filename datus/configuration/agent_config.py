@@ -179,6 +179,7 @@ class ModelConfig:
 class NodeConfig:
     model: str
     input: BaseInput | None
+    raw: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

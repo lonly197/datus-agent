@@ -473,6 +473,7 @@ def reasoning_sql_with_mcp(
         raise ValueError(f"Input must be a ReasoningInput instance, got {type(input_data)}")
 
     instruction = prompt_manager.get_raw_template("reasoning_system", input_data.prompt_version)
+    mcp_servers = tool_config.get("mcp_servers", {})
     # update to python 3.12 to enable structured output
     # output_type = tool_config.get(
     # "output_type", {"sql": str, "tables": list, "explanation": str})
@@ -498,7 +499,7 @@ def reasoning_sql_with_mcp(
         exec_result = asyncio.run(
             model.generate_with_tools(
                 prompt=prompt,
-                mcp_servers={},
+                mcp_servers=mcp_servers,
                 instruction=instruction,
                 tools=tools,
                 # if model is OpenAI, json_schema output is supported, use ReasoningSQLResponse

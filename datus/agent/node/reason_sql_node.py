@@ -3,7 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 from datetime import datetime
-from typing import AsyncGenerator, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, Optional
 
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
@@ -23,6 +23,47 @@ class ReasonSQLNode(Node):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.action_history_manager = None
+        self.mcp_servers: Dict[str, Any] = self._setup_mcp_servers()
+
+    def _setup_mcp_servers(self) -> Dict[str, Any]:
+        if not self.agent_config or not hasattr(self.agent_config, "nodes"):
+            return {}
+
+        node_config = self.agent_config.nodes.get("reasoning")
+        raw_config = getattr(node_config, "raw", {}) if node_config else {}
+        config_value = raw_config.get("mcp", "")
+        if not config_value:
+            return {}
+
+        if isinstance(config_value, list):
+            server_names = [str(item).strip() for item in config_value if str(item).strip()]
+        else:
+            server_names = [p.strip() for p in str(config_value).split(",") if p.strip()]
+
+        mcp_servers: Dict[str, Any] = {}
+        try:
+            from datus.tools.mcp_tools.mcp_manager import MCPManager
+
+            mcp_manager = MCPManager()
+            for server_name in server_names:
+                server_config = mcp_manager.get_server_config(server_name)
+                if not server_config:
+                    logger.warning(f"MCP server '{server_name}' not found in configuration")
+                    continue
+
+                server_instance, details = mcp_manager._create_server_instance(server_config)
+                if server_instance:
+                    mcp_servers[server_name] = server_instance
+                    logger.info(f"Added MCP server '{server_name}' from configuration: {details}")
+                else:
+                    error_msg = details.get("error", "Unknown error")
+                    logger.warning(f"Failed to create MCP server '{server_name}': {error_msg}")
+        except Exception as exc:
+            logger.error(f"Failed to setup MCP servers for reasoning node: {exc}")
+            return {}
+
+        logger.info(f"Reasoning node MCP servers: {len(mcp_servers)} - {list(mcp_servers.keys())}")
+        return mcp_servers
 
     def execute(self):
         result = self._reason_sql()
@@ -194,7 +235,7 @@ class ReasonSQLNode(Node):
                 model=self.model,
                 input_data=self.input,
                 tools=self.tools,
-                tool_config={"max_turns": self.input.max_turns},
+                tool_config={"max_turns": self.input.max_turns, "mcp_servers": self.mcp_servers},
                 action_history_manager=action_history_manager,
             ):
                 yield action
@@ -227,7 +268,10 @@ class ReasonSQLNode(Node):
         """
         try:
             result = reasoning_sql_with_mcp(
-                self.model, self.input, self.tools, tool_config={"max_turns": self.input.max_turns}
+                self.model,
+                self.input,
+                self.tools,
+                tool_config={"max_turns": self.input.max_turns, "mcp_servers": self.mcp_servers},
             )
             logger.debug(
                 f"_reason_sql got result from tool: type={type(result)}, success={getattr(result, 'success', 'N/A')}"
