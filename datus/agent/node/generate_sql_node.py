@@ -180,6 +180,16 @@ class GenerateSQLNode(Node):
         query = task.task if hasattr(task, "task") else ""
         table_count = len(workflow.context.table_schemas) if workflow.context.table_schemas else 0
         include_ddl = self._should_include_ddl(query, table_count)
+        validation_summary = None
+        if hasattr(workflow, "metadata") and workflow.metadata:
+            validation_summary = workflow.metadata.get("schema_validation")
+
+        if validation_summary:
+            coverage_score = validation_summary.get("coverage_score")
+            coverage_threshold = validation_summary.get("coverage_threshold")
+            if isinstance(coverage_score, (int, float)) and isinstance(coverage_threshold, (int, float)):
+                if coverage_score <= coverage_threshold:
+                    include_ddl = True
 
         logger.debug(f"Query complexity analysis: table_count={table_count}, include_ddl={include_ddl}")
 
@@ -194,6 +204,7 @@ class GenerateSQLNode(Node):
             external_knowledge=task.external_knowledge,
             database_docs=database_docs,
             include_schema_ddl=include_ddl,
+            validation_summary=validation_summary,
         )
         self.input = next_input
         return {"success": True, "message": "Schema appears valid", "suggestions": [next_input]}
@@ -407,25 +418,26 @@ def generate_sql(model: LLMBaseModel, input_data: GenerateSQLInput) -> GenerateS
     sql_query = ""
     try:
         # Format the prompt with schema list
-        prompt = get_sql_prompt(
-            database_type=input_data.database_type or DBType.SQLITE.value,
-            table_schemas=input_data.table_schemas,
-            data_details=input_data.data_details,
-            metrics=input_data.metrics,
-            question=input_data.sql_task.task,
-            external_knowledge=input_data.external_knowledge,
-            prompt_version=input_data.prompt_version,
-            context=[sql_context.to_str() for sql_context in input_data.contexts],
-            max_table_schemas_length=input_data.max_table_schemas_length,
-            max_data_details_length=input_data.max_data_details_length,
-            max_context_length=input_data.max_context_length,
-            max_value_length=input_data.max_value_length,
-            max_text_mark_length=input_data.max_text_mark_length,
-            database_docs=input_data.database_docs,
-            current_date=get_default_current_date(input_data.sql_task.current_date),
-            date_ranges=getattr(input_data.sql_task, "date_ranges", ""),
-            include_schema_ddl=input_data.include_schema_ddl,
-        )
+            prompt = get_sql_prompt(
+                database_type=input_data.database_type or DBType.SQLITE.value,
+                table_schemas=input_data.table_schemas,
+                data_details=input_data.data_details,
+                metrics=input_data.metrics,
+                question=input_data.sql_task.task,
+                external_knowledge=input_data.external_knowledge,
+                prompt_version=input_data.prompt_version,
+                context=[sql_context.to_str() for sql_context in input_data.contexts],
+                max_table_schemas_length=input_data.max_table_schemas_length,
+                max_data_details_length=input_data.max_data_details_length,
+                max_context_length=input_data.max_context_length,
+                max_value_length=input_data.max_value_length,
+                max_text_mark_length=input_data.max_text_mark_length,
+                database_docs=input_data.database_docs,
+                current_date=get_default_current_date(input_data.sql_task.current_date),
+                date_ranges=getattr(input_data.sql_task, "date_ranges", ""),
+                include_schema_ddl=input_data.include_schema_ddl,
+                validation_summary=input_data.validation_summary,
+            )
 
         logger.debug(f"Generated SQL prompt:  {type(model)}, {prompt}")
         # Generate SQL using the provided model

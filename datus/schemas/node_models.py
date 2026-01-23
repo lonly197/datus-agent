@@ -376,6 +376,10 @@ class GenerateSQLInput(BaseInput):
     max_text_mark_length: int = Field(default=16, description="Max text mark length")
     database_docs: Optional[str] = Field(default="", description="Database documentation")
     include_schema_ddl: bool = Field(default=False, description="Whether to include full DDL definition in prompt (False = only table names and comments)")
+    validation_summary: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Schema validation summary for evidence-aware SQL generation",
+    )
 
 
 class GenerateSQLResult(BaseResult):

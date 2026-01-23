@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from typing import Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from datus.schemas.node_models import Metric, TableSchema, TableValue
 from datus.utils.constants import DBType
@@ -32,6 +32,7 @@ def get_sql_prompt(
     current_date: str = None,
     date_ranges: str = "",
     include_schema_ddl: bool = False,
+    validation_summary: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     if context is None:
         context = []
@@ -39,10 +40,12 @@ def get_sql_prompt(
     if isinstance(table_schemas, str):
         processed_schemas = table_schemas
     else:
-        # 根据include_schema_ddl参数决定是否包含DDL
-        processed_schemas = "\n".join(
-            schema.to_prompt(database_type, include_ddl=include_schema_ddl)
-            for schema in table_schemas
+        processed_schemas = _render_schemas_with_budget(
+            table_schemas,
+            database_type,
+            include_schema_ddl,
+            max_table_schemas_length,
+            validation_summary,
         )
 
     if data_details:
@@ -82,6 +85,9 @@ def get_sql_prompt(
     processed_metrics = ""
     if metrics:
         processed_metrics = to_pretty_str([m.__dict__ for m in metrics])
+    processed_validation = ""
+    if validation_summary:
+        processed_validation = to_pretty_str(validation_summary)
 
     system_content = prompt_manager.get_raw_template("gen_sql_system", version=prompt_version)
     user_content = prompt_manager.render_template(
@@ -98,9 +104,61 @@ def get_sql_prompt(
         database_docs=database_docs,
         current_date=current_date,
         date_ranges=date_ranges,
+        validation_summary=processed_validation,
     )
 
     return [
         {"role": "system", "content": system_content},
         {"role": "user", "content": user_content},
     ]
+
+
+def _render_schemas_with_budget(
+    table_schemas: List[TableSchema],
+    database_type: str,
+    include_schema_ddl: bool,
+    max_length: int,
+    validation_summary: Optional[Dict[str, Any]],
+) -> str:
+    priority_tables: List[str] = []
+    if validation_summary and isinstance(validation_summary, dict):
+        table_coverage = validation_summary.get("table_coverage", {})
+        if isinstance(table_coverage, dict):
+            priority_tables = sorted(
+                table_coverage.keys(),
+                key=lambda name: len(table_coverage.get(name, [])),
+                reverse=True,
+            )
+
+    schema_by_name = {schema.table_name: schema for schema in table_schemas}
+    ordered_schemas: List[TableSchema] = []
+    for table_name in priority_tables:
+        schema = schema_by_name.get(table_name)
+        if schema:
+            ordered_schemas.append(schema)
+
+    for schema in table_schemas:
+        if schema not in ordered_schemas:
+            ordered_schemas.append(schema)
+
+    parts: List[str] = []
+    current_len = 0
+    truncated = False
+    for schema in ordered_schemas:
+        full_prompt = schema.to_prompt(database_type, include_ddl=include_schema_ddl)
+        prompt_to_use = full_prompt
+        if include_schema_ddl and current_len + len(prompt_to_use) > max_length:
+            prompt_to_use = schema.to_prompt(database_type, include_ddl=False)
+        if current_len + len(prompt_to_use) > max_length:
+            if not parts and max_length > 0:
+                parts.append(prompt_to_use[:max_length] + "\n... (truncated)")
+            else:
+                truncated = True
+            break
+        parts.append(prompt_to_use)
+        current_len += len(prompt_to_use) + 1
+
+    if truncated:
+        parts.append("... (truncated)")
+
+    return "\n".join(parts)

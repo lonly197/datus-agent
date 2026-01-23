@@ -9,6 +9,14 @@ Metrics (Semantic Layer):
 Parsed Date Ranges:
 {{ date_ranges }}
 {% endif %}
+{% if validation_summary %}
+Schema Validation Summary:
+{{ validation_summary }}
+If coverage_score <= coverage_threshold or uncovered_terms are present:
+- avoid inventing tables/columns not in schema;
+- prefer using covered terms only;
+- note limitations in the explanation.
+{% endif %}
 {{ knowledge_content }}
 Natural Language Question:
 {{ question }}
