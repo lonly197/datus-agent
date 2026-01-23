@@ -296,7 +296,9 @@ class IntentAnalysisNode(Node):
                 # Get model for LLM fallback
                 model = None
                 if self.agent_config:
-                    model = self.agent_config.get_model()
+                    from datus.models.base import LLMBaseModel
+
+                    model = LLMBaseModel.create_model(model_name="default", agent_config=self.agent_config)
 
                 if model:
                     llm_result = await detector.classify_intent_with_llm(task_text, model)
