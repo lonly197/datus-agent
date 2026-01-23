@@ -270,6 +270,39 @@ def validate_table_name(name: Any) -> Tuple[bool, str, Optional[str]]:
     return True, "", name
 
 
+def quote_identifier(identifier: Optional[str], dialect: Any) -> Optional[str]:
+    """
+    Safely quote an identifier for a given SQL dialect.
+
+    This is a defense-in-depth helper used to prevent SQL injection when
+    constructing SQL strings from untrusted input.
+    """
+    if identifier is None:
+        return None
+
+    if identifier == "":
+        return ""
+
+    if isinstance(dialect, DBType):
+        dialect_name = dialect.value
+    else:
+        dialect_name = str(dialect).lower() if dialect is not None else ""
+
+    backtick_dialects = {DBType.MYSQL.value}
+    bracket_dialects = {DBType.MSSQL.value, DBType.SQLSERVER.value}
+
+    if dialect_name in backtick_dialects:
+        escaped = identifier.replace("`", "``")
+        return f"`{escaped}`"
+
+    if dialect_name in bracket_dialects:
+        escaped = identifier.replace("]", "]]")
+        return f"[{escaped}]"
+
+    escaped = identifier.replace('"', '""')
+    return f'"{escaped}"'
+
+
 def validate_comment(comment: Any) -> Tuple[bool, str, Optional[str]]:
     """
     Validate comment text for security and length.
