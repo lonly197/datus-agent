@@ -1,4 +1,6 @@
 import asyncio
+from concurrent.futures import Future
+import threading
 from typing import Awaitable, Optional, TypeVar
 
 from datus.utils.loggings import get_logger
@@ -64,9 +66,19 @@ def run_async(coro: Awaitable[T]) -> T:
         loop = None
 
     if loop and loop.is_running():
-        # If we are already in an event loop, use run_until_complete instead of asyncio.run
-        # to avoid creating a nested event loop which can cause deadlocks
-        return loop.run_until_complete(coro)
-    else:
-        # No running loop, just run it
-        return asyncio.run(coro)
+        # Run in a dedicated thread to avoid RuntimeError on active loops.
+        result_future: Future = Future()
+
+        def _run_in_thread() -> None:
+            try:
+                result = asyncio.run(coro)
+                result_future.set_result(result)
+            except Exception as exc:
+                result_future.set_exception(exc)
+
+        thread = threading.Thread(target=_run_in_thread, daemon=True)
+        thread.start()
+        return result_future.result()
+
+    # No running loop, just run it
+    return asyncio.run(coro)

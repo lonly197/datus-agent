@@ -910,6 +910,7 @@ class WorkflowRunner:
                                 self.workflow.advance_to_next_node()
                         else:
                             logger.warning(f"Node evaluation failed: {evaluation}")
+                            current_node.status = "failed"
                             break
 
                     except Exception as e:
