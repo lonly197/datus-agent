@@ -16,7 +16,9 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -38,6 +40,28 @@ from datus.utils.sql_utils import (
 from datus.utils.constants import DBType
 
 logger = get_logger(__name__)
+_shutdown_event = threading.Event()
+_shutdown_signal_count = 0
+
+
+def shutdown_requested() -> bool:
+    return _shutdown_event.is_set()
+
+
+def setup_signal_handlers() -> None:
+    def _handle_signal(sig, frame):
+        global _shutdown_signal_count
+        _shutdown_signal_count += 1
+        signal_name = signal.Signals(sig).name
+        logger.warning(f"Received {signal_name}; exiting immediately.")
+        _shutdown_event.set()
+        raise SystemExit(130)
+
+    try:
+        signal.signal(signal.SIGINT, _handle_signal)
+        signal.signal(signal.SIGTERM, _handle_signal)
+    except Exception as exc:
+        logger.debug(f"Failed to register signal handlers: {exc}")
 
 
 def select_namespace_interactive(agent_config: AgentConfig, specified_namespace: Optional[str] = None) -> Optional[str]:
@@ -647,6 +671,9 @@ def migrate_schema_storage(
                 logger.debug(f"Could not load existing identifiers: {exc}")
 
         for i, row in enumerate(backup_records):
+            if shutdown_requested():
+                logger.warning("Shutdown requested; stopping migration loop.")
+                break
             try:
                 identifier = row["identifier"]
                 catalog_name = row["catalog_name"]
@@ -662,6 +689,9 @@ def migrate_schema_storage(
                     logger.info(f"  - SKIP: already exists in storage")
                     continue
                 if identifier in existing_identifiers and update_existing_effective:
+                    if shutdown_requested():
+                        logger.warning("Shutdown requested; skipping in-place update.")
+                        break
                     try:
                         escaped_identifier = _escape_where_value(identifier)
                         storage.table.delete(f'identifier = "{escaped_identifier}"')
@@ -775,6 +805,9 @@ def migrate_schema_storage(
 
                 # Batch insert (no delete needed since table was recreated)
                 if len(batch_updates) >= batch_size:
+                    if shutdown_requested():
+                        logger.warning("Shutdown requested; skipping batch insert.")
+                        break
                     try:
                         storage.table.add(batch_updates)
                     except Exception as exc:
@@ -804,6 +837,12 @@ def migrate_schema_storage(
                 for table_name, table_action in batch_status:
                     logger.info(f"  - {table_action} OK: {table_name}")
                 logger.info(f"Migrated final batch of {len(batch_updates)} records")
+
+        if shutdown_requested():
+            logger.warning(
+                f"Migration interrupted by user: processed {migrated_count}/{total_records} records"
+            )
+            return migrated_count
 
         logger.info(f"Migration completed: {migrated_count} records upgraded to v1")
         return migrated_count
@@ -1251,7 +1290,9 @@ def print_final_migration_report(migration_results: dict, db_path: str, args):
     logger.info("Schema Metadata Migration:")
     schemas_migrated = migration_results.get("schemas_migrated", 0)
     logger.info(f"  - Records migrated: {schemas_migrated}")
-    if schemas_migrated > 0:
+    if migration_results.get("cancelled"):
+        logger.info("  - Status: ⚠️  CANCELLED")
+    elif schemas_migrated > 0:
         logger.info(f"  - Status: ✅ SUCCESS")
     else:
         logger.info(f"  - Status: ⚠️  No records to migrate (empty database or already migrated)")
@@ -1301,7 +1342,11 @@ def print_final_migration_report(migration_results: dict, db_path: str, args):
     logger.info("=" * 80)
 
     # Determine overall success
-    if migration_results.get("success"):
+    if migration_results.get("cancelled"):
+        logger.info("⚠️ MIGRATION: CANCELLED BY USER")
+        logger.info("")
+        logger.info("The migration was interrupted before completion.")
+    elif migration_results.get("success"):
         if args.import_schemas and migration_results.get('namespace'):
             if migration_results.get("schemas_imported", 0) > 0:
                 logger.info("✅ MIGRATION + IMPORT: COMPLETE SUCCESS")
@@ -1331,7 +1376,17 @@ def print_final_migration_report(migration_results: dict, db_path: str, args):
     logger.info("=" * 80)
     logger.info("")
 
-    if migration_results.get("success"):
+    if migration_results.get("cancelled"):
+        logger.info("To resume migration:")
+        logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 \\")
+        logger.info(f"    --config={args.config} --namespace={migration_results.get('namespace') or '<name>'} \\")
+        logger.info("    --force")
+        logger.info("")
+        logger.info("If you need to restore from backup:")
+        logger.info(f"  rm -rf {db_path}")
+        logger.info(f"  mv {db_path}.backup_v0_* {db_path}")
+        logger.info("")
+    elif migration_results.get("success"):
         logger.info("To verify the migration:")
         logger.info(f"  1. Check version distribution:")
         logger.info(f"     python -c \"")
@@ -1374,6 +1429,7 @@ def print_final_migration_report(migration_results: dict, db_path: str, args):
 
 def main():
     """Main migration function."""
+    setup_signal_handlers()
     parser = argparse.ArgumentParser(description="Migrate LanceDB schema from v0 to v1")
     parser.add_argument("--config", required=True, help="Path to agent configuration file")
     parser.add_argument("--namespace", help="Namespace for the database (optional: will prompt if not specified and multiple namespaces exist)")
@@ -1497,17 +1553,18 @@ def main():
     logger.info("Starting migration...")
     logger.info("")
 
-    try:
-        # Initialize result tracking
-        migration_results = {
-            "schemas_migrated": 0,
-            "values_migrated": 0,
-            "schemas_imported": 0,
-            "success": False,
-            "verification_passed": False,
-            "namespace": namespace
-        }
+    # Initialize result tracking
+    migration_results = {
+        "schemas_migrated": 0,
+        "values_migrated": 0,
+        "schemas_imported": 0,
+        "success": False,
+        "verification_passed": False,
+        "namespace": namespace,
+        "cancelled": False,
+    }
 
+    try:
         # Migrate schema storage (always done)
         logger.info("Step 1/3: Migrating schema metadata...")
         migrated_schemas = migrate_schema_storage(
@@ -1524,6 +1581,11 @@ def main():
         migration_results["schemas_migrated"] = migrated_schemas
         logger.info(f"✅ Migrated {migrated_schemas} schema records")
         logger.info("")
+
+        if shutdown_requested():
+            logger.warning("Migration interrupted by user; skipping remaining steps.")
+            migration_results["cancelled"] = True
+            sys.exit(130)
 
         # Migrate schema value storage and verify (only if namespace provided)
         if namespace and storage:
@@ -1652,6 +1714,10 @@ def main():
             logger.info(f"   rm -rf {db_path} && mv {backup_path} {db_path}")
             sys.exit(0)
 
+    except KeyboardInterrupt:
+        logger.warning("Migration interrupted by user (KeyboardInterrupt).")
+        migration_results["cancelled"] = True
+        sys.exit(130)
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         logger.error("")

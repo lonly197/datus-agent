@@ -251,6 +251,18 @@ class BaseSqlConnector(ABC):
     def execute_arrow(self, sql: str) -> ExecuteSQLResult:
         raise NotImplementedError()
 
+    def execute_sql(self, sql: str) -> List[Dict[str, Any]]:
+        """Execute a SQL query and return results as a list of dictionaries.
+
+        This is a lightweight helper used by metadata extractors.
+        """
+        result = self.execute_query(sql, result_format="list")
+        if not result or not getattr(result, "success", False):
+            return []
+        if isinstance(result.sql_return, list):
+            return result.sql_return
+        return []
+
     @abstractmethod
     def execute_query(
         self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
