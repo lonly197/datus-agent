@@ -32,6 +32,7 @@ from datus.utils.loggings import configure_logging, get_logger
 from datus.utils.sql_utils import (
     extract_enhanced_metadata_from_ddl,
     extract_enum_values_from_comment,
+    is_likely_truncated_ddl,
     parse_dialect,
     sanitize_ddl_for_storage,
     validate_comment,
@@ -686,7 +687,7 @@ def migrate_schema_storage(
                 logger.info(f"[{i + 1}/{total_records}] Processing {qualified_table} ({table_type})")
 
                 if identifier in existing_identifiers and not update_existing_effective:
-                    logger.info(f"  - SKIP: already exists in storage")
+                    logger.info("  - STATUS: COMPLETED (SKIPPED - already exists in storage)")
                     continue
                 if identifier in existing_identifiers and update_existing_effective:
                     if shutdown_requested():
@@ -703,10 +704,11 @@ def migrate_schema_storage(
                 # Fix and clean DDL before parsing
                 # This handles incomplete DDL statements from SHOW CREATE TABLE
                 original_definition = definition
+                was_truncated = is_likely_truncated_ddl(original_definition)
                 definition = sanitize_ddl_for_storage(definition)
-                if definition != original_definition:
+                if was_truncated and not is_likely_truncated_ddl(definition):
                     logger.info(
-                        f"  - DDL FIXED: length {len(original_definition)} -> {len(definition)}"
+                        f"  - DDL FIXED (truncation): length {len(original_definition)} -> {len(definition)}"
                     )
 
                 # Parse enhanced metadata from DDL with dialect detection
@@ -815,7 +817,7 @@ def migrate_schema_storage(
                             logger.error(f"  - {table_action} FAILED: {table_name} ({exc})")
                     else:
                         for table_name, table_action in batch_status:
-                            logger.info(f"  - {table_action} OK: {table_name}")
+                            logger.info(f"  - {table_action} OK (COMPLETED): {table_name}")
                         logger.info(
                             f"Migrated batch of {len(batch_updates)} records (total: {migrated_count}/{len(backup_records)})"
                         )
@@ -835,7 +837,7 @@ def migrate_schema_storage(
                     logger.error(f"  - {table_action} FAILED: {table_name} ({exc})")
             else:
                 for table_name, table_action in batch_status:
-                    logger.info(f"  - {table_action} OK: {table_name}")
+                    logger.info(f"  - {table_action} OK (COMPLETED): {table_name}")
                 logger.info(f"Migrated final batch of {len(batch_updates)} records")
 
         if shutdown_requested():
