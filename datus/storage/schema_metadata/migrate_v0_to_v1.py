@@ -13,8 +13,10 @@ This script handles:
 """
 
 import argparse
+from collections import Counter
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -181,7 +183,6 @@ def report_migration_state(db_path: str, table_name: str = "schema_metadata"):
         table_name: Name of the table to check (default: "schema_metadata")
     """
     import lancedb
-    from collections import Counter
 
     logger.info("=" * 80)
     logger.info("MIGRATION STATE CHECK")
@@ -329,6 +330,88 @@ def detect_dialect_from_ddl(ddl: str) -> str:
     # Default to starrocks for StarRocks-like syntax (backtick identifiers)
     # This is safer than snowflake as it's more permissive
     return "starrocks"
+
+
+_RELATION_PREFIXES = (
+    "ods_",
+    "dwd_",
+    "dws_",
+    "dim_",
+    "ads_",
+    "tmp_",
+    "stg_",
+    "stage_",
+    "fact_",
+)
+_RELATION_SUFFIXES = (
+    "_di",
+    "_df",
+    "_tmp",
+    "_temp",
+    "_bak",
+    "_backup",
+)
+_RELATION_DATE_SUFFIX_RE = re.compile(r"_(?:19|20)\d{6,8}$")
+
+
+def _normalize_relationship_name(name: str) -> str:
+    value = (name or "").strip().strip("`").lower()
+    value = _RELATION_DATE_SUFFIX_RE.sub("", value)
+    for suffix in _RELATION_SUFFIXES:
+        if value.endswith(suffix):
+            value = value[: -len(suffix)]
+            break
+    for prefix in _RELATION_PREFIXES:
+        if value.startswith(prefix):
+            value = value[len(prefix):]
+            break
+    return value
+
+
+def _build_table_name_map(table_names: List[str]) -> Dict[str, List[str]]:
+    mapping: Dict[str, List[str]] = {}
+    for name in table_names:
+        normalized = _normalize_relationship_name(name)
+        if not normalized:
+            continue
+        mapping.setdefault(normalized, []).append(name)
+    return mapping
+
+
+def _infer_relationships_from_names(
+    column_names: List[str],
+    table_name_map: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    foreign_keys = []
+    for col in column_names:
+        col_lower = (col or "").lower()
+        if not col_lower or not col_lower.endswith("_id"):
+            continue
+        base = col_lower[:-3]
+        normalized_base = _normalize_relationship_name(base)
+        if len(normalized_base) < 3:
+            continue
+        candidates = list(table_name_map.get(normalized_base, []))
+        if not candidates:
+            for normalized, names in table_name_map.items():
+                if normalized == normalized_base:
+                    continue
+                if normalized.endswith(f"_{normalized_base}") or normalized.endswith(normalized_base):
+                    candidates.extend(names)
+        if not candidates:
+            continue
+        to_table = sorted(candidates)[0]
+        foreign_keys.append({
+            "from_column": col,
+            "to_table": to_table,
+            "to_column": "id",
+        })
+    if not foreign_keys:
+        return {}
+    return {
+        "foreign_keys": foreign_keys,
+        "join_paths": [f"{fk['from_column']} -> {fk['to_table']}.{fk['to_column']}" for fk in foreign_keys],
+    }
 
 
 def backup_database(db_path: str) -> str:
@@ -665,6 +748,11 @@ def migrate_schema_storage(
         batch_updates = []
         batch_status = []
         existing_identifiers = set()
+        table_name_map: Dict[str, List[str]] = {}
+        if extract_relationships:
+            table_name_map = _build_table_name_map(
+                [row.get("table_name", "") for row in backup_records if isinstance(row, dict)]
+            )
         update_existing_effective = update_existing and not table_recreated
         if not table_recreated:
             try:
@@ -725,6 +813,7 @@ def migrate_schema_storage(
                 table_comment = ""
                 column_comments: Dict[str, str] = {}
                 column_names: List[str] = []
+                skip_ddl_parse = detected_dialect == DBType.STARROCKS
 
                 if (
                     metadata_extractor
@@ -745,7 +834,7 @@ def migrate_schema_storage(
                         column_comments = starrocks_metadata.get("column_comments", {}) or {}
                         column_names = starrocks_metadata.get("column_names", []) or []
 
-                if not used_information_schema:
+                if not used_information_schema and not skip_ddl_parse:
                     enhanced_metadata = extract_enhanced_metadata_from_ddl(
                         definition,
                         dialect=detected_dialect,
@@ -811,6 +900,11 @@ def migrate_schema_storage(
                                 join_paths = relationships.get("join_paths", []) or []
                         except Exception as exc:
                             logger.debug(f"  Could not detect StarRocks relationships: {exc}")
+                    if not foreign_keys and column_names and table_name_map:
+                        inferred = _infer_relationships_from_names(column_names, table_name_map)
+                        if inferred:
+                            foreign_keys = inferred.get("foreign_keys", [])
+                            join_paths = inferred.get("join_paths", [])
                     if foreign_keys:
                         if not join_paths:
                             join_paths = [
@@ -1138,7 +1232,13 @@ def str_to_bool(v):
         raise argparse.ArgumentTypeError(f'Boolean value expected, got: {v}')
 
 
-def import_schema_metadata(agent_config: AgentConfig, namespace: str, clear_before_import: bool = False) -> int:
+def import_schema_metadata(
+    agent_config: AgentConfig,
+    namespace: str,
+    clear_before_import: bool = False,
+    extract_statistics: bool = False,
+    extract_relationships: bool = True,
+) -> int:
     """
     Import schema metadata from database into LanceDB after migration.
 
@@ -1220,7 +1320,9 @@ def import_schema_metadata(agent_config: AgentConfig, namespace: str, clear_befo
             db_manager,
             build_mode='overwrite',  # Force full import
             table_type='full',  # Import both tables and views
-            pool_size=4
+            pool_size=4,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
         # Verify import was successful
@@ -1736,6 +1838,8 @@ def main():
                         agent_config,
                         namespace,
                         clear_before_import=args.clear,
+                        extract_statistics=args.extract_statistics,
+                        extract_relationships=args.extract_relationships,
                     )
                     migration_results["schemas_imported"] = imported_count
 

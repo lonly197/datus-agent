@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import json
+import re
 import time
 from typing import Any, Dict, List, Optional, Set
 
@@ -30,6 +31,89 @@ from .init_utils import exists_table_value
 logger = get_logger(__name__)
 
 
+_RELATION_PREFIXES = (
+    "ods_",
+    "dwd_",
+    "dws_",
+    "dim_",
+    "ads_",
+    "tmp_",
+    "stg_",
+    "stage_",
+    "fact_",
+)
+_RELATION_SUFFIXES = (
+    "_di",
+    "_df",
+    "_tmp",
+    "_temp",
+    "_bak",
+    "_backup",
+)
+_RELATION_DATE_SUFFIX_RE = re.compile(r"_(?:19|20)\d{6,8}$")
+
+
+def _normalize_relationship_name(name: str) -> str:
+    value = (name or "").strip().strip("`").lower()
+    value = _RELATION_DATE_SUFFIX_RE.sub("", value)
+    for suffix in _RELATION_SUFFIXES:
+        if value.endswith(suffix):
+            value = value[: -len(suffix)]
+            break
+    for prefix in _RELATION_PREFIXES:
+        if value.startswith(prefix):
+            value = value[len(prefix):]
+            break
+    return value
+
+
+def _build_table_name_map(table_names: List[str]) -> Dict[str, List[str]]:
+    mapping: Dict[str, List[str]] = {}
+    for name in table_names:
+        normalized = _normalize_relationship_name(name)
+        if not normalized:
+            continue
+        mapping.setdefault(normalized, []).append(name)
+    return mapping
+
+
+def _infer_relationships_from_names(
+    table_name: str,
+    column_names: List[str],
+    table_name_map: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    foreign_keys = []
+    for col in column_names:
+        col_lower = (col or "").lower()
+        if not col_lower or not col_lower.endswith("_id"):
+            continue
+        base = col_lower[:-3]
+        normalized_base = _normalize_relationship_name(base)
+        if len(normalized_base) < 3:
+            continue
+        candidates = list(table_name_map.get(normalized_base, []))
+        if not candidates:
+            for normalized, names in table_name_map.items():
+                if normalized == normalized_base:
+                    continue
+                if normalized.endswith(f"_{normalized_base}") or normalized.endswith(normalized_base):
+                    candidates.extend(names)
+        if not candidates:
+            continue
+        to_table = sorted(candidates)[0]
+        foreign_keys.append({
+            "from_column": col,
+            "to_table": to_table,
+            "to_column": "id",
+        })
+    if not foreign_keys:
+        return {}
+    return {
+        "foreign_keys": foreign_keys,
+        "join_paths": [f"{fk['from_column']} -> {fk['to_table']}.{fk['to_column']}" for fk in foreign_keys],
+    }
+
+
 def init_local_schema(
     table_lineage_store: SchemaWithValueRAG,
     agent_config: AgentConfig,
@@ -42,6 +126,8 @@ def init_local_schema(
     prune_missing: bool = False,
     llm_fallback: bool = False,
     llm_model: Optional[LLMBaseModel] = None,
+    extract_statistics: bool = False,
+    extract_relationships: bool = True,
 ):
     """Initialize local schema from the configured database."""
     logger.info(f"Initializing local schema for namespace: {agent_config.current_namespace}")
@@ -63,6 +149,8 @@ def init_local_schema(
                 prune_missing=prune_missing,
                 llm_fallback=llm_fallback,
                 llm_model=llm_model,
+                extract_statistics=extract_statistics,
+                extract_relationships=extract_relationships,
             )
         elif db_configs.type == DBType.DUCKDB:
             init_duckdb_schema(
@@ -76,6 +164,8 @@ def init_local_schema(
                 prune_missing=prune_missing,
                 llm_fallback=llm_fallback,
                 llm_model=llm_model,
+                extract_statistics=extract_statistics,
+                extract_relationships=extract_relationships,
             )
         elif db_configs.type == DBType.MYSQL:
             init_mysql_schema(
@@ -89,6 +179,8 @@ def init_local_schema(
                 prune_missing=prune_missing,
                 llm_fallback=llm_fallback,
                 llm_model=llm_model,
+                extract_statistics=extract_statistics,
+                extract_relationships=extract_relationships,
             )
         elif db_configs.type == DBType.STARROCKS:
             init_starrocks_schema(
@@ -103,6 +195,8 @@ def init_local_schema(
                 prune_missing=prune_missing,
                 llm_fallback=llm_fallback,
                 llm_model=llm_model,
+                extract_statistics=extract_statistics,
+                extract_relationships=extract_relationships,
             )
         else:
             init_other_three_level_schema(
@@ -116,6 +210,8 @@ def init_local_schema(
                 prune_missing=prune_missing,
                 llm_fallback=llm_fallback,
                 llm_model=llm_model,
+                extract_statistics=extract_statistics,
+                extract_relationships=extract_relationships,
             )
 
     else:
@@ -142,6 +238,8 @@ def init_local_schema(
                     prune_missing=prune_missing,
                     llm_fallback=llm_fallback,
                     llm_model=llm_model,
+                    extract_statistics=extract_statistics,
+                    extract_relationships=extract_relationships,
                 )
             elif db_config.type == DBType.DUCKDB:
                 init_duckdb_schema(
@@ -156,6 +254,8 @@ def init_local_schema(
                     prune_missing=prune_missing,
                     llm_fallback=llm_fallback,
                     llm_model=llm_model,
+                    extract_statistics=extract_statistics,
+                    extract_relationships=extract_relationships,
                 )
             else:
                 logger.warning(f"Unsupported database type {db_config.type} for multi-database configuration")
@@ -174,6 +274,8 @@ def init_sqlite_schema(
     prune_missing: bool = False,
     llm_fallback: bool = False,
     llm_model: Optional[LLMBaseModel] = None,
+    extract_statistics: bool = False,
+    extract_relationships: bool = True,
 ):
     database_name = getattr(db_config, "database", "")
     sql_connector = db_manager.get_conn(agent_config.current_namespace, database_name)
@@ -204,6 +306,8 @@ def init_sqlite_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -221,6 +325,8 @@ def init_sqlite_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
 
@@ -236,6 +342,8 @@ def init_duckdb_schema(
     prune_missing: bool = False,
     llm_fallback: bool = False,
     llm_model: Optional[LLMBaseModel] = None,
+    extract_statistics: bool = False,
+    extract_relationships: bool = True,
 ):
     # means schema_name here
     database_name = database_name or getattr(db_config, "database", "")
@@ -274,6 +382,8 @@ def init_duckdb_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -291,6 +401,8 @@ def init_duckdb_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
 
@@ -305,6 +417,8 @@ def init_mysql_schema(
     prune_missing: bool = False,
     llm_fallback: bool = False,
     llm_model: Optional[LLMBaseModel] = None,
+    extract_statistics: bool = False,
+    extract_relationships: bool = True,
 ):
     database_name = database_name or getattr(db_config, "database", "")
 
@@ -341,6 +455,8 @@ def init_mysql_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
     if table_type in ("full", "view"):
@@ -359,6 +475,8 @@ def init_mysql_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
 
@@ -374,6 +492,8 @@ def init_starrocks_schema(
     prune_missing: bool = False,
     llm_fallback: bool = False,
     llm_model: Optional[LLMBaseModel] = None,
+    extract_statistics: bool = False,
+    extract_relationships: bool = True,
 ):
     sql_connector = db_manager.get_conn(agent_config.current_namespace)
     catalog_name = catalog_name or getattr(db_config, "catalog", "") or sql_connector.catalog_name
@@ -410,6 +530,8 @@ def init_starrocks_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
     if table_type in ("full", "view"):
@@ -427,6 +549,8 @@ def init_starrocks_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
     if table_type in ("full", "view"):
         materialized_views = sql_connector.get_materialized_views_with_ddl(
@@ -445,6 +569,8 @@ def init_starrocks_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
 
@@ -459,6 +585,8 @@ def init_other_three_level_schema(
     prune_missing: bool = False,
     llm_fallback: bool = False,
     llm_model: Optional[LLMBaseModel] = None,
+    extract_statistics: bool = False,
+    extract_relationships: bool = True,
 ):
     db_type = db_config.type
     database_name = database_name or getattr(db_config, "database", "")
@@ -551,6 +679,8 @@ def init_other_three_level_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -579,6 +709,8 @@ def init_other_three_level_schema(
             prune_missing=prune_missing,
             llm_fallback=llm_fallback,
             llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
     if (table_type == "mv" or table_type == "full") and hasattr(sql_connector, "get_materialized_views_with_ddl"):
         materialized_views = sql_connector.get_materialized_views_with_ddl(
@@ -604,6 +736,10 @@ def init_other_three_level_schema(
             sql_connector,
             build_mode=build_mode,
             prune_missing=prune_missing,
+            llm_fallback=llm_fallback,
+            llm_model=llm_model,
+            extract_statistics=extract_statistics,
+            extract_relationships=extract_relationships,
         )
 
 
@@ -620,6 +756,8 @@ def store_tables(
     prune_missing: bool = False,
     llm_fallback: bool = False,
     llm_model: Optional[LLMBaseModel] = None,
+    extract_statistics: bool = False,
+    extract_relationships: bool = True,
 ):
     """
     Store tables to the table_lineage_store.
@@ -640,6 +778,9 @@ def store_tables(
             metadata_extractor = get_metadata_extractor(connector, connector.dialect)
         except Exception as exc:
             logger.debug(f"Failed to initialize StarRocks metadata extractor: {exc}")
+    table_name_map: Dict[str, List[str]] = {}
+    if extract_relationships:
+        table_name_map = _build_table_name_map([t.get("table_name", "") for t in tables])
     for table in tables:
         if not table.get("database_name"):
             table["database_name"] = database_name
@@ -659,6 +800,9 @@ def store_tables(
         table["definition"] = sanitize_ddl_for_storage(table["definition"])
         definition = table.get("definition", "")
         used_information_schema = False
+        skip_ddl_parse = is_starrocks
+        row_count = 0
+        sample_statistics: Dict[str, Dict[str, Any]] = {}
         if metadata_extractor and hasattr(metadata_extractor, "extract_table_metadata"):
             try:
                 starrocks_metadata = metadata_extractor.extract_table_metadata(
@@ -682,12 +826,33 @@ def store_tables(
                 column_names = starrocks_metadata.get("column_names", []) or []
                 business_tags = infer_business_tags(table.get("table_name", ""), column_names)
                 relationship_metadata: Dict[str, Any] = {}
-                try:
-                    relationships = metadata_extractor.detect_relationships(table.get("table_name", ""))
-                    if relationships and (relationships.get("foreign_keys") or relationships.get("join_paths")):
-                        relationship_metadata = relationships
-                except Exception as exc:
-                    logger.debug(f"Failed to detect StarRocks relationships: {exc}")
+                if extract_relationships:
+                    try:
+                        relationships = metadata_extractor.detect_relationships(table.get("table_name", ""))
+                        if relationships and (relationships.get("foreign_keys") or relationships.get("join_paths")):
+                            relationship_metadata = relationships
+                    except Exception as exc:
+                        logger.debug(f"Failed to detect StarRocks relationships: {exc}")
+                    if not relationship_metadata and column_names and table_name_map:
+                        inferred = _infer_relationships_from_names(
+                            table.get("table_name", ""),
+                            column_names,
+                            table_name_map,
+                        )
+                        if inferred:
+                            relationship_metadata = inferred
+                if extract_statistics:
+                    try:
+                        row_count = metadata_extractor.extract_row_count(table.get("table_name", ""))
+                    except Exception as exc:
+                        logger.debug(f"Failed to extract StarRocks row count: {exc}")
+                    if row_count > 1000:
+                        try:
+                            sample_statistics = metadata_extractor.extract_column_statistics(
+                                table.get("table_name", "")
+                            )
+                        except Exception as exc:
+                            logger.debug(f"Failed to extract StarRocks column statistics: {exc}")
                 if table_comment:
                     table["table_comment"] = table_comment
                 if column_comments:
@@ -698,13 +863,32 @@ def store_tables(
                     table["business_tags"] = business_tags
                 if relationship_metadata:
                     table["relationship_metadata"] = json.dumps(relationship_metadata, ensure_ascii=False)
+                if row_count:
+                    table["row_count"] = row_count
+                if sample_statistics:
+                    table["sample_statistics"] = json.dumps(sample_statistics, ensure_ascii=False)
                 if table_comment or column_comments:
                     table["definition"] = table_lineage_store.schema_store._enhance_definition_with_comments(
                         definition=definition,
                         table_comment=table_comment,
                         column_comments=column_comments,
                     )
-        if definition and not used_information_schema:
+        if extract_statistics and metadata_extractor and row_count == 0:
+            try:
+                row_count = metadata_extractor.extract_row_count(table.get("table_name", ""))
+            except Exception as exc:
+                logger.debug(f"Failed to extract StarRocks row count: {exc}")
+            if row_count > 1000 and not sample_statistics:
+                try:
+                    sample_statistics = metadata_extractor.extract_column_statistics(table.get("table_name", ""))
+                except Exception as exc:
+                    logger.debug(f"Failed to extract StarRocks column statistics: {exc}")
+            if row_count:
+                table["row_count"] = row_count
+            if sample_statistics:
+                table["sample_statistics"] = json.dumps(sample_statistics, ensure_ascii=False)
+
+        if definition and not used_information_schema and not skip_ddl_parse:
             try:
                 parsed_metadata = extract_enhanced_metadata_from_ddl(
                     definition, dialect=parse_dialect(getattr(connector, "dialect", ""))
