@@ -3,12 +3,14 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import json
+import time
 from typing import Any, Dict, List, Optional, Set
 
 from datus.configuration.agent_config import AgentConfig, DbConfig
 from datus.models.base import LLMBaseModel
 from datus.schemas.base import TABLE_TYPE
 from datus.storage.schema_metadata.store import SchemaWithValueRAG
+from datus.configuration.business_term_config import infer_business_tags
 from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.db_manager import DBManager
 from datus.utils.constants import DBType
@@ -640,6 +642,10 @@ def store_tables(
                 schema_name=table["schema_name"],
                 table_name=table["table_name"],
             )
+        if "metadata_version" not in table:
+            table["metadata_version"] = 1
+        if "last_updated" not in table:
+            table["last_updated"] = int(time.time())
 
         # Fix and clean DDL before storing
         table["definition"] = sanitize_ddl_for_storage(table["definition"])
@@ -672,12 +678,29 @@ def store_tables(
                         column_enums[col_name] = [
                             {"value": code, "label": label} for code, label in enum_pairs
                         ]
+                column_names = [col["name"] for col in parsed_metadata.get("columns", [])]
+                business_tags = infer_business_tags(table.get("table_name", ""), column_names)
+                foreign_keys = parsed_metadata.get("foreign_keys", [])
+                relationship_metadata: Dict[str, Any] = {}
+                if foreign_keys:
+                    relationship_metadata = {
+                        "foreign_keys": foreign_keys,
+                        "join_paths": [
+                            f"{fk.get('from_column', '')} -> {fk.get('to_table', '')}.{fk.get('to_column', '')}"
+                            for fk in foreign_keys
+                            if fk.get("from_column") and fk.get("to_table") and fk.get("to_column")
+                        ],
+                    }
                 if table_comment:
                     table["table_comment"] = table_comment
                 if column_comments:
                     table["column_comments"] = json.dumps(column_comments, ensure_ascii=False)
                 if column_enums:
                     table["column_enums"] = json.dumps(column_enums, ensure_ascii=False)
+                if business_tags:
+                    table["business_tags"] = business_tags
+                if relationship_metadata:
+                    table["relationship_metadata"] = json.dumps(relationship_metadata, ensure_ascii=False)
                 if table_comment or column_comments:
                     table["definition"] = table_lineage_store.schema_store._enhance_definition_with_comments(
                         definition=definition,

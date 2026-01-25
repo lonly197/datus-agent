@@ -58,8 +58,8 @@ _ENUM_PAIR_RE = re.compile(
 )
 
 _COLUMN_DEF_RE = re.compile(
-    r'`?([\w]+)`?\s+(\w+(?:\([^)]{0,100}\))?)\s*(NULL|NOT\s+NULL)?',
-    re.IGNORECASE
+    r'^`?([\w]+)`?\s+(.+?)(?=\s+COMMENT|\s+NOT\s+NULL|\s+NULL|\s+DEFAULT|\s+PRIMARY|\s+KEY|\s+UNIQUE|\s+AUTO_INCREMENT|\s+ENCODING|\s+COLLATE|\s+AS|\s+COMPUTED|\s+MATERIALIZED|\s*$)',
+    re.IGNORECASE | re.DOTALL
 )
 
 _PRIMARY_KEY_RE = re.compile(
@@ -968,17 +968,30 @@ def extract_enhanced_metadata_from_ddl(
     # Validate input
     is_valid, error_msg = validate_sql_input(sql)
     if not is_valid:
-        if warn_on_invalid:
-            logger.warning(f"Invalid SQL input: {error_msg}")
-        else:
-            logger.debug(f"Invalid SQL input: {error_msg}")
-        return {
-            "table": {"name": "", "comment": ""},
-            "columns": [],
-            "primary_keys": [],
-            "foreign_keys": [],
-            "indexes": []
-        }
+        cleaned_sql = sanitize_ddl_for_storage(sql)
+        if cleaned_sql and cleaned_sql != sql:
+            retry_valid, retry_error = validate_sql_input(cleaned_sql)
+            if retry_valid:
+                sql = cleaned_sql
+                is_valid = True
+            else:
+                error_msg = retry_error or error_msg
+                sql = cleaned_sql
+        if not is_valid:
+            if "Unbalanced parentheses" in error_msg:
+                logger.debug(f"Continuing with best-effort parsing despite: {error_msg}")
+            else:
+                if warn_on_invalid:
+                    logger.warning(f"Invalid SQL input: {error_msg}")
+                else:
+                    logger.debug(f"Invalid SQL input: {error_msg}")
+                return {
+                    "table": {"name": "", "comment": ""},
+                    "columns": [],
+                    "primary_keys": [],
+                    "foreign_keys": [],
+                    "indexes": []
+                }
 
     dialect = parse_dialect(dialect)
 
@@ -1178,14 +1191,17 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
     # Validate input
     is_valid, error_msg = validate_sql_input(sql)
     if not is_valid:
-        logger.warning(f"Invalid SQL input: {error_msg}")
-        return {
-            "table": {"name": "", "comment": ""},
-            "columns": [],
-            "primary_keys": [],
-            "foreign_keys": [],
-            "indexes": []
-        }
+        if "Unbalanced parentheses" in error_msg:
+            logger.debug(f"Continuing regex parsing despite: {error_msg}")
+        else:
+            logger.warning(f"Invalid SQL input: {error_msg}")
+            return {
+                "table": {"name": "", "comment": ""},
+                "columns": [],
+                "primary_keys": [],
+                "foreign_keys": [],
+                "indexes": []
+            }
 
     result = {
         "table": {"name": "", "schema_name": "", "database_name": "", "comment": ""},
@@ -1378,14 +1394,15 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
                         logger.warning(f"Column name too long: {col_name}")
                         continue
 
-                    col_type = col_match.group(2)
+                    col_type = col_match.group(2).strip()
 
                     # Validate type length
                     if len(col_type) > MAX_TYPE_DEFINITION_LENGTH:
                         logger.warning(f"Type definition too long: {col_type}")
                         continue
 
-                    is_nullable = col_match.group(3) is None or (col_match.group(3) and 'NULL' in col_match.group(3).upper())
+                    col_def_upper = col_def.upper()
+                    is_nullable = "NOT NULL" not in col_def_upper
 
                     col_dict = {
                         "name": col_name,
