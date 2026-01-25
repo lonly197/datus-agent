@@ -21,7 +21,12 @@ from sqlglot import exp
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
 from datus.utils.plan_id import PlanIdManager
-from datus.utils.sql_utils import parse_metadata_from_ddl
+from datus.utils.constants import DBType
+from datus.utils.sql_utils import (
+    extract_enhanced_metadata_from_ddl,
+    parse_dialect,
+    sanitize_ddl_for_storage,
+)
 
 if TYPE_CHECKING:
     from datus.schemas.node_models import TableSchema
@@ -363,13 +368,11 @@ class DeepResearchEventConverter:
         # Extract table info for scale analysis
         table_count = 0
         field_count = 0
+        table_info = None
         if table_schemas:
-            table_count = len(table_schemas)
-            for schema in table_schemas:
-                definition = getattr(schema, "definition", "")
-                if definition:
-                    ddl_info = self._parse_ddl_comments(definition)
-                    field_count += len(ddl_info["columns"])
+            table_info = self._extract_table_info(table_schemas, sql_query)
+            table_count = len(table_info.get("tables", []))
+            field_count = len(table_info.get("fields", []))
 
         lines.append(f"**数据规模**: 涉及 {table_count} 张表、{field_count} 个字段")
 
@@ -433,7 +436,8 @@ class DeepResearchEventConverter:
         lines.append("### 2. 使用的表和字段详情")
 
         if table_schemas:
-            table_info = self._extract_table_info(table_schemas, sql_query)
+            if table_info is None:
+                table_info = self._extract_table_info(table_schemas, sql_query)
 
             # Table list
             tables = table_info.get("tables", [])
@@ -582,16 +586,42 @@ class DeepResearchEventConverter:
         """
         result = {
             "table_comment": "",
-            "columns": {}
+            "columns": {},
         }
 
-        try:
-            metadata = parse_metadata_from_ddl(ddl, dialect)
-            result["table_comment"] = metadata.get("table", {}).get("comment", "")
-            for col in metadata.get("columns", []):
-                result["columns"][col["name"]] = col.get("comment", "")
-        except Exception as e:
-            self.logger.warning(f"Failed to parse DDL comments: {e}")
+        if not ddl:
+            return result
+
+        cleaned = sanitize_ddl_for_storage(ddl)
+        tried_dialects = []
+
+        if dialect:
+            tried_dialects.append(parse_dialect(dialect))
+        tried_dialects.extend([DBType.STARROCKS, DBType.MYSQL, DBType.SNOWFLAKE])
+        tried_dialects = [d for d in tried_dialects if d]
+
+        last_error = None
+        for candidate in tried_dialects:
+            try:
+                metadata = extract_enhanced_metadata_from_ddl(
+                    cleaned,
+                    dialect=candidate,
+                    warn_on_invalid=False,
+                )
+                table_comment = metadata.get("table", {}).get("comment", "") if metadata else ""
+                columns = metadata.get("columns", []) if metadata else []
+                if table_comment or columns:
+                    result["table_comment"] = table_comment or ""
+                    for col in columns:
+                        col_name = col.get("name")
+                        if col_name:
+                            result["columns"][col_name] = col.get("comment", "")
+                    return result
+            except Exception as e:
+                last_error = e
+
+        if last_error:
+            self.logger.warning(f"Failed to parse DDL comments: {last_error}")
 
         return result
 
@@ -607,6 +637,8 @@ class DeepResearchEventConverter:
         """
         tables_info = []
         fields_info = []
+        seen_tables = set()
+        seen_fields = set()
 
         if not table_schemas:
             return {"tables": tables_info, "fields": fields_info, "relationships": []}
@@ -631,12 +663,20 @@ class DeepResearchEventConverter:
             definition = getattr(schema, "definition", "")
             database_name = getattr(schema, "database_name", "")
             table_type = getattr(schema, "table_type", "table")
+            schema_name = getattr(schema, "schema_name", "")
+            catalog_name = getattr(schema, "catalog_name", "")
+            identifier = getattr(schema, "identifier", "")
 
             if not table_name or not definition:
                 continue
 
             # Parse DDL for comments
             ddl_info = self._parse_ddl_comments(definition)
+
+            dedupe_key = identifier or (catalog_name, database_name, schema_name, table_name, table_type)
+            if dedupe_key in seen_tables:
+                continue
+            seen_tables.add(dedupe_key)
 
             tables_info.append({
                 "table_name": table_name,
@@ -649,6 +689,10 @@ class DeepResearchEventConverter:
             # Extract column information
             column_comments = ddl_info["columns"]
             for col_name, col_comment in column_comments.items():
+                field_key = (table_name, col_name)
+                if field_key in seen_fields:
+                    continue
+                seen_fields.add(field_key)
                 is_used = col_name in sql_columns
                 fields_info.append({
                     "table_name": table_name,

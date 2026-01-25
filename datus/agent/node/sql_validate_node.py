@@ -329,17 +329,29 @@ class SQLValidateNode(Node):
         if not table_names:
             return result
 
-        # Build schema lookup
-        schema_tables = {}
+        # Build schema lookup with normalized names
+        schema_tables = set()
         for schema in table_schemas:
-            table_name = schema.table_name.lower()
-            schema_tables[table_name] = schema
+            table_name = (schema.table_name or "").lower()
+            if table_name:
+                schema_tables.add(table_name)
+            database_name = (schema.database_name or "").lower()
+            schema_name = (schema.schema_name or "").lower()
+            catalog_name = (schema.catalog_name or "").lower()
+            if database_name and schema_name:
+                schema_tables.add(f"{database_name}.{schema_name}.{table_name}")
+            if database_name:
+                schema_tables.add(f"{database_name}..{table_name}")
+            if catalog_name and database_name:
+                schema_tables.add(f"{catalog_name}.{database_name}..{table_name}")
 
         # Check table existence
         missing_tables = []
         for table in table_names:
             table_lower = table.lower()
-            if table_lower not in schema_tables:
+            table_parts = [part for part in table_lower.split(".") if part]
+            base_table = table_parts[-1] if table_parts else table_lower
+            if table_lower not in schema_tables and base_table not in schema_tables:
                 missing_tables.append(table)
 
         if missing_tables:
