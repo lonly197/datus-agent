@@ -1468,6 +1468,11 @@ def main():
         action="store_true",
         help="Clear existing schema_metadata and schema_value before import",
     )
+    parser.add_argument(
+        "--import-only",
+        action="store_true",
+        help="Skip migration and only import schemas from database (requires --import-schemas)",
+    )
     parser.add_argument("--llm-fallback", action="store_true", help="Use LLM as final fallback for DDL parsing failures")
     parser.add_argument("--llm-model", help="Optional model name for LLM fallback (defaults to active model)")
 
@@ -1534,30 +1539,57 @@ def main():
         logger.error(f"Failed to initialize storage: {e}")
         sys.exit(1)
 
-    # Check if migration already run
-    try:
-        schema_store._ensure_table_ready()
+    if args.clear:
+        logger.info("Clearing existing schema_metadata and schema_value before migration...")
+        try:
+            if schema_store.table_name in schema_store.db.table_names(limit=100):
+                schema_store.db.drop_table(schema_store.table_name)
+            schema_store.table = None
+            schema_store._table_initialized = False
+            if storage:
+                value_store = storage.value_store
+                if value_store.table_name in value_store.db.table_names(limit=100):
+                    value_store.db.drop_table(value_store.table_name)
+                value_store.table = None
+                value_store._table_initialized = False
+            schema_store._ensure_table_ready()
+            if storage:
+                storage.value_store._ensure_table_ready()
+        except Exception as exc:
+            logger.error(f"Failed to clear schema tables before migration: {exc}")
+            sys.exit(1)
+        logger.info("✅ Cleared schema tables before migration")
+        logger.info("")
 
-        # Check for metadata_version field
-        all_data = schema_store._search_all(
-            where=None,
-            select_fields=["metadata_version"]
-        )
+    if args.import_only and not args.import_schemas:
+        logger.error("--import-only requires --import-schemas")
+        sys.exit(1)
 
-        if len(all_data) > 0:
-            # Check if any v1 records exist
-            has_v1 = any(row.get("metadata_version", 0) == 1 for row in all_data.to_pylist())
-            if has_v1 and not args.force:
-                logger.warning("⚠️  Migration appears to have already been run (found v1 records)")
-                logger.warning("Use --force to re-run migration")
-                logger.info("")
-                logger.info("To re-run:")
-                logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --force")
-                if namespace:
-                    logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --namespace {namespace} --force")
-                sys.exit(0)
-    except Exception as e:
-        logger.debug(f"Could not check migration status: {e}")
+    # Check if migration already run (skip when import-only)
+    if not args.import_only:
+        try:
+            schema_store._ensure_table_ready()
+
+            # Check for metadata_version field
+            all_data = schema_store._search_all(
+                where=None,
+                select_fields=["metadata_version"]
+            )
+
+            if len(all_data) > 0:
+                # Check if any v1 records exist
+                has_v1 = any(row.get("metadata_version", 0) == 1 for row in all_data.to_pylist())
+                if has_v1 and not args.force:
+                    logger.warning("⚠️  Migration appears to have already been run (found v1 records)")
+                    logger.warning("Use --force to re-run migration")
+                    logger.info("")
+                    logger.info("To re-run:")
+                    logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --force")
+                    if namespace:
+                        logger.info(f"  python -m datus.storage.schema_metadata.migrate_v0_to_v1 --config {args.config} --namespace {namespace} --force")
+                    sys.exit(0)
+        except Exception as e:
+            logger.debug(f"Could not check migration status: {e}")
 
     llm_model = None
     if args.llm_fallback:
@@ -1593,42 +1625,56 @@ def main():
     }
 
     try:
-        # Migrate schema storage (always done)
-        logger.info("Step 1/3: Migrating schema metadata...")
-        migrated_schemas = migrate_schema_storage(
-            schema_store,
-            backup_path=args.backup_path,
-            extract_statistics=args.extract_statistics,
-            extract_relationships=args.extract_relationships,
-            llm_fallback=args.llm_fallback,
-            llm_model=llm_model,
-            update_existing=args.force,
-            db_manager=db_manager,
-            namespace=namespace,
-        )
-        migration_results["schemas_migrated"] = migrated_schemas
-        logger.info(f"✅ Migrated {migrated_schemas} schema records")
-        logger.info("")
+        if args.import_only:
+            logger.info("Step 1/3: Skipped (import-only mode)")
+            logger.info("")
+            migrated_schemas = 0
+        else:
+            # Migrate schema storage (always done)
+            logger.info("Step 1/3: Migrating schema metadata...")
+            migrated_schemas = migrate_schema_storage(
+                schema_store,
+                backup_path=args.backup_path,
+                extract_statistics=args.extract_statistics,
+                extract_relationships=args.extract_relationships,
+                llm_fallback=args.llm_fallback,
+                llm_model=llm_model,
+                update_existing=args.force,
+                db_manager=db_manager,
+                namespace=namespace,
+            )
+            migration_results["schemas_migrated"] = migrated_schemas
+            logger.info(f"✅ Migrated {migrated_schemas} schema records")
+            logger.info("")
 
-        if shutdown_requested():
-            logger.warning("Migration interrupted by user; skipping remaining steps.")
-            migration_results["cancelled"] = True
-            sys.exit(130)
+            if shutdown_requested():
+                logger.warning("Migration interrupted by user; skipping remaining steps.")
+                migration_results["cancelled"] = True
+                sys.exit(130)
 
         # Migrate schema value storage and verify (only if namespace provided)
         if namespace and storage:
             # Migrate schema value storage
-            logger.info("Step 2/3: Checking schema value storage...")
-            migrated_values = migrate_schema_value_storage(storage)
-            migration_results["values_migrated"] = migrated_values
-            logger.info(f"✅ Schema value storage: {migrated_values} records (v1 compatible)")
-            logger.info("")
+            if args.import_only:
+                logger.info("Step 2/3: Skipped (import-only mode)")
+                logger.info("")
+                logger.info("Step 3/3: Skipped (import-only mode)")
+                logger.info("")
+                migration_results["success"] = True
+                migration_results["verification_passed"] = False
+                success = True
+            else:
+                logger.info("Step 2/3: Checking schema value storage...")
+                migrated_values = migrate_schema_value_storage(storage)
+                migration_results["values_migrated"] = migrated_values
+                logger.info(f"✅ Schema value storage: {migrated_values} records (v1 compatible)")
+                logger.info("")
 
-            # Verify migration
-            logger.info("Step 3/3: Verifying migration...")
-            success = verify_migration(storage)
-            migration_results["verification_passed"] = success
-            migration_results["success"] = success
+                # Verify migration
+                logger.info("Step 3/3: Verifying migration...")
+                success = verify_migration(storage)
+                migration_results["verification_passed"] = success
+                migration_results["success"] = success
 
             if success:
                 logger.info("")

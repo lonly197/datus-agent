@@ -921,6 +921,16 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --clear \
     --force
 
+# 说明：--clear 会在 Step 1 前清空 schema_metadata 与 schema_value
+
+# 仅导入（跳过迁移）
+python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+    --config=conf/agent.yml \
+    --namespace=<name> \
+    --import-schemas \
+    --import-only \
+    --clear
+
 # 覆盖配置路径（不推荐，优先使用配置文件）
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --config=conf/agent.yml \
