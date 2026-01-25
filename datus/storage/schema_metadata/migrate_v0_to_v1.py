@@ -414,6 +414,12 @@ def _infer_relationships_from_names(
     }
 
 
+def _normalize_dialect(value: Any) -> str:
+    if isinstance(value, DBType):
+        return value.value
+    return str(value or "").strip().lower()
+
+
 def backup_database(db_path: str) -> str:
     """
     Create a backup of the LanceDB database.
@@ -817,7 +823,7 @@ def migrate_schema_storage(
 
                 if (
                     metadata_extractor
-                    and str(getattr(metadata_extractor, "dialect", "")).lower() == DBType.STARROCKS
+                    and _normalize_dialect(getattr(metadata_extractor, "dialect", "")) == DBType.STARROCKS
                     and hasattr(metadata_extractor, "extract_table_metadata")
                 ):
                     try:
@@ -891,7 +897,7 @@ def migrate_schema_storage(
                     join_paths: List[str] = []
                     if (
                         metadata_extractor
-                        and str(getattr(metadata_extractor, "dialect", "")).lower() == DBType.STARROCKS
+                        and _normalize_dialect(getattr(metadata_extractor, "dialect", "")) == DBType.STARROCKS
                     ):
                         try:
                             relationships = metadata_extractor.detect_relationships(table_name)

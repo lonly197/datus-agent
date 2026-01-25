@@ -114,6 +114,12 @@ def _infer_relationships_from_names(
     }
 
 
+def _normalize_dialect(value: Any) -> str:
+    if isinstance(value, DBType):
+        return value.value
+    return str(value or "").strip().lower()
+
+
 def init_local_schema(
     table_lineage_store: SchemaWithValueRAG,
     agent_config: AgentConfig,
@@ -772,7 +778,7 @@ def store_tables(
     new_values: List[Dict[str, Any]] = []
     incoming_identifiers: Set[str] = set()
     metadata_extractor = None
-    is_starrocks = str(getattr(connector, "dialect", "")).lower() == DBType.STARROCKS
+    is_starrocks = _normalize_dialect(getattr(connector, "dialect", "")) == DBType.STARROCKS
     if is_starrocks:
         try:
             metadata_extractor = get_metadata_extractor(connector, connector.dialect)
