@@ -18,7 +18,7 @@ from datus.storage.lancedb_conditions import Node, and_, build_where, eq, or_
 from datus.utils.constants import DBType
 from datus.utils.json_utils import json2csv
 from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import extract_enum_values_from_comment
+from datus.utils.sql_utils import extract_enum_values_from_comment, is_likely_truncated_ddl, sanitize_ddl_for_storage
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -225,6 +225,26 @@ class SchemaStorage(BaseMetadataStorage):
 
         return "\n".join(enhanced_parts)
 
+    def store_batch(self, data: List[Dict[str, Any]]):
+        """Sanitize DDL definitions before batch storage."""
+        if not data:
+            return
+
+        cleaned: List[Dict[str, Any]] = []
+        for item in data:
+            definition = item.get("definition")
+            if isinstance(definition, str) and definition:
+                truncated_before = is_likely_truncated_ddl(definition)
+                sanitized = sanitize_ddl_for_storage(definition)
+                if sanitized != definition:
+                    logger.debug("Sanitized DDL before storage")
+                if truncated_before and is_likely_truncated_ddl(sanitized):
+                    logger.warning("DDL still appears truncated after sanitation; storing best-effort definition.")
+                item = {**item, "definition": sanitized}
+            cleaned.append(item)
+
+        super().store_batch(cleaned)
+
     def search_all_schemas(self, database_name: str = "", catalog_name: str = "") -> Set[str]:
         search_result = self._search_all(
             where=_build_where_clause(database_name=database_name, catalog_name=catalog_name),
@@ -386,6 +406,13 @@ class SchemaStorage(BaseMetadataStorage):
             import json
 
             self._ensure_table_ready()
+
+            truncated_before = is_likely_truncated_ddl(definition)
+            definition = sanitize_ddl_for_storage(definition)
+            if truncated_before and is_likely_truncated_ddl(definition):
+                logger.warning(
+                    f"DDL still appears truncated after sanitation for table {table_name}; storing best-effort definition."
+                )
 
             # Build identifier
             identifier_parts = [

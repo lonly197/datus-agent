@@ -30,6 +30,11 @@ from datus.storage.cache import get_storage_cache_instance
 from datus.utils.error_handler import LLMMixin, NodeExecutionResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
+from datus.utils.sql_utils import (
+    extract_enhanced_metadata_from_ddl,
+    parse_dialect,
+    sanitize_ddl_for_storage,
+)
 
 logger = get_logger(__name__)
 
@@ -597,54 +602,52 @@ class SchemaValidationNode(Node, LLMMixin):
                     "column": column_name,
                 }
             )
+        dialect = parse_dialect(
+            getattr(self.workflow.task, "database_type", "") if self.workflow and self.workflow.task else ""
+        )
+
         for schema in schemas:
             # Add table name
             add_term_source(schema.table_name, schema.table_name, "table_name")
 
             # Add column names from definition
             if schema.definition:
-                # Extract column names from CREATE TABLE statement
-                columns = re.findall(r"`(\w+)`", schema.definition)
-                for col_name in columns:
+                definition = sanitize_ddl_for_storage(schema.definition)
+                parsed_metadata = extract_enhanced_metadata_from_ddl(
+                    definition,
+                    dialect=dialect,
+                    warn_on_invalid=False,
+                )
+
+                # Extract column names from parsed metadata
+                parsed_columns = [col.get("name") for col in parsed_metadata.get("columns", []) if col.get("name")]
+                if not parsed_columns:
+                    parsed_columns = re.findall(r"`(\w+)`", definition)
+                for col_name in parsed_columns:
                     add_term_source(col_name, schema.table_name, "column_name", column_name=col_name)
 
-                # ✅ ENHANCED: Extract Chinese comments from DDL using sqlglot
-                try:
-                    from sqlglot import parse_one
-                    from sqlglot.errors import ParseError
+                # Extract table comment
+                table_comment = parsed_metadata.get("table", {}).get("comment", "")
+                if table_comment:
+                    add_term_source(table_comment, schema.table_name, "table_comment")
+                    comment_terms[table_comment.lower()] = f"table:{schema.table_name}"
+                    logger.debug(f"Extracted table comment '{table_comment}' from {schema.table_name}")
 
-                    parsed = parse_one(schema.definition, dialect="starrocks")
-
-                    # Extract table comment
-                    if hasattr(parsed, "comment") and parsed.comment:
-                        table_comment = str(parsed.comment).strip()
-                        if table_comment:
-                            add_term_source(table_comment, schema.table_name, "table_comment")
-                            comment_terms[table_comment.lower()] = f"table:{schema.table_name}"
-                            logger.debug(f"Extracted table comment '{table_comment}' from {schema.table_name}")
-
-                    # Extract column comments
-                    if hasattr(parsed, "columns"):
-                        for column in parsed.columns:
-                            if hasattr(column, "comment") and column.comment:
-                                col_comment = str(column.comment).strip()
-                                if col_comment:
-                                    col_name = column.name if hasattr(column, "name") else "unknown"
-                                    add_term_source(
-                                        col_comment,
-                                        schema.table_name,
-                                        "column_comment",
-                                        column_name=col_name,
-                                    )
-                                    comment_terms[col_comment.lower()] = f"column:{schema.table_name}.{col_name}"
-                                    logger.debug(
-                                        f"Extracted column comment '{col_comment}' from {schema.table_name}.{col_name}"
-                                    )
-
-                except ImportError:
-                    logger.warning("sqlglot not available, skipping comment extraction")
-                except (ParseError, Exception) as e:
-                    logger.debug(f"Failed to parse DDL for comments: {e}")
+                # Extract column comments
+                for col in parsed_metadata.get("columns", []):
+                    col_comment = col.get("comment", "")
+                    col_name = col.get("name") or "unknown"
+                    if col_comment:
+                        add_term_source(
+                            col_comment,
+                            schema.table_name,
+                            "column_comment",
+                            column_name=col_name,
+                        )
+                        comment_terms[col_comment.lower()] = f"column:{schema.table_name}.{col_name}"
+                        logger.debug(
+                            f"Extracted column comment '{col_comment}' from {schema.table_name}.{col_name}"
+                        )
 
         logger.debug(f"Built schema terms set with {len(schema_terms)} unique terms from {len(schemas)} schemas")
 

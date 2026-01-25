@@ -21,7 +21,12 @@ from datus.configuration.agent_config_loader import load_agent_config
 from datus.storage.schema_metadata import SchemaWithValueRAG
 from datus.tools.db_tools.metadata_extractor import get_metadata_extractor
 from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl, extract_enum_values_from_comment, parse_dialect
+from datus.utils.sql_utils import (
+    extract_enhanced_metadata_from_ddl,
+    extract_enum_values_from_comment,
+    parse_dialect,
+    sanitize_ddl_for_storage,
+)
 from datus.configuration.business_term_config import infer_business_tags
 
 logger = get_logger(__name__)
@@ -237,6 +242,9 @@ async def bootstrap_database_metadata(
                     skipped_tables += 1
                     continue
 
+                # Fix and clean DDL before parsing
+                ddl = sanitize_ddl_for_storage(ddl)
+
                 # Parse enhanced metadata from DDL
                 parsed_metadata = extract_enhanced_metadata_from_ddl(ddl, dialect=dialect)
 
@@ -437,6 +445,7 @@ async def bootstrap_incremental(
 
                 if needs_update:
                     # Parse enhanced metadata
+                    ddl = sanitize_ddl_for_storage(ddl)
                     parsed_metadata = extract_enhanced_metadata_from_ddl(ddl, dialect=dialect)
 
                     # Extract all enhanced metadata

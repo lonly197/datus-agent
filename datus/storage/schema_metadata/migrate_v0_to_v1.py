@@ -31,13 +31,11 @@ from datus.utils.sql_utils import (
     extract_enhanced_metadata_from_ddl,
     extract_enum_values_from_comment,
     parse_dialect,
+    sanitize_ddl_for_storage,
     validate_comment,
     validate_table_name,
 )
 from datus.utils.constants import DBType
-
-# Import _fix_truncated_ddl to fix truncated DDL before parsing
-from datus.storage.schema_metadata.local_init import _fix_truncated_ddl
 
 logger = get_logger(__name__)
 
@@ -590,10 +588,10 @@ def migrate_schema_storage(
                     else:
                         logger.info("  - UPDATE: replacing existing record")
 
-                # Fix truncated DDL before parsing
+                # Fix and clean DDL before parsing
                 # This handles incomplete DDL statements from SHOW CREATE TABLE
                 original_definition = definition
-                definition = _fix_truncated_ddl(definition)
+                definition = sanitize_ddl_for_storage(definition)
                 if definition != original_definition:
                     logger.info(
                         f"  - DDL FIXED: length {len(original_definition)} -> {len(definition)}"

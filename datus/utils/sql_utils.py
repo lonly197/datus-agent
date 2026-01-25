@@ -614,6 +614,103 @@ def _clean_ddl(sql: str) -> str:
     return cleaned.strip()
 
 
+def fix_truncated_ddl(ddl: str) -> str:
+    """
+    Fix truncated DDL statements by detecting common truncation patterns and attempting completion.
+
+    This function handles DDL that may have been truncated during retrieval from the database,
+    such as when SHOW CREATE TABLE returns incomplete results due to length limits.
+
+    Args:
+        ddl: Potentially truncated DDL statement
+
+    Returns:
+        Fixed DDL statement or original if not recognized as truncated
+    """
+    if not ddl or not isinstance(ddl, str):
+        return ddl
+
+    stripped_ddl = ddl.rstrip()
+    # Patterns that indicate truncation
+    truncation_indicators = [
+        stripped_ddl.endswith(','),  # Ends with comma (incomplete column list)
+        not stripped_ddl.endswith(')'),  # Missing closing paren
+    ]
+
+    # Check if missing closing paren for CREATE TABLE
+    open_parens = ddl.count('(')
+    close_parens = ddl.count(')')
+    missing_closing_paren = open_parens > close_parens
+
+    # If any truncation indicators or missing closing paren, try to fix
+    if sum(truncation_indicators) >= 1 or missing_closing_paren:
+        fixed_ddl = ddl
+
+        # Remove trailing comma if present
+        if fixed_ddl.rstrip().endswith(','):
+            fixed_ddl = fixed_ddl.rstrip()[:-1].rstrip()
+
+        stripped_fixed = fixed_ddl.rstrip()
+        if missing_closing_paren or not stripped_fixed.endswith(')'):
+            if stripped_fixed.endswith(';'):
+                fixed_ddl = stripped_fixed.rstrip(';')
+            fixed_ddl += '\n)'
+
+        fixed_upper = fixed_ddl.upper()
+        starrocks_indicators = [
+            'DUPLICATE KEY' in fixed_upper,
+            'AGGREGATE KEY' in fixed_upper,
+            'UNIQUE KEY' in fixed_upper,
+            'PRIMARY KEY' in fixed_upper,
+            'DISTRIBUTED BY' in fixed_upper,
+            'PARTITION BY' in fixed_upper,
+            'PROPERTIES' in fixed_upper,
+        ]
+
+        # Add basic StarRocks table structure if missing
+        if 'ENGINE=' not in fixed_upper and any(starrocks_indicators):
+            if not fixed_ddl.rstrip().endswith(';'):
+                fixed_ddl += ' ENGINE=OLAP;'
+            else:
+                fixed_ddl = fixed_ddl.rstrip(';') + ' ENGINE=OLAP;'
+        elif not fixed_ddl.rstrip().endswith(';'):
+            fixed_ddl += ';'
+
+        fixed_ddl = fixed_ddl.strip()
+
+        if fixed_ddl != ddl:
+            return fixed_ddl
+
+    return ddl
+
+
+def is_likely_truncated_ddl(ddl: str) -> bool:
+    """Detect likely truncation indicators without modifying the DDL."""
+    if not ddl or not isinstance(ddl, str):
+        return False
+
+    stripped_ddl = ddl.rstrip()
+    if stripped_ddl.endswith(','):
+        return True
+
+    open_parens = ddl.count('(')
+    close_parens = ddl.count(')')
+    if open_parens > close_parens:
+        return True
+
+    return False
+
+
+def sanitize_ddl_for_storage(ddl: str) -> str:
+    """Fix and clean DDL before storing to ensure consistent downstream parsing."""
+    if not ddl or not isinstance(ddl, str):
+        return ddl
+
+    fixed = fix_truncated_ddl(ddl)
+    cleaned = _clean_ddl(fixed)
+    return cleaned
+
+
 def _complete_incomplete_ddl(sql: str) -> str:
     """
     Attempt to complete incomplete DDL statements by adding missing closing parentheses.
