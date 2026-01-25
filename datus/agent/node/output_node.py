@@ -137,7 +137,32 @@ class OutputNode(Node):
             raise DatusException(ErrorCode.COMMON_VALIDATION_FAILED, "Node input is missing")
 
         tool = OutputTool()
-        return tool.execute(input_data, sql_connector=self._sql_connector(input_data.database_name), model=self.model)
+        try:
+            result = tool.execute(
+                input_data,
+                sql_connector=self._sql_connector(input_data.database_name),
+                model=self.model,
+            )
+        except Exception as exc:
+            logger.error(
+                "OutputTool execution failed: task_id=%s output_dir=%s file_type=%s has_error=%s error=%s",
+                input_data.task_id,
+                input_data.output_dir,
+                input_data.file_type,
+                bool(input_data.error),
+                exc,
+            )
+            raise
+
+        if hasattr(result, "success") and not result.success:
+            logger.warning(
+                "OutputTool returned failure: task_id=%s output_dir=%s error=%s",
+                input_data.task_id,
+                input_data.output_dir,
+                getattr(result, "output", None),
+            )
+
+        return result
 
     async def _output_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None

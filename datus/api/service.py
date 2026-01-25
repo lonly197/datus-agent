@@ -661,6 +661,7 @@ class DatusAPIService:
     ) -> AsyncGenerator[ActionHistory, None]:
         """Execute a workflow with streaming support and yield progress updates."""
         task_id = task_id or request.task_id or self._generate_task_id(client_id or "unknown")
+        action_history_manager = ActionHistoryManager()
 
         try:
             # Get agent for the namespace
@@ -671,9 +672,6 @@ class DatusAPIService:
 
             # Create SQL task
             sql_task = await self._create_sql_task(request, task_id, agent)
-
-            # Create action history manager for tracking
-            action_history_manager = ActionHistoryManager()
 
             # Execute workflow with streaming
             async for action in agent.run_stream(sql_task, action_history_manager=action_history_manager, task_id=task_id):
@@ -692,6 +690,25 @@ class DatusAPIService:
                 output={"error": str(e)},
             )
             yield error_action
+        finally:
+            try:
+                actions = action_history_manager.get_actions()
+                if actions:
+                    output_events = [a for a in actions if a.action_type == "output_generation"]
+                    failed_events = [a for a in actions if a.status == ActionStatus.FAILED]
+                    last_action = actions[-1]
+                    logger.info(
+                        "ActionHistory summary for task %s: total=%d, output_generation=%d, failed=%d, last_action=%s",
+                        task_id,
+                        len(actions),
+                        len(output_events),
+                        len(failed_events),
+                        last_action.action_type,
+                    )
+                else:
+                    logger.info("ActionHistory summary for task %s: no actions recorded", task_id)
+            except Exception as exc:
+                logger.warning(f"Failed to summarize ActionHistory for task {task_id}: {exc}")
 
     async def record_feedback(self, request: FeedbackRequest) -> FeedbackResponse:
         """Record user feedback for a task."""
