@@ -1665,6 +1665,8 @@ def main():
         "namespace": namespace,
         "cancelled": False,
     }
+    migrated_schemas = 0
+    migrated_values = 0
 
     try:
         if args.import_only:
