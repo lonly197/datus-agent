@@ -715,25 +715,54 @@ def migrate_schema_storage(
                         f"  - DDL FIXED (truncation): length {len(original_definition)} -> {len(definition)}"
                     )
 
-                # Parse enhanced metadata from DDL with dialect detection
                 detected_dialect = detect_dialect_from_ddl(definition)
-                enhanced_metadata = extract_enhanced_metadata_from_ddl(
-                    definition,
-                    dialect=detected_dialect,
-                    warn_on_invalid=False,
-                )
-                if llm_fallback and (not enhanced_metadata["columns"] or not enhanced_metadata["table"].get("name")):
-                    llm_metadata = _llm_fallback_parse_ddl(definition)
-                    if llm_metadata:
-                        enhanced_metadata = llm_metadata
-                        logger.info(f"LLM fallback parsed DDL for table: {table_name}")
+                metadata_extractor = None
+                if detected_dialect == DBType.STARROCKS or extract_statistics or extract_relationships:
+                    metadata_extractor = _get_metadata_extractor(database_name)
 
-                # Extract comment information
-                table_comment = enhanced_metadata["table"].get("comment", "")
-                column_comments = {
-                    col["name"]: col.get("comment", "")
-                    for col in enhanced_metadata["columns"]
-                }
+                enhanced_metadata = {"table": {"comment": ""}, "columns": [], "foreign_keys": []}
+                used_information_schema = False
+                table_comment = ""
+                column_comments: Dict[str, str] = {}
+                column_names: List[str] = []
+
+                if (
+                    metadata_extractor
+                    and str(getattr(metadata_extractor, "dialect", "")).lower() == DBType.STARROCKS
+                    and hasattr(metadata_extractor, "extract_table_metadata")
+                ):
+                    try:
+                        starrocks_metadata = metadata_extractor.extract_table_metadata(
+                            table_name,
+                            database_name=database_name,
+                        )
+                    except Exception as exc:
+                        logger.debug(f"Failed to read StarRocks metadata for {table_name}: {exc}")
+                        starrocks_metadata = {}
+                    if starrocks_metadata and starrocks_metadata.get("columns"):
+                        used_information_schema = True
+                        table_comment = starrocks_metadata.get("table_comment", "") or ""
+                        column_comments = starrocks_metadata.get("column_comments", {}) or {}
+                        column_names = starrocks_metadata.get("column_names", []) or []
+
+                if not used_information_schema:
+                    enhanced_metadata = extract_enhanced_metadata_from_ddl(
+                        definition,
+                        dialect=detected_dialect,
+                        warn_on_invalid=False,
+                    )
+                    if llm_fallback and (not enhanced_metadata["columns"] or not enhanced_metadata["table"].get("name")):
+                        llm_metadata = _llm_fallback_parse_ddl(definition)
+                        if llm_metadata:
+                            enhanced_metadata = llm_metadata
+                            logger.info(f"LLM fallback parsed DDL for table: {table_name}")
+                    table_comment = enhanced_metadata["table"].get("comment", "")
+                    column_comments = {
+                        col["name"]: col.get("comment", "")
+                        for col in enhanced_metadata["columns"]
+                    }
+                    column_names = [col["name"] for col in enhanced_metadata["columns"]]
+
                 column_enums: Dict[str, List[Dict[str, str]]] = {}
                 for col_name, col_comment in column_comments.items():
                     enum_pairs = extract_enum_values_from_comment(col_comment)
@@ -744,14 +773,12 @@ def migrate_schema_storage(
 
                 # Infer business tags
                 from datus.configuration.business_term_config import infer_business_tags
-                column_names = [col["name"] for col in enhanced_metadata["columns"]]
                 business_tags = infer_business_tags(table_name, column_names)
 
                 # Extract statistics (row count + column stats) from live database
                 row_count = 0
                 sample_statistics: Dict[str, Dict[str, Any]] = {}
                 if extract_statistics:
-                    metadata_extractor = _get_metadata_extractor(database_name)
                     if metadata_extractor:
                         stats_table_name = table_name
                         if schema_name:
@@ -772,13 +799,28 @@ def migrate_schema_storage(
                 relationship_metadata = {}
                 if extract_relationships:
                     foreign_keys = enhanced_metadata.get("foreign_keys", [])
-                    relationship_metadata = {
-                        "foreign_keys": foreign_keys,
-                        "join_paths": [
-                            f"{fk['from_column']} -> {fk['to_table']}.{fk['to_column']}"
-                            for fk in foreign_keys
-                        ]
-                    }
+                    join_paths: List[str] = []
+                    if (
+                        metadata_extractor
+                        and str(getattr(metadata_extractor, "dialect", "")).lower() == DBType.STARROCKS
+                    ):
+                        try:
+                            relationships = metadata_extractor.detect_relationships(table_name)
+                            if relationships:
+                                foreign_keys = relationships.get("foreign_keys", []) or foreign_keys
+                                join_paths = relationships.get("join_paths", []) or []
+                        except Exception as exc:
+                            logger.debug(f"  Could not detect StarRocks relationships: {exc}")
+                    if foreign_keys:
+                        if not join_paths:
+                            join_paths = [
+                                f"{fk['from_column']} -> {fk['to_table']}.{fk['to_column']}"
+                                for fk in foreign_keys
+                            ]
+                        relationship_metadata = {
+                            "foreign_keys": foreign_keys,
+                            "join_paths": join_paths,
+                        }
 
                 # Prepare update data
                 update_data = {

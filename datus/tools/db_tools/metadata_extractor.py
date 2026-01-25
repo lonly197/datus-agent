@@ -10,7 +10,7 @@ to extract row counts, column statistics, relationships, and business context.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import quote_identifier
@@ -390,6 +390,268 @@ class SnowflakeMetadataExtractor(BaseMetadataExtractor):
         return join_paths
 
 
+class StarRocksMetadataExtractor(BaseMetadataExtractor):
+    """
+    StarRocks-specific metadata extractor using information_schema.
+    """
+
+    def __init__(self, connector, dialect: str):
+        super().__init__(connector, dialect)
+        self._table_comment_cache: Dict[str, str] = {}
+        self._column_cache: Dict[str, List[Dict[str, Any]]] = {}
+
+    def extract_row_count(self, table_name: str) -> int:
+        """
+        Get approximate row count from information_schema.tables.
+        """
+        try:
+            database_name, clean_table = self._split_table_name(table_name)
+            if not clean_table:
+                return 0
+
+            if database_name:
+                query = (
+                    "SELECT COALESCE(TABLE_ROWS, 0) AS row_count "
+                    "FROM information_schema.tables "
+                    f"WHERE table_schema = {self._sql_literal(database_name)} "
+                    f"AND table_name = {self._sql_literal(clean_table)} "
+                    "LIMIT 1"
+                )
+                result = self._execute_list(query)
+                if result:
+                    row_count = result[0].get("row_count", 0)
+                    if row_count:
+                        return int(row_count)
+
+            qualified_table = self._qualified_table(database_name, clean_table)
+            if not qualified_table:
+                return 0
+            query = f"SELECT COUNT(*) as row_count FROM {qualified_table}"
+            result = self._execute_list(query)
+            if result:
+                return int(result[0].get("row_count", 0) or 0)
+
+        except Exception as e:
+            logger.warning(f"Failed to extract StarRocks row count for {table_name}: {e}")
+
+        return 0
+
+    def extract_column_statistics(self, table_name: str, sample_size: int = 10000) -> Dict[str, Dict]:
+        """
+        Extract column statistics for numeric columns using sampling.
+        """
+        try:
+            database_name, clean_table = self._split_table_name(table_name)
+            if not clean_table:
+                return {}
+
+            numeric_types = (
+                "tinyint",
+                "smallint",
+                "int",
+                "integer",
+                "bigint",
+                "largeint",
+                "float",
+                "double",
+                "decimal",
+                "numeric",
+            )
+            query = (
+                "SELECT COLUMN_NAME as column_name, DATA_TYPE as data_type "
+                "FROM information_schema.columns "
+                f"WHERE table_schema = {self._sql_literal(database_name)} "
+                f"AND table_name = {self._sql_literal(clean_table)} "
+                "AND LOWER(DATA_TYPE) IN ("
+                + ", ".join(self._sql_literal(t) for t in numeric_types)
+                + ")"
+            )
+            columns_result = self._execute_list(query)
+            if not columns_result:
+                return {}
+
+            qualified_table = self._qualified_table(database_name, clean_table)
+            if not qualified_table:
+                return {}
+
+            stats: Dict[str, Dict[str, Any]] = {}
+            for row in columns_result:
+                col = row.get("column_name")
+                if not col:
+                    continue
+                safe_col = quote_identifier(col, "mysql")
+                try:
+                    query = (
+                        "SELECT "
+                        f"MIN({safe_col}) as min_val, "
+                        f"MAX({safe_col}) as max_val, "
+                        f"AVG({safe_col}) as mean_val "
+                        f"FROM (SELECT {safe_col} FROM {qualified_table} LIMIT {sample_size}) AS sample"
+                    )
+                    result = self._execute_list(query)
+                    if result:
+                        stats_row = result[0]
+                        if stats_row.get("min_val") is not None:
+                            stats[col] = {
+                                "min": float(stats_row.get("min_val")),
+                                "max": float(stats_row.get("max_val")),
+                                "mean": (
+                                    float(stats_row.get("mean_val"))
+                                    if stats_row.get("mean_val") is not None
+                                    else None
+                                ),
+                                "std": None,
+                            }
+                except Exception as e:
+                    logger.debug(f"Failed to extract statistics for {table_name}.{col}: {e}")
+                    continue
+
+            return stats
+
+        except Exception as e:
+            logger.warning(f"Failed to extract StarRocks column statistics for {table_name}: {e}")
+            return {}
+
+    def detect_relationships(self, table_name: str) -> Dict[str, Any]:
+        """
+        Detect foreign key relationships from information_schema if available.
+        """
+        try:
+            database_name, clean_table = self._split_table_name(table_name)
+            if not clean_table or not database_name:
+                return {"foreign_keys": [], "join_paths": []}
+
+            query = (
+                "SELECT "
+                "COLUMN_NAME as from_column, "
+                "REFERENCED_TABLE_NAME as to_table, "
+                "REFERENCED_COLUMN_NAME as to_column "
+                "FROM information_schema.key_column_usage "
+                f"WHERE table_schema = {self._sql_literal(database_name)} "
+                f"AND table_name = {self._sql_literal(clean_table)} "
+                "AND REFERENCED_TABLE_NAME IS NOT NULL"
+            )
+            result = self._execute_list(query)
+            foreign_keys = []
+            if result:
+                for row in result:
+                    if row.get("from_column") and row.get("to_table") and row.get("to_column"):
+                        foreign_keys.append({
+                            "from_column": row.get("from_column"),
+                            "to_table": row.get("to_table"),
+                            "to_column": row.get("to_column"),
+                        })
+
+            return {
+                "foreign_keys": foreign_keys,
+                "join_paths": self._infer_join_paths(foreign_keys),
+            }
+
+        except Exception as e:
+            logger.warning(f"Failed to detect StarRocks relationships for {table_name}: {e}")
+            return {"foreign_keys": [], "join_paths": []}
+
+    def extract_table_metadata(self, table_name: str, database_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Extract table and column comments from information_schema.
+        """
+        database_name, clean_table = self._split_table_name(table_name, database_name)
+        if not clean_table or not database_name:
+            return {}
+
+        cache_key = f"{database_name}.{clean_table}"
+        table_comment = self._table_comment_cache.get(cache_key, "")
+        if not table_comment:
+            query = (
+                "SELECT TABLE_COMMENT as table_comment "
+                "FROM information_schema.tables "
+                f"WHERE table_schema = {self._sql_literal(database_name)} "
+                f"AND table_name = {self._sql_literal(clean_table)} "
+                "LIMIT 1"
+            )
+            result = self._execute_list(query)
+            if result:
+                table_comment = result[0].get("table_comment", "") or ""
+                self._table_comment_cache[cache_key] = table_comment
+
+        columns = self._column_cache.get(cache_key)
+        if columns is None:
+            query = (
+                "SELECT "
+                "COLUMN_NAME as column_name, "
+                "COLUMN_COMMENT as column_comment, "
+                "DATA_TYPE as data_type, "
+                "IS_NULLABLE as is_nullable "
+                "FROM information_schema.columns "
+                f"WHERE table_schema = {self._sql_literal(database_name)} "
+                f"AND table_name = {self._sql_literal(clean_table)} "
+                "ORDER BY ORDINAL_POSITION"
+            )
+            result = self._execute_list(query)
+            columns = []
+            if result:
+                for row in result:
+                    col_name = row.get("column_name")
+                    if not col_name:
+                        continue
+                    columns.append({
+                        "name": col_name,
+                        "comment": row.get("column_comment", "") or "",
+                        "type": row.get("data_type", "") or "",
+                        "nullable": str(row.get("is_nullable", "")).upper() != "NO",
+                    })
+            self._column_cache[cache_key] = columns
+
+        column_comments = {col["name"]: col.get("comment", "") for col in columns if col.get("comment")}
+        column_names = [col["name"] for col in columns]
+
+        return {
+            "table_comment": table_comment,
+            "columns": columns,
+            "column_comments": column_comments,
+            "column_names": column_names,
+        }
+
+    def _execute_list(self, sql: str) -> List[Dict[str, Any]]:
+        result = self.connector.execute_query(sql, result_format="list")
+        if not result or not getattr(result, "success", False):
+            return []
+        if isinstance(result.sql_return, list):
+            return result.sql_return
+        return []
+
+    def _sql_literal(self, value: Optional[str]) -> str:
+        if value is None:
+            return "NULL"
+        escaped = value.replace("'", "''")
+        return f"'{escaped}'"
+
+    def _split_table_name(self, table_name: str, database_name: Optional[str] = None) -> Tuple[str, str]:
+        clean = (table_name or "").replace("`", "").replace('"', "")
+        parts = [part for part in clean.split(".") if part]
+        clean_table = parts[-1] if parts else clean
+        inferred_db = database_name or (parts[-2] if len(parts) >= 2 else "")
+        if not inferred_db:
+            inferred_db = getattr(self.connector, "database_name", "") or getattr(self.connector, "database", "")
+        return inferred_db or "", clean_table
+
+    def _qualified_table(self, database_name: str, table_name: str) -> str:
+        if not table_name:
+            return ""
+        safe_table = quote_identifier(table_name, "mysql")
+        if database_name:
+            safe_db = quote_identifier(database_name, "mysql")
+            return f"{safe_db}.{safe_table}"
+        return safe_table
+
+    def _infer_join_paths(self, foreign_keys: List[Dict]) -> List[str]:
+        join_paths = []
+        for fk in foreign_keys:
+            join_path = f"{fk['from_column']} -> {fk['to_table']}.{fk['to_column']}"
+            join_paths.append(join_path)
+        return join_paths
+
+
 def get_metadata_extractor(connector, dialect: str) -> BaseMetadataExtractor:
     """
     Factory function to get the appropriate metadata extractor for a database type.
@@ -404,6 +666,7 @@ def get_metadata_extractor(connector, dialect: str) -> BaseMetadataExtractor:
     extractors = {
         "duckdb": DuckDBMetadataExtractor,
         "snowflake": SnowflakeMetadataExtractor,
+        "starrocks": StarRocksMetadataExtractor,
         # Future implementations:
         # "mysql": MySQLMetadataExtractor,
         # "postgres": PostgreSQLMetadataExtractor,

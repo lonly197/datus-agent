@@ -13,6 +13,7 @@ from datus.storage.schema_metadata.store import SchemaWithValueRAG
 from datus.configuration.business_term_config import infer_business_tags
 from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.db_manager import DBManager
+from datus.tools.db_tools.metadata_extractor import get_metadata_extractor
 from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import (
@@ -632,6 +633,13 @@ def store_tables(
     new_tables: List[Dict[str, Any]] = []
     new_values: List[Dict[str, Any]] = []
     incoming_identifiers: Set[str] = set()
+    metadata_extractor = None
+    is_starrocks = str(getattr(connector, "dialect", "")).lower() == DBType.STARROCKS
+    if is_starrocks:
+        try:
+            metadata_extractor = get_metadata_extractor(connector, connector.dialect)
+        except Exception as exc:
+            logger.debug(f"Failed to initialize StarRocks metadata extractor: {exc}")
     for table in tables:
         if not table.get("database_name"):
             table["database_name"] = database_name
@@ -650,7 +658,53 @@ def store_tables(
         # Fix and clean DDL before storing
         table["definition"] = sanitize_ddl_for_storage(table["definition"])
         definition = table.get("definition", "")
-        if definition:
+        used_information_schema = False
+        if metadata_extractor and hasattr(metadata_extractor, "extract_table_metadata"):
+            try:
+                starrocks_metadata = metadata_extractor.extract_table_metadata(
+                    table.get("table_name", ""),
+                    database_name=table.get("database_name", ""),
+                )
+            except Exception as exc:
+                logger.debug(f"Failed to read StarRocks metadata for {table.get('table_name', '')}: {exc}")
+                starrocks_metadata = {}
+            if starrocks_metadata and starrocks_metadata.get("columns"):
+                used_information_schema = True
+                table_comment = starrocks_metadata.get("table_comment", "") or ""
+                column_comments = starrocks_metadata.get("column_comments", {}) or {}
+                column_enums: Dict[str, List[Dict[str, str]]] = {}
+                for col_name, col_comment in column_comments.items():
+                    enum_pairs = extract_enum_values_from_comment(col_comment)
+                    if enum_pairs:
+                        column_enums[col_name] = [
+                            {"value": code, "label": label} for code, label in enum_pairs
+                        ]
+                column_names = starrocks_metadata.get("column_names", []) or []
+                business_tags = infer_business_tags(table.get("table_name", ""), column_names)
+                relationship_metadata: Dict[str, Any] = {}
+                try:
+                    relationships = metadata_extractor.detect_relationships(table.get("table_name", ""))
+                    if relationships and (relationships.get("foreign_keys") or relationships.get("join_paths")):
+                        relationship_metadata = relationships
+                except Exception as exc:
+                    logger.debug(f"Failed to detect StarRocks relationships: {exc}")
+                if table_comment:
+                    table["table_comment"] = table_comment
+                if column_comments:
+                    table["column_comments"] = json.dumps(column_comments, ensure_ascii=False)
+                if column_enums:
+                    table["column_enums"] = json.dumps(column_enums, ensure_ascii=False)
+                if business_tags:
+                    table["business_tags"] = business_tags
+                if relationship_metadata:
+                    table["relationship_metadata"] = json.dumps(relationship_metadata, ensure_ascii=False)
+                if table_comment or column_comments:
+                    table["definition"] = table_lineage_store.schema_store._enhance_definition_with_comments(
+                        definition=definition,
+                        table_comment=table_comment,
+                        column_comments=column_comments,
+                    )
+        if definition and not used_information_schema:
             try:
                 parsed_metadata = extract_enhanced_metadata_from_ddl(
                     definition, dialect=parse_dialect(getattr(connector, "dialect", ""))
