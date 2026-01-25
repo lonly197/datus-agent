@@ -52,8 +52,26 @@ _COLUMN_COMMENT_RE = re.compile(
     re.IGNORECASE
 )
 
+_ENUM_HINT_RE = re.compile(
+    r"(枚举|取值|值域|范围|状态|类型|可选|选项|option|enum)",
+    re.IGNORECASE,
+)
+
+_ENUM_SEGMENT_RE = re.compile(
+    r"[（(【\[]([^）)】\]]+)[）)】\]]"
+)
+
+_ENUM_CODE_RE = re.compile(
+    r"(?:-?\d+(?:\.\d+)?|[A-Za-z][A-Za-z0-9_]{0,5}|true|false|yes|no|on|off|y|n)",
+    re.IGNORECASE,
+)
+
 _ENUM_PAIR_RE = re.compile(
-    r'(?P<code>-?\d+)\s*[:：=\-]\s*(?P<label>[^;；,，、)]*?)\s*(?=(?:-?\d+\s*[:：=\-])|$)',
+    r"(?P<code>-?\d+(?:\.\d+)?|[A-Za-z][A-Za-z0-9_]{0,5}|true|false|yes|no|on|off|y|n)"
+    r"\s*(?P<sep>[:：=\-—~、\.．\)）])\s*"
+    r"(?P<label>[^;；,，、/\n]+?)\s*"
+    r"(?=(?:-?\d+(?:\.\d+)?|[A-Za-z][A-Za-z0-9_]{0,5}|true|false|yes|no|on|off|y|n)"
+    r"\s*(?:[:：=\-—~、\.．\)）])|$)",
     re.IGNORECASE,
 )
 
@@ -351,23 +369,65 @@ def extract_enum_values_from_comment(comment: str) -> List[Tuple[str, str]]:
     if not comment or not isinstance(comment, str):
         return []
 
-    matches = list(_ENUM_PAIR_RE.finditer(comment))
-    if not matches:
-        return []
+    allow_single = bool(_ENUM_HINT_RE.search(comment))
 
+    candidates = [comment]
+    for segment in _ENUM_SEGMENT_RE.findall(comment):
+        segment = segment.strip()
+        if segment and segment not in candidates:
+            candidates.append(segment)
+
+    numeric_pairs: List[Tuple[str, str]] = []
+    alpha_pairs: List[Tuple[str, str]] = []
+
+    def _clean_label(value: str) -> str:
+        cleaned = value.strip()
+        return cleaned.strip(" ;；,，、")
+
+    for text in candidates:
+        for match in _ENUM_PAIR_RE.finditer(text):
+            code = match.group("code").strip()
+            label = _clean_label(match.group("label"))
+            if not code or not label:
+                continue
+            if re.fullmatch(r"-?\d+(?:\.\d+)?", code):
+                numeric_pairs.append((code, label))
+            else:
+                alpha_pairs.append((code, label))
+
+    allow_alpha = allow_single or bool(numeric_pairs)
     pairs: List[Tuple[str, str]] = []
-    for match in matches:
-        code = match.group("code").strip()
-        label = match.group("label").strip()
-        if not code or not label:
-            continue
-        pairs.append((code, label))
+    pairs.extend(numeric_pairs)
 
-    # Require at least 2 pairs to reduce false positives.
-    if len(pairs) < 2:
+    if allow_alpha and alpha_pairs:
+        # Filter overly generic codes to reduce false positives.
+        for code, label in alpha_pairs:
+            code_lower = code.lower()
+            if code_lower in {"id", "name", "type", "status"}:
+                continue
+            if len(code_lower) > 6 and code_lower not in {"true", "false"}:
+                continue
+            pairs.append((code, label))
+
+    if len(pairs) < 2 and not allow_single:
         return []
 
-    return pairs
+    # Deduplicate while preserving order.
+    seen = set()
+    deduped: List[Tuple[str, str]] = []
+    for code, label in pairs:
+        key = (code, label)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+
+    if not deduped:
+        return []
+    if len(deduped) == 1 and not allow_single:
+        return []
+
+    return deduped
 
 
 def _extract_table_comment_after_columns(sql: str) -> Optional[str]:
