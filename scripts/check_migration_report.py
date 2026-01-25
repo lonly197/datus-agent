@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 from datus.configuration.agent_config_loader import load_agent_config
 from datus.storage.embedding_models import get_db_embedding_model
-from datus.storage.schema_metadata import SchemaStorage
+from datus.storage.schema_metadata.store import SchemaStorage
 
 
 def _load_table_rows(storage: SchemaStorage) -> List[Dict[str, Any]]:
