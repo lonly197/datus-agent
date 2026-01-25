@@ -913,6 +913,14 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --config=conf/agent.yml \
     --force
 
+# 导入前清空旧表（避免 v0 影响检索）
+python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+    --config=conf/agent.yml \
+    --namespace=<name> \
+    --import-schemas \
+    --clear \
+    --force
+
 # 覆盖配置路径（不推荐，优先使用配置文件）
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --config=conf/agent.yml \

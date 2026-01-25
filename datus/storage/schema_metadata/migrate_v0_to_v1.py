@@ -1092,7 +1092,7 @@ def str_to_bool(v):
         raise argparse.ArgumentTypeError(f'Boolean value expected, got: {v}')
 
 
-def import_schema_metadata(agent_config: AgentConfig, namespace: str) -> int:
+def import_schema_metadata(agent_config: AgentConfig, namespace: str, clear_before_import: bool = False) -> int:
     """
     Import schema metadata from database into LanceDB after migration.
 
@@ -1144,6 +1144,24 @@ def import_schema_metadata(agent_config: AgentConfig, namespace: str) -> int:
         # Initialize storage with namespace
         agent_config.current_namespace = namespace
         storage = SchemaWithValueRAG(agent_config)
+        schema_store = storage.schema_store
+
+        if clear_before_import:
+            logger.info("Clearing existing schema_metadata and schema_value before import...")
+            try:
+                if schema_store.table_name in schema_store.db.table_names(limit=100):
+                    schema_store.db.drop_table(schema_store.table_name)
+                schema_store.table = None
+                schema_store._table_initialized = False
+                schema_store._ensure_table_ready()
+                value_store = storage.value_store
+                if value_store.table_name in value_store.db.table_names(limit=100):
+                    value_store.db.drop_table(value_store.table_name)
+                value_store.table = None
+                value_store._table_initialized = False
+            except Exception as exc:
+                logger.error(f"Failed to clear schema tables before import: {exc}")
+                return 0
 
         # Get database manager - MUST pass namespaces configuration
         db_manager = get_db_manager(agent_config.namespaces)
@@ -1160,7 +1178,6 @@ def import_schema_metadata(agent_config: AgentConfig, namespace: str) -> int:
         )
 
         # Verify import was successful
-        schema_store = storage.schema_store
         schema_store._ensure_table_ready()
 
         all_data = schema_store._search_all(
@@ -1442,6 +1459,11 @@ def main():
     parser.add_argument("--skip-backup", action="store_true", help="Skip backup creation")
     parser.add_argument("--force", action="store_true", help="Force migration even if v1 already exists")
     parser.add_argument("--import-schemas", action="store_true", help="Import schema metadata from database after migration (recommended for fresh installations)")
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Clear existing schema_metadata and schema_value before import",
+    )
     parser.add_argument("--llm-fallback", action="store_true", help="Use LLM as final fallback for DDL parsing failures")
     parser.add_argument("--llm-model", help="Optional model name for LLM fallback (defaults to active model)")
 
@@ -1616,7 +1638,11 @@ def main():
                 # Import schema metadata if requested
                 if args.import_schemas:
                     logger.info("Step 4/4: Importing schema metadata from database...")
-                    imported_count = import_schema_metadata(agent_config, namespace)
+                    imported_count = import_schema_metadata(
+                        agent_config,
+                        namespace,
+                        clear_before_import=args.clear,
+                    )
                     migration_results["schemas_imported"] = imported_count
 
                     if imported_count > 0:
