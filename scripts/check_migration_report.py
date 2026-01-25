@@ -86,6 +86,12 @@ def main() -> int:
     column_enums_count = sum(1 for row in rows if _non_empty_json(row.get("column_enums")))
     business_tags_count = sum(1 for row in rows if row.get("business_tags"))
     relationship_count = sum(1 for row in rows if _non_empty_json(row.get("relationship_metadata")))
+    relationship_source_counter = Counter()
+    for row in rows:
+        rel_meta = _safe_json(row.get("relationship_metadata"))
+        source = rel_meta.get("source") if isinstance(rel_meta, dict) else None
+        if source:
+            relationship_source_counter[source] += 1
     row_count_count = sum(1 for row in rows if (row.get("row_count") or 0) > 0)
     stats_count = sum(1 for row in rows if _non_empty_json(row.get("sample_statistics")))
     v1_count = sum(1 for row in rows if row.get("metadata_version") == 1)
@@ -110,6 +116,11 @@ def main() -> int:
     print(f"  relationship_metadata:{ratio(relationship_count)}")
     print(f"  row_count:            {ratio(row_count_count)}")
     print(f"  sample_statistics:    {ratio(stats_count)}")
+    if relationship_source_counter:
+        print("")
+        print("Relationship sources:")
+        for source, count in relationship_source_counter.most_common():
+            print(f"  {source}: {count}")
     print("")
     print(f"Top {args.top_tags} business tags:")
     for tag, count in tag_counter.most_common(args.top_tags):
