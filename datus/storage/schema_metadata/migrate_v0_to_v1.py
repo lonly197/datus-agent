@@ -186,9 +186,8 @@ def report_migration_state(db_path: str, table_name: str = "schema_metadata"):
         logger.info(f"✓ Table '{table_name}' EXISTS")
         table = db.open_table(table_name)
 
-        # Get record count
-        all_data = table.to_arrow()
-        count = len(all_data)
+        # Get record count (avoid sampling defaults)
+        count = table.count_rows()
         logger.info(f"  Record count: {count}")
 
         # Check schema
@@ -212,10 +211,10 @@ def report_migration_state(db_path: str, table_name: str = "schema_metadata"):
                 logger.info(f"    Missing: {', '.join(missing)}")
 
         # Check metadata_version distribution if field exists
-        if "metadata_version" in field_names:
+        if "metadata_version" in field_names and count > 0:
             try:
-                # Select only metadata_version to reduce payload
-                version_data = table.search().select(["metadata_version"]).to_arrow()
+                # Select only metadata_version to reduce payload; explicitly fetch all rows.
+                version_data = table.search().select(["metadata_version"]).limit(count).to_arrow()
                 versions = [row.get("metadata_version", 0) for row in version_data.to_pylist()]
                 version_counts = Counter(versions)
                 logger.info(f"  Version distribution: {dict(version_counts)}")
@@ -354,6 +353,8 @@ def migrate_schema_storage(
     llm_fallback: bool = False,
     llm_model: Optional[LLMBaseModel] = None,
     update_existing: bool = False,
+    db_manager: Optional[Any] = None,
+    namespace: Optional[str] = None,
 ) -> int:
     """
     Migrate schema metadata from v0 to v1 format.
@@ -371,6 +372,8 @@ def migrate_schema_storage(
         backup_path: Path to JSON backup file from cleanup script (recommended)
         extract_statistics: Whether to extract column statistics (expensive)
         extract_relationships: Whether to extract relationship metadata
+        db_manager: Optional DBManager for statistics extraction
+        namespace: Namespace for DBManager lookups
 
     Returns:
         Number of records migrated
@@ -466,6 +469,68 @@ def migrate_schema_storage(
             "indexes": response.get("indexes", []) if isinstance(response.get("indexes"), list) else [],
         }
 
+    from datus.tools.db_tools.metadata_extractor import get_metadata_extractor
+
+    metadata_extractor_cache: Dict[str, Optional[Any]] = {}
+    db_configs: Dict[str, Any] = {}
+    if db_manager and namespace:
+        try:
+            db_configs = db_manager.current_db_configs(namespace)
+        except Exception as exc:
+            logger.warning(f"Failed to load database configs for namespace '{namespace}': {exc}")
+            db_configs = {}
+    elif extract_statistics:
+        logger.warning("Extract statistics requested but no namespace/db connection available; using defaults.")
+
+    has_multiple_configs = len(db_configs) > 1
+
+    def _resolve_connector(database_name: str):
+        if not db_manager or not namespace:
+            return "__default__", None
+        logic_name = ""
+        if database_name:
+            if database_name in db_configs:
+                logic_name = database_name
+            else:
+                for name, cfg in db_configs.items():
+                    if getattr(cfg, "database", "") == database_name:
+                        logic_name = name
+                        break
+        if has_multiple_configs and not logic_name and database_name:
+            logger.warning(
+                f"Could not match database '{database_name}' to config; using first configured connection."
+            )
+        try:
+            connector = db_manager.get_conn(namespace, logic_name)
+        except Exception as exc:
+            logger.warning(f"Failed to get database connection for '{database_name or 'default'}': {exc}")
+            return logic_name or "__default__", None
+        return logic_name or "__default__", connector
+
+    def _get_metadata_extractor(database_name: str):
+        if not db_manager or not namespace:
+            return None
+        cache_key, connector = _resolve_connector(database_name)
+        if not connector:
+            return None
+        if cache_key not in metadata_extractor_cache:
+            if not hasattr(connector, "execute_sql"):
+                logger.warning(
+                    f"Connector for dialect '{connector.dialect}' does not support execute_sql; "
+                    "skipping statistics extraction."
+                )
+                metadata_extractor_cache[cache_key] = None
+                return None
+            try:
+                metadata_extractor_cache[cache_key] = get_metadata_extractor(connector, connector.dialect)
+            except TypeError as exc:
+                logger.warning(f"No metadata extractor available for dialect '{connector.dialect}': {exc}")
+                metadata_extractor_cache[cache_key] = None
+            except Exception as exc:
+                logger.warning(f"Failed to initialize metadata extractor: {exc}")
+                metadata_extractor_cache[cache_key] = None
+        return metadata_extractor_cache[cache_key]
+
     try:
         # Step 1: Load source data
         if backup_path and os.path.exists(backup_path):
@@ -521,7 +586,11 @@ def migrate_schema_storage(
             "table_type",
             "definition",
         }
-        if storage.table_name in storage.db.table_names(limit=100):
+        table_exists = storage.table_name in storage.db.table_names(limit=100)
+        table_recreated = not table_exists
+        recreate_table = update_existing
+
+        if table_exists:
             existing_schema = storage.db.open_table(storage.table_name).schema
             existing_fields = set(existing_schema.names)
             missing_required = [field for field in required_fields if field not in existing_fields]
@@ -530,17 +599,26 @@ def migrate_schema_storage(
                     "Existing schema is missing v1 fields; recreating table: "
                     f"{', '.join(missing_required)}"
                 )
-                try:
-                    storage.db.drop_table(storage.table_name)
-                except Exception as exc:
-                    logger.error(f"Failed to drop existing table: {exc}")
-                    logger.warning("Migration will proceed by omitting missing fields from inserts")
+                recreate_table = True
+
+        if table_exists and recreate_table:
+            if update_existing:
+                logger.info("Force mode enabled; recreating table to avoid per-row updates.")
+            try:
+                storage.db.drop_table(storage.table_name)
+                table_recreated = True
+            except Exception as exc:
+                logger.error(f"Failed to drop existing table: {exc}")
+                logger.warning("Migration will proceed with in-place updates; per-record deletes may fail.")
 
         # Reset initialization to force table creation with v1 schema
         storage.table = None
         storage._table_initialized = False
         storage._ensure_table_ready()
-        logger.info(f"Created fresh v1 table: {storage.table_name}")
+        if table_recreated:
+            logger.info(f"Created fresh v1 table: {storage.table_name}")
+        else:
+            logger.info(f"Using existing v1 table: {storage.table_name}")
         table_fields = set(storage.table.schema.names)
         missing_core = [field for field in core_fields if field not in table_fields]
         if missing_core:
@@ -558,11 +636,15 @@ def migrate_schema_storage(
         batch_updates = []
         batch_status = []
         existing_identifiers = set()
-        try:
-            existing_data = storage._search_all(where=None, select_fields=["identifier"])
-            existing_identifiers = {row.get("identifier", "") for row in existing_data.to_pylist() if row.get("identifier")}
-        except Exception as exc:
-            logger.debug(f"Could not load existing identifiers: {exc}")
+        update_existing_effective = update_existing and not table_recreated
+        if not table_recreated:
+            try:
+                existing_data = storage._search_all(where=None, select_fields=["identifier"])
+                existing_identifiers = {
+                    row.get("identifier", "") for row in existing_data.to_pylist() if row.get("identifier")
+                }
+            except Exception as exc:
+                logger.debug(f"Could not load existing identifiers: {exc}")
 
         for i, row in enumerate(backup_records):
             try:
@@ -576,10 +658,10 @@ def migrate_schema_storage(
                 qualified_table = ".".join(part for part in [database_name, schema_name, table_name] if part)
                 logger.info(f"[{i + 1}/{total_records}] Processing {qualified_table} ({table_type})")
 
-                if identifier in existing_identifiers and not update_existing:
+                if identifier in existing_identifiers and not update_existing_effective:
                     logger.info(f"  - SKIP: already exists in storage")
                     continue
-                if identifier in existing_identifiers and update_existing:
+                if identifier in existing_identifiers and update_existing_effective:
                     try:
                         escaped_identifier = _escape_where_value(identifier)
                         storage.table.delete(f'identifier = "{escaped_identifier}"')
@@ -629,6 +711,27 @@ def migrate_schema_storage(
                 column_names = [col["name"] for col in enhanced_metadata["columns"]]
                 business_tags = infer_business_tags(table_name, column_names)
 
+                # Extract statistics (row count + column stats) from live database
+                row_count = 0
+                sample_statistics: Dict[str, Dict[str, Any]] = {}
+                if extract_statistics:
+                    metadata_extractor = _get_metadata_extractor(database_name)
+                    if metadata_extractor:
+                        stats_table_name = table_name
+                        if schema_name:
+                            stats_table_name = f"{schema_name}.{table_name}"
+                        try:
+                            row_count = metadata_extractor.extract_row_count(stats_table_name)
+                            logger.debug(f"  Row count: {row_count}")
+                        except Exception as exc:
+                            logger.debug(f"  Could not extract row count: {exc}")
+                        if row_count > 1000:
+                            try:
+                                sample_statistics = metadata_extractor.extract_column_statistics(stats_table_name)
+                                logger.debug(f"  Column statistics: {len(sample_statistics)} columns")
+                            except Exception as exc:
+                                logger.debug(f"  Could not extract column statistics: {exc}")
+
                 # Build relationship metadata
                 relationship_metadata = {}
                 if extract_relationships:
@@ -655,8 +758,8 @@ def migrate_schema_storage(
                     "column_comments": json.dumps(column_comments, ensure_ascii=False),
                     "column_enums": json.dumps(column_enums, ensure_ascii=False),
                     "business_tags": business_tags,
-                    "row_count": 0,  # Will be populated if extract_statistics=True
-                    "sample_statistics": json.dumps({}, ensure_ascii=False),  # Empty initially
+                    "row_count": row_count,
+                    "sample_statistics": json.dumps(sample_statistics, ensure_ascii=False),
                     "relationship_metadata": json.dumps(relationship_metadata, ensure_ascii=False),
                     "metadata_version": 1,  # Mark as v1
                     "last_updated": int(time.time())
@@ -665,7 +768,7 @@ def migrate_schema_storage(
                     update_data = {key: value for key, value in update_data.items() if key in table_fields}
 
                 # LanceDB handles embedding automatically via table's embedding function config
-                action = "UPDATE" if identifier in existing_identifiers and update_existing else "INSERT"
+                action = "UPDATE" if identifier in existing_identifiers and update_existing_effective else "INSERT"
                 batch_updates.append(update_data)
                 batch_status.append((qualified_table, action))
                 migrated_count += 1
@@ -1381,6 +1484,15 @@ def main():
             logger.warning("Disabling LLM fallback for this run")
             args.llm_fallback = False
 
+    db_manager = None
+    if args.extract_statistics and namespace:
+        try:
+            from datus.tools.db_tools.db_manager import get_db_manager
+            db_manager = get_db_manager(agent_config.namespaces)
+        except Exception as e:
+            logger.warning(f"Failed to initialize DB manager for statistics extraction: {e}")
+            db_manager = None
+
     # Perform migration
     logger.info("Starting migration...")
     logger.info("")
@@ -1406,6 +1518,8 @@ def main():
             llm_fallback=args.llm_fallback,
             llm_model=llm_model,
             update_existing=args.force,
+            db_manager=db_manager,
+            namespace=namespace,
         )
         migration_results["schemas_migrated"] = migrated_schemas
         logger.info(f"✅ Migrated {migrated_schemas} schema records")
