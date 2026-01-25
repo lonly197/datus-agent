@@ -53,10 +53,14 @@ def setup_signal_handlers() -> None:
     def _handle_signal(sig, frame):
         global _shutdown_signal_count
         _shutdown_signal_count += 1
-        signal_name = signal.Signals(sig).name
-        logger.warning(f"Received {signal_name}; exiting immediately.")
         _shutdown_event.set()
-        raise SystemExit(130)
+        try:
+            signal_name = signal.Signals(sig).name
+            message = f"Received {signal_name}; exiting immediately.\n"
+            os.write(2, message.encode())
+        except Exception:
+            pass
+        os._exit(130)
 
     try:
         signal.signal(signal.SIGINT, _handle_signal)
