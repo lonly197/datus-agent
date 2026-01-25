@@ -16,7 +16,6 @@ from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import (
     extract_enhanced_metadata_from_ddl,
     extract_enum_values_from_comment,
-    fix_truncated_ddl,
     parse_dialect,
     sanitize_ddl_for_storage,
     validate_comment,
@@ -744,11 +743,6 @@ def store_tables(
         logger.info(f"Stored {len(new_tables)} {table_type}s and {len(new_values)} values for {database_name}")
     else:
         logger.info(f"No new {table_type}s or values to store for {database_name}")
-
-
-def _fix_truncated_ddl(ddl: str) -> str:
-    """Backward-compatible wrapper for legacy callers."""
-    return fix_truncated_ddl(ddl)
 
 
 def _llm_fallback_parse_ddl(ddl: str, llm_model: Optional[LLMBaseModel]) -> Optional[Dict[str, Any]]:
