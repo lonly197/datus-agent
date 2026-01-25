@@ -957,6 +957,34 @@ print('Version distribution:', Counter(row.get('metadata_version', 0) for row in
 "
 ```
 
+### 3.4 使用检查脚本（推荐）
+
+用于统计迁移后字段覆盖率与业务术语分布，快速判断是否满足文档设计要求。
+
+```bash
+# 使用配置文件中的命名空间
+python scripts/check_migration_report.py \
+  --config=conf/agent.yml \
+  --namespace=<name>
+
+# 指定 LanceDB 路径（可选）
+python scripts/check_migration_report.py \
+  --config=conf/agent.yml \
+  --db-path=/custom/path/to/lancedb
+
+# 控制 business_tags 输出数量（默认 10）
+python scripts/check_migration_report.py \
+  --config=conf/agent.yml \
+  --namespace=<name> \
+  --top-tags=20
+```
+
+输出内容包括：
+- v1 记录占比
+- table_comment / column_comments / column_enums / business_tags 填充率
+- relationship_metadata、row_count、sample_statistics 填充率
+- Top N business_tags 分布
+
 ### D. 联系与支持
 
 - **文档更新**: 2025-01-18
