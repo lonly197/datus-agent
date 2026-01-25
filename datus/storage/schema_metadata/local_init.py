@@ -19,6 +19,7 @@ from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import (
     extract_enhanced_metadata_from_ddl,
+    extract_metadata_from_ddl_regex_only,
     extract_enum_values_from_comment,
     parse_dialect,
     sanitize_ddl_for_storage,
@@ -822,6 +823,26 @@ def store_tables(
                 used_information_schema = True
                 table_comment = starrocks_metadata.get("table_comment", "") or ""
                 column_comments = starrocks_metadata.get("column_comments", {}) or {}
+                column_names = starrocks_metadata.get("column_names", []) or []
+                if definition and (not table_comment or not column_comments):
+                    regex_metadata = extract_metadata_from_ddl_regex_only(
+                        definition,
+                        dialect=DBType.STARROCKS,
+                        warn_on_invalid=False,
+                    )
+                    regex_table_comment = regex_metadata.get("table", {}).get("comment", "") or ""
+                    if not table_comment and regex_table_comment:
+                        table_comment = regex_table_comment
+                    regex_column_comments = {
+                        col.get("name", ""): col.get("comment", "")
+                        for col in regex_metadata.get("columns", [])
+                        if col.get("name") and col.get("comment")
+                    }
+                    for col_name, col_comment in regex_column_comments.items():
+                        if col_name not in column_comments:
+                            column_comments[col_name] = col_comment
+                if not column_names and column_comments:
+                    column_names = list(column_comments.keys())
                 column_enums: Dict[str, List[Dict[str, str]]] = {}
                 for col_name, col_comment in column_comments.items():
                     enum_pairs = extract_enum_values_from_comment(col_comment)
@@ -829,14 +850,15 @@ def store_tables(
                         column_enums[col_name] = [
                             {"value": code, "label": label} for code, label in enum_pairs
                         ]
-                column_names = starrocks_metadata.get("column_names", []) or []
                 business_tags = infer_business_tags(table.get("table_name", ""), column_names)
                 relationship_metadata: Dict[str, Any] = {}
                 if extract_relationships:
+                    relationship_source = ""
                     try:
                         relationships = metadata_extractor.detect_relationships(table.get("table_name", ""))
                         if relationships and (relationships.get("foreign_keys") or relationships.get("join_paths")):
                             relationship_metadata = relationships
+                            relationship_source = "information_schema"
                     except Exception as exc:
                         logger.debug(f"Failed to detect StarRocks relationships: {exc}")
                     if not relationship_metadata and column_names and table_name_map:
@@ -847,6 +869,9 @@ def store_tables(
                         )
                         if inferred:
                             relationship_metadata = inferred
+                            relationship_source = "heuristic"
+                    if relationship_metadata and relationship_source and "source" not in relationship_metadata:
+                        relationship_metadata["source"] = relationship_source
                 if extract_statistics:
                     try:
                         row_count = metadata_extractor.extract_row_count(table.get("table_name", ""))
@@ -879,6 +904,52 @@ def store_tables(
                         table_comment=table_comment,
                         column_comments=column_comments,
                     )
+        if is_starrocks and definition and not used_information_schema:
+            regex_metadata = extract_metadata_from_ddl_regex_only(
+                definition,
+                dialect=DBType.STARROCKS,
+                warn_on_invalid=False,
+            )
+            table_comment = regex_metadata.get("table", {}).get("comment", "") or ""
+            column_comments = {
+                col.get("name", ""): col.get("comment", "")
+                for col in regex_metadata.get("columns", [])
+                if col.get("name") and col.get("comment")
+            }
+            column_names = [col.get("name", "") for col in regex_metadata.get("columns", []) if col.get("name")]
+            column_enums: Dict[str, List[Dict[str, str]]] = {}
+            for col_name, col_comment in column_comments.items():
+                enum_pairs = extract_enum_values_from_comment(col_comment)
+                if enum_pairs:
+                    column_enums[col_name] = [{"value": code, "label": label} for code, label in enum_pairs]
+            business_tags = infer_business_tags(table.get("table_name", ""), column_names)
+            relationship_metadata: Dict[str, Any] = {}
+            if extract_relationships and column_names and table_name_map:
+                inferred = _infer_relationships_from_names(
+                    table.get("table_name", ""),
+                    column_names,
+                    table_name_map,
+                )
+                if inferred:
+                    relationship_metadata = inferred
+                    if "source" not in relationship_metadata:
+                        relationship_metadata["source"] = "heuristic"
+            if table_comment:
+                table["table_comment"] = table_comment
+            if column_comments:
+                table["column_comments"] = json.dumps(column_comments, ensure_ascii=False)
+            if column_enums:
+                table["column_enums"] = json.dumps(column_enums, ensure_ascii=False)
+            if business_tags:
+                table["business_tags"] = business_tags
+            if relationship_metadata:
+                table["relationship_metadata"] = json.dumps(relationship_metadata, ensure_ascii=False)
+            if table_comment or column_comments:
+                table["definition"] = table_lineage_store.schema_store._enhance_definition_with_comments(
+                    definition=definition,
+                    table_comment=table_comment,
+                    column_comments=column_comments,
+                )
         if extract_statistics and metadata_extractor and row_count == 0:
             try:
                 row_count = metadata_extractor.extract_row_count(table.get("table_name", ""))

@@ -895,6 +895,7 @@ def migrate_schema_storage(
                 if extract_relationships:
                     foreign_keys = enhanced_metadata.get("foreign_keys", [])
                     join_paths: List[str] = []
+                    relationship_source = ""
                     if (
                         metadata_extractor
                         and _normalize_dialect(getattr(metadata_extractor, "dialect", "")) == DBType.STARROCKS
@@ -904,6 +905,8 @@ def migrate_schema_storage(
                             if relationships:
                                 foreign_keys = relationships.get("foreign_keys", []) or foreign_keys
                                 join_paths = relationships.get("join_paths", []) or []
+                                if foreign_keys or join_paths:
+                                    relationship_source = "information_schema"
                         except Exception as exc:
                             logger.debug(f"  Could not detect StarRocks relationships: {exc}")
                     if not foreign_keys and column_names and table_name_map:
@@ -911,6 +914,8 @@ def migrate_schema_storage(
                         if inferred:
                             foreign_keys = inferred.get("foreign_keys", [])
                             join_paths = inferred.get("join_paths", [])
+                            if foreign_keys or join_paths:
+                                relationship_source = "heuristic"
                     if foreign_keys:
                         if not join_paths:
                             join_paths = [
@@ -921,6 +926,8 @@ def migrate_schema_storage(
                             "foreign_keys": foreign_keys,
                             "join_paths": join_paths,
                         }
+                        if relationship_source:
+                            relationship_metadata["source"] = relationship_source
 
                 # Prepare update data
                 update_data = {

@@ -423,6 +423,19 @@ class StarRocksMetadataExtractor(BaseMetadataExtractor):
                     if row_count:
                         return int(row_count)
 
+            try:
+                show_query = "SHOW TABLE STATUS"
+                if database_name:
+                    show_query += f" FROM {quote_identifier(database_name, 'mysql')}"
+                show_query += f" LIKE {self._sql_literal(clean_table)}"
+                status_rows = self._execute_list(show_query)
+                if status_rows:
+                    row_count = self._get_case_insensitive(status_rows[0], "rows")
+                    if row_count:
+                        return int(row_count)
+            except Exception as exc:
+                logger.debug(f"Failed to read row count from SHOW TABLE STATUS: {exc}")
+
             qualified_table = self._qualified_table(database_name, clean_table)
             if not qualified_table:
                 return 0
@@ -619,6 +632,15 @@ class StarRocksMetadataExtractor(BaseMetadataExtractor):
         if isinstance(result.sql_return, list):
             return result.sql_return
         return []
+
+    def _get_case_insensitive(self, row: Dict[str, Any], key: str) -> Optional[Any]:
+        if not row:
+            return None
+        target = key.lower()
+        for k, v in row.items():
+            if str(k).lower() == target:
+                return v
+        return None
 
     def _sql_literal(self, value: Optional[str]) -> str:
         if value is None:

@@ -1233,6 +1233,47 @@ def extract_enhanced_metadata_from_ddl(
     return result
 
 
+def extract_metadata_from_ddl_regex_only(
+    sql: str,
+    dialect: str = DBType.SNOWFLAKE,
+    warn_on_invalid: bool = True,
+) -> Dict[str, Any]:
+    """
+    Parse DDL using regex-only strategy (no sqlglot).
+
+    This is intended for dialects where sqlglot is noisy or fails frequently.
+    """
+    is_valid, error_msg = validate_sql_input(sql)
+    if not is_valid:
+        cleaned_sql = sanitize_ddl_for_storage(sql)
+        if cleaned_sql and cleaned_sql != sql:
+            retry_valid, retry_error = validate_sql_input(cleaned_sql)
+            if retry_valid:
+                sql = cleaned_sql
+                is_valid = True
+            else:
+                error_msg = retry_error or error_msg
+                sql = cleaned_sql
+        if not is_valid:
+            if "Unbalanced parentheses" in error_msg:
+                logger.debug(f"Continuing regex-only parsing despite: {error_msg}")
+            else:
+                if warn_on_invalid:
+                    logger.warning(f"Invalid SQL input: {error_msg}")
+                else:
+                    logger.debug(f"Invalid SQL input: {error_msg}")
+                return {
+                    "table": {"name": "", "comment": ""},
+                    "columns": [],
+                    "primary_keys": [],
+                    "foreign_keys": [],
+                    "indexes": []
+                }
+
+    dialect = parse_dialect(dialect)
+    return _parse_ddl_with_regex(sql, dialect)
+
+
 def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
     """
     Fallback regex-based DDL parser for when sqlglot fails.
