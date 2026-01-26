@@ -333,7 +333,12 @@ class SchemaValidationNode(Node, LLMMixin):
         missing_definitions = self._find_missing_definitions(context.table_schemas)
 
         # Extract query terms and check coverage
-        query_lower = task.task.lower() if task else ""
+        query_text = task.task if task else ""
+        if self.workflow and hasattr(self.workflow, "metadata") and self.workflow.metadata:
+            clarified_task = self.workflow.metadata.get("clarified_task")
+            if clarified_task:
+                query_text = clarified_task
+        query_lower = query_text.lower()
         query_terms = await self._extract_query_terms(query_lower)
         schema_coverage = self._check_schema_coverage(context.table_schemas, query_terms)
 
@@ -509,8 +514,9 @@ class SchemaValidationNode(Node, LLMMixin):
 
             terms = response.get("terms", [])
 
-            # Ensure all terms are strings and remove duplicates
-            cleaned_terms = list(set([str(t) for t in terms if isinstance(t, (str, int, float))]))
+        # Ensure all terms are strings and remove duplicates
+        cleaned_terms = list(set([str(t) for t in terms if isinstance(t, (str, int, float))]))
+        cleaned_terms = self._filter_generic_terms(cleaned_terms)
 
             logger.info(f"LLM extracted terms for query '{query}': {cleaned_terms}")
             return cleaned_terms
@@ -527,7 +533,44 @@ class SchemaValidationNode(Node, LLMMixin):
         words = re.findall(r"\b\w+\b", query)
         # Simple stop word filtering for fallback
         stop_words = {"the", "a", "an", "and", "or", "in", "on", "at", "to", "for", "of", "with", "is", "are"}
-        return [w for w in words if w.lower() not in stop_words and len(w) > 1]
+        terms = [w for w in words if w.lower() not in stop_words and len(w) > 1]
+        return self._filter_generic_terms(terms)
+
+    @staticmethod
+    def _filter_generic_terms(terms: List[str]) -> List[str]:
+        if not terms:
+            return []
+        generic_terms = {
+            "统计",
+            "查询",
+            "分析",
+            "对比",
+            "趋势",
+            "汇总",
+            "报表",
+            "平均",
+            "总计",
+            "数量",
+            "金额",
+            "指标",
+            "维度",
+            "周期",
+            "天数",
+            "月份",
+            "每月",
+            "每个月",
+            "每天",
+            "每周",
+            "每年",
+        }
+        return [term for term in terms if term not in generic_terms]
+
+    @staticmethod
+    def _tokenize_schema_term(term: str) -> List[str]:
+        if not term:
+            return []
+        tokens = re.split(r"[^a-zA-Z0-9]+", term.lower())
+        return [t for t in tokens if t]
 
     def _calculate_coverage_threshold(self, query_terms: List[str]) -> float:
         """
@@ -588,12 +631,15 @@ class SchemaValidationNode(Node, LLMMixin):
 
         # Build a set of all schema terms (table names, column names, AND comments)
         schema_terms = set()
+        schema_tokens = set()
         comment_terms = {}  # Track which schema provided each comment term
         term_sources: Dict[str, List[Dict[str, Any]]] = {}
 
         def add_term_source(term: str, table_name: str, source: str, column_name: Optional[str] = None) -> None:
             term_lower = term.lower()
             schema_terms.add(term_lower)
+            for token in self._tokenize_schema_term(term_lower):
+                schema_tokens.add(token)
             term_sources.setdefault(term_lower, [])
             term_sources[term_lower].append(
                 {
@@ -674,13 +720,27 @@ class SchemaValidationNode(Node, LLMMixin):
             english_terms = get_schema_term_mapping(term)
             if english_terms:
                 # Check if any of the mapped English terms are in the schema
-                matched_english = [eng for eng in english_terms if eng.lower() in schema_terms]
+                matched_english = []
+                for eng in english_terms:
+                    eng_lower = eng.lower()
+                    if eng_lower in schema_terms:
+                        matched_english.append(eng)
+                        continue
+                    if eng_lower in schema_tokens:
+                        matched_english.append(eng)
+                        continue
+                    if any(eng_lower in schema_term for schema_term in schema_terms):
+                        matched_english.append(eng)
                 if matched_english:
                     logger.debug(f"Term '{term}' matched via semantic mapping: {english_terms}")
                     covered.append(term)
                     matched_sources = []
                     for eng_term in matched_english:
-                        matched_sources.extend(term_sources.get(eng_term.lower(), []))
+                        eng_term_lower = eng_term.lower()
+                        matched_sources.extend(term_sources.get(eng_term_lower, []))
+                        for schema_term, sources in term_sources.items():
+                            if eng_term_lower in schema_term:
+                                matched_sources.extend(sources)
                     term_evidence[term] = {
                         "match_type": "semantic",
                         "matched_terms": matched_english,
