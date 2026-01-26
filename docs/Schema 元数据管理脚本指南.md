@@ -3,7 +3,7 @@
 > **文档版本**: v1.0
 > **更新日期**: 2026-01-26
 
-> 本指南介绍 `scripts/` 目录下所有 Schema 管理脚本的用法。如需程序化使用，请参考 `docs/migration_v0_to_v1_code_usage.md`。
+> 本指南介绍 `scripts/` 目录下所有 Schema 管理脚本的用法。如需程序化使用，请参考 `docs/Schema 元数据管理 - 程序化使用.md`。
 
 ## 脚本概览
 
@@ -68,17 +68,20 @@ python scripts/migrate_v0_to_v1.py --config=conf/agent.yml [选项]
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--config` | 配置文件路径 | 必填 |
-| `--extract-statistics` | 收集行/列统计信息 | true |
+| `--namespace` | 命名空间（可选，多命名空间时会提示） | - |
+| `--extract-statistics` | 收集行/列统计信息 | false |
 | `--extract-relationships` | 提取 FK/JOIN 关系 | true |
 | `--import-schemas` | 迁移后从 DB 导入 Schema | false |
 | `--import-only` | 仅导入，跳过迁移 | false |
 | `--clear` | 导入前清除现有数据 | false |
 | `--force` | 强制重新迁移 | false |
+| `--backup-path` | 备份 JSON 路径（来自 cleanup 脚本） | - |
+| `--skip-backup` | 跳过备份创建 | false |
 | `--llm-fallback` | 启用 LLM 作为 DDL 解析回退 | false |
 | `--llm-model` | LLM 模型名称 | - |
 | `--db-path` | 覆盖存储路径 | - |
 
-布尔标志接受：`true/false`、`yes/no`、`1/0`。
+带值布尔参数（如 `--extract-statistics`、`--extract-relationships`）接受：`true/false`、`yes/no`、`1/0`。
 
 ### 应用场景
 
@@ -162,7 +165,7 @@ bash scripts/rebuild_schema.sh --namespace=my_database --config=custom/agent.yml
 
 ### 使用方式
 ```bash
-python scripts/live_bootstrap.py --config=conf/agent.yml --database=<db> --schema=<schema> --dialect=<dialect> [选项]
+python scripts/live_bootstrap.py --config=conf/agent.yml [选项]
 ```
 
 ### 参数说明
@@ -170,11 +173,15 @@ python scripts/live_bootstrap.py --config=conf/agent.yml --database=<db> --schem
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--config` | 配置文件路径 | 必填 |
-| `--database` | 数据库名称 | 必填 |
-| `--schema` | Schema 名称 | 必填 |
-| `--dialect` | SQL 方言 | 必填 |
+| `--namespace` | 命名空间（可选，多命名空间时会提示） | - |
+| `--catalog` | Catalog 名称过滤 | 空（不过滤） |
+| `--database` | 数据库名称过滤 | 空（不过滤） |
+| `--schema` | Schema 名称过滤 | 空（不过滤） |
+| `--dialect` | SQL 方言 | duckdb |
 | `--extract-statistics` | 收集统计信息 | false |
 | `--extract-relationships` | 提取关系 | true |
+| `--batch-size` | 批处理大小 | 100 |
+| `--incremental` | 增量更新模式 | false |
 
 ### 支持的方言
 `duckdb`、`sqlite`、`mysql`、`starrocks`、`snowflake` 等
@@ -210,7 +217,7 @@ python scripts/live_bootstrap.py \
 
 ### 使用方式
 ```bash
-python scripts/check_migration_report.py --config=conf/agent.yml --namespace=<name> [选项]
+python scripts/check_migration_report.py --config=conf/agent.yml [选项]
 ```
 
 ### 参数说明
@@ -218,7 +225,7 @@ python scripts/check_migration_report.py --config=conf/agent.yml --namespace=<na
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--config` | 配置文件路径 | 必填 |
-| `--namespace` | 命名空间名称 | 必填 |
+| `--namespace` | 命名空间名称（可选，省略时使用 base path） | - |
 | `--db-path` | 覆盖存储路径 | - |
 | `--top-tags` | 显示的标签数量 | 10 |
 
