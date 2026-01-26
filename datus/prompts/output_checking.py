@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 from datus.schemas.node_models import Metric, TableSchema
 from datus.prompts.gen_sql import build_schema_metadata_summary
@@ -19,7 +19,7 @@ def gen_prompt(
     metrics: List[Metric] = None,
     dialect: str = DBType.SQLITE,
     external_knowledge: str = "",
-    prompt_version: str = "1.1",
+    prompt_version: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """Generate a prompt for checking the output of a SQL query.
 

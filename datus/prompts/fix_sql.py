@@ -3,7 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 # flake8：noqa
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from datus.schemas.node_models import TableSchema
 from datus.prompts.gen_sql import build_schema_metadata_summary
@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 
 def fix_sql_prompt(
     sql_task: str,
-    prompt_version: str = "1.1",
+    prompt_version: Optional[str] = None,
     sql_context: str = "",
     schemas: list[TableSchema] = None,
     docs: list[str] = None,

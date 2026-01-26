@@ -117,7 +117,7 @@ def get_sql_prompt(
     metrics: List[Metric],
     question: str,
     external_knowledge: str = "",
-    prompt_version: str = "1.1",
+    prompt_version: Optional[str] = None,
     context=None,
     max_table_schemas_length: int = 4000,
     max_data_details_length: int = 2000,
