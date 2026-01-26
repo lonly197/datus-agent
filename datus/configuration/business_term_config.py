@@ -23,6 +23,7 @@ BUSINESS_TERM_TO_TABLE_MAPPING = {
     "订单": ["dwd_testdrv_tsd_order_relation_fact", "order", "order_id", "orders"],
     "转化": ["dwd_testdrv_tsd_order_relation_fact", "conversion", "convert", "transform", "conversions"],
     "转化订单": ["dwd_testdrv_tsd_order_relation_fact", "conversion_order", "tsd_order_relation"],
+    "转化周期": ["conversion_cycle", "conversion_period", "conversion_duration"],
     # Clue related (production tables)
     "线索": ["dim_cust_clue_customer", "dwd_clue_clue_fact", "dwd_assign_dlr_clue_fact_di", "clue", "clue_id", "lead", "lead_id"],
     "客户线索": ["dim_cust_clue_customer", "customer_clue", "clue_customer"],
@@ -56,6 +57,7 @@ BUSINESS_TERM_TO_SCHEMA_MAPPING = {
     "订单": ["order", "order_id", "orders", "tsd_order_relation_flag"],
     "转化": ["conversion", "convert", "transform", "tsd_order_relation"],
     "转化订单": ["conversion_order", "tsd_order_relation", "tsd_order_relation_flag"],
+    "转化周期": ["conversion_cycle", "conversion_period", "conversion_duration"],
     # Clue related (production columns)
     "线索": ["clue", "clue_id", "lead", "lead_id", "clue_create_time", "customer_phone"],
     "客户线索": ["customer_clue", "clue_customer", "customer_phone"],
@@ -132,13 +134,13 @@ Analyze the user query and extract key database search terms for schema matching
 
 Rules:
 1. Extract potential table names, column names, and business concepts.
-2. Break down compound business terms into atomic concepts (e.g., "首次试驾" -> "首次", "试驾").
+2. Keep compound business terms AND include their atomic components (e.g., "首次试驾" -> ["首次试驾", "首次", "试驾"]).
 3. Ignore common stop words and grammatical particles.
 4. Return a JSON object with a single key "terms" containing a list of strings.
 
 Examples:
 Input: "统计每个月首次试驾的平均转化周期"
-Output: {{"terms": ["统计", "每个月", "首次", "试驾", "平均", "转化", "周期"]}}
+Output: {{"terms": ["统计", "每个月", "首次试驾", "首次", "试驾", "平均", "转化", "周期"]}}
 
 Input: "查询最近一周的下定订单数"
 Output: {{"terms": ["查询", "最近", "一周", "下定", "订单", "数"]}}

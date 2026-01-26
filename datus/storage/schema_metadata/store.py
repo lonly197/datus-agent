@@ -135,6 +135,7 @@ class BaseMetadataStorage(BaseEmbeddingStore):
         # self.create_vector_index()
         self.create_fts_index(
             [
+                "catalog_name",
                 "database_name",
                 "schema_name",
                 "table_name",
@@ -183,8 +184,8 @@ class BaseMetadataStorage(BaseEmbeddingStore):
         select_fields: Optional[List[str]] = None,
     ) -> pa.Table:
         self._ensure_table_ready()
+        available_fields = set(self.table.schema.names)
         if select_fields:
-            available_fields = set(self.table.schema.names)
             select_fields = [field for field in select_fields if field in available_fields]
         sanitized_query = self._sanitize_fts_query(query_text)
         if not sanitized_query:
@@ -195,6 +196,7 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             database_name=database_name,
             schema_name=schema_name,
             table_type=table_type,
+            available_fields=available_fields,
         )
         where_clause = build_where(where)
         try:
@@ -831,18 +833,22 @@ def _build_where_clause(
     schema_name: str = "",
     table_name: str = "",
     table_type: TABLE_TYPE = "table",
+    available_fields: Optional[Set[str]] = None,
 ) -> Optional[Node]:
+    def add_condition(field_name: str, value: str) -> None:
+        if not value:
+            return
+        if available_fields is not None and field_name not in available_fields:
+            return
+        conditions.append(eq(field_name, value))
+
     conditions = []
-    if catalog_name:
-        conditions.append(eq("catalog_name", catalog_name))
-    if database_name:
-        conditions.append(eq("database_name", database_name))
-    if schema_name:
-        conditions.append(eq("schema_name", schema_name))
-    if table_name:
-        conditions.append(eq("table_name", table_name))
+    add_condition("catalog_name", catalog_name)
+    add_condition("database_name", database_name)
+    add_condition("schema_name", schema_name)
+    add_condition("table_name", table_name)
     if table_type and table_type != "full":
-        conditions.append(eq("table_type", table_type))
+        add_condition("table_type", table_type)
 
     if not conditions:
         return None

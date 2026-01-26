@@ -29,7 +29,11 @@ from datus.utils.error_handler import LLMMixin, NodeExecutionResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.constants import DBType
-from datus.utils.sql_utils import extract_table_names
+from datus.utils.sql_utils import (
+    ddl_has_missing_commas,
+    extract_table_names,
+    is_likely_truncated_ddl,
+)
 
 logger = get_logger(__name__)
 
@@ -550,11 +554,25 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             context_threshold = 10
             if self.agent_config and hasattr(self.agent_config, "schema_discovery_config"):
                 context_threshold = self.agent_config.schema_discovery_config.context_search_threshold
-            if len(candidate_tables) < context_threshold:
+            should_context_search = len(candidate_tables) < context_threshold
+            if (
+                not should_context_search
+                and _contains_chinese(task_text)
+                and len(llm_tables or []) <= 3
+            ):
+                should_context_search = True
                 logger.info(
-                    f"[Stage 2] Tables found ({len(candidate_tables)}) below threshold ({context_threshold}), "
-                    f"initiating Context Search..."
+                    "[Stage 2] Chinese query with limited LLM recall; running context search despite %d tables",
+                    len(candidate_tables),
                 )
+            if should_context_search:
+                if len(candidate_tables) < context_threshold:
+                    logger.info(
+                        f"[Stage 2] Tables found ({len(candidate_tables)}) below threshold ({context_threshold}), "
+                        f"initiating Context Search..."
+                    )
+                else:
+                    logger.info(f"[Stage 2] Initiating Context Search with {len(candidate_tables)} tables")
                 context_tables = await self._context_based_discovery(task.task)
                 if context_tables:
                     for table_name in context_tables:
@@ -584,7 +602,10 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             max_tables = getattr(self.agent_config.schema_discovery_config, "max_candidate_tables", None)
 
         candidate_tables, candidate_details_list = self._finalize_candidates(
-            candidate_details, candidate_order, max_tables
+            candidate_details,
+            candidate_order,
+            max_tables,
+            prefer_keyword=_contains_chinese(task_text),
         )
         discovery_stats["pre_limit_count"] = len(candidate_details)
         discovery_stats["max_candidate_tables"] = max_tables
@@ -606,6 +627,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         candidate_details: Dict[str, Dict[str, Any]],
         candidate_order: List[str],
         max_tables: Optional[int],
+        prefer_keyword: bool = False,
     ) -> Tuple[List[str], List[Dict[str, Any]]]:
         priority_map = {
             "explicit": 5,
@@ -616,6 +638,11 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             "context_search": 2,
             "fallback": 1,
         }
+        if prefer_keyword:
+            priority_map["keyword"] = 4
+            priority_map["semantic"] = 3
+            priority_map["llm_schema_matching"] = 4
+            priority_map["llm"] = 4
         details_list: List[Dict[str, Any]] = []
         for table_name in candidate_order:
             entry = candidate_details[table_name]
@@ -646,7 +673,25 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
         if isinstance(max_tables, int) and max_tables > 0 and len(details_list) > max_tables:
             logger.info(f"Limiting candidate tables from {len(details_list)} to {max_tables}")
-            details_list = details_list[:max_tables]
+            limited = details_list[:max_tables]
+            limited_names = {item["table_name"] for item in limited}
+            llm_candidates = [
+                item
+                for item in details_list
+                if "llm" in item.get("sources", []) and item["table_name"] not in limited_names
+            ]
+            if llm_candidates:
+                for llm_item in llm_candidates:
+                    if llm_item["table_name"] in limited_names:
+                        continue
+                    for idx in range(len(limited) - 1, -1, -1):
+                        if "llm" in limited[idx].get("sources", []):
+                            continue
+                        limited_names.discard(limited[idx]["table_name"])
+                        limited[idx] = llm_item
+                        limited_names.add(llm_item["table_name"])
+                        break
+            details_list = limited
 
         candidate_tables = [item["table_name"] for item in details_list]
         for idx, item in enumerate(details_list, start=1):
@@ -1451,6 +1496,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     # Check for missing definitions
                     current_schemas = schema_storage.get_table_schemas(candidate_tables)
                     missing_tables = []
+                    invalid_tables = []
 
                     # ✅ Fixed: Convert PyArrow Table to list of dicts for proper iteration
                     # get_table_schemas() returns pa.Table, iterating directly yields ChunkedArray (columns)
@@ -1466,12 +1512,22 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
                         if not definition or not str(definition).strip():
                             missing_tables.append(table_name)
+                            continue
 
-                    if missing_tables:
-                        logger.info(f"Found {len(missing_tables)} tables with missing metadata. Attempting repair...")
-                        await self._repair_metadata(missing_tables, schema_storage, task)
-                        logger.info("Retrying DDL fallback for tables with missing metadata...")
-                        await self._ddl_fallback_and_retry(missing_tables, task)
+                        definition_text = str(definition)
+                        if ddl_has_missing_commas(definition_text) or is_likely_truncated_ddl(definition_text):
+                            invalid_tables.append(table_name)
+
+                    if missing_tables or invalid_tables:
+                        logger.info(
+                            "Found %d tables with missing metadata and %d with invalid DDL. Attempting repair...",
+                            len(missing_tables),
+                            len(invalid_tables),
+                        )
+                        tables_to_repair = sorted(set(missing_tables + invalid_tables))
+                        await self._repair_metadata(tables_to_repair, schema_storage, task)
+                        logger.info("Retrying DDL fallback for tables with missing or invalid metadata...")
+                        await self._ddl_fallback_and_retry(tables_to_repair, task)
 
                 except Exception as e:
                     logger.warning(f"Metadata repair pre-check failed: {e}")

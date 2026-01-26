@@ -744,6 +744,209 @@ def fix_truncated_ddl(ddl: str) -> str:
     return ddl
 
 
+def _find_create_table_columns_span(sql: str) -> Optional[Tuple[int, int]]:
+    if not sql or not isinstance(sql, str):
+        return None
+    sql_upper = sql.upper()
+    create_idx = sql_upper.find("CREATE TABLE")
+    if create_idx < 0:
+        return None
+    paren_start = sql.find("(", create_idx)
+    if paren_start < 0:
+        return None
+
+    paren_count = 0
+    in_single_quote = False
+    in_double_quote = False
+    in_backtick = False
+    escaped = False
+    for idx in range(paren_start, len(sql)):
+        char = sql[idx]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if in_single_quote:
+            if char == "'":
+                in_single_quote = False
+            continue
+        if in_double_quote:
+            if char == '"':
+                in_double_quote = False
+            continue
+        if in_backtick:
+            if char == "`":
+                in_backtick = False
+            continue
+        if char == "'":
+            in_single_quote = True
+            continue
+        if char == '"':
+            in_double_quote = True
+            continue
+        if char == "`":
+            in_backtick = True
+            continue
+        if char == "(":
+            if paren_count == 0:
+                start_idx = idx + 1
+            paren_count += 1
+        elif char == ")":
+            paren_count -= 1
+            if paren_count == 0:
+                return (start_idx, idx)
+    return None
+
+
+def _count_top_level_commas_and_backticks(segment: str) -> Tuple[int, int]:
+    comma_count = 0
+    backtick_count = 0
+    depth = 0
+    in_single_quote = False
+    in_double_quote = False
+    in_backtick = False
+    escaped = False
+    for char in segment:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if in_single_quote:
+            if char == "'":
+                in_single_quote = False
+            continue
+        if in_double_quote:
+            if char == '"':
+                in_double_quote = False
+            continue
+        if in_backtick:
+            if char == "`":
+                in_backtick = False
+            continue
+        if char == "'":
+            in_single_quote = True
+            continue
+        if char == '"':
+            in_double_quote = True
+            continue
+        if char == "`":
+            in_backtick = True
+            if depth == 0:
+                backtick_count += 1
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif char == "," and depth == 0:
+            comma_count += 1
+    return comma_count, backtick_count
+
+
+def ddl_has_missing_commas(ddl: str) -> bool:
+    if not ddl or not isinstance(ddl, str):
+        return False
+    span = _find_create_table_columns_span(ddl)
+    if not span:
+        return False
+    start_idx, end_idx = span
+    columns_text = ddl[start_idx:end_idx]
+    comma_count, backtick_count = _count_top_level_commas_and_backticks(columns_text)
+    return backtick_count >= 2 and comma_count == 0
+
+
+def fix_missing_commas_in_ddl(ddl: str) -> str:
+    if not ddl or not isinstance(ddl, str):
+        return ddl
+    span = _find_create_table_columns_span(ddl)
+    if not span:
+        return ddl
+    if not ddl_has_missing_commas(ddl):
+        return ddl
+
+    start_idx, end_idx = span
+    columns_text = ddl[start_idx:end_idx]
+    fixed_columns = []
+    depth = 0
+    in_single_quote = False
+    in_double_quote = False
+    in_backtick = False
+    escaped = False
+    prev_non_space: Optional[str] = None
+
+    for char in columns_text:
+        if escaped:
+            escaped = False
+            fixed_columns.append(char)
+            if not char.isspace():
+                prev_non_space = char
+            continue
+        if char == "\\":
+            escaped = True
+            fixed_columns.append(char)
+            continue
+        if in_single_quote:
+            if char == "'":
+                in_single_quote = False
+            fixed_columns.append(char)
+            if not char.isspace():
+                prev_non_space = char
+            continue
+        if in_double_quote:
+            if char == '"':
+                in_double_quote = False
+            fixed_columns.append(char)
+            if not char.isspace():
+                prev_non_space = char
+            continue
+        if in_backtick:
+            if char == "`":
+                in_backtick = False
+            fixed_columns.append(char)
+            if not char.isspace():
+                prev_non_space = char
+            continue
+        if char == "'":
+            in_single_quote = True
+            fixed_columns.append(char)
+            prev_non_space = char
+            continue
+        if char == '"':
+            in_double_quote = True
+            fixed_columns.append(char)
+            prev_non_space = char
+            continue
+        if char == "`":
+            if depth == 0 and prev_non_space and prev_non_space not in (",", "("):
+                fixed_columns.append(", ")
+            in_backtick = True
+            fixed_columns.append(char)
+            prev_non_space = char
+            continue
+        if char == "(":
+            depth += 1
+            fixed_columns.append(char)
+            prev_non_space = char
+            continue
+        if char == ")":
+            depth = max(depth - 1, 0)
+            fixed_columns.append(char)
+            prev_non_space = char
+            continue
+        fixed_columns.append(char)
+        if not char.isspace():
+            prev_non_space = char
+
+    fixed = "".join(fixed_columns)
+    if fixed != columns_text:
+        return ddl[:start_idx] + fixed + ddl[end_idx:]
+    return ddl
+
+
 def is_likely_truncated_ddl(ddl: str) -> bool:
     """Detect likely truncation indicators without modifying the DDL."""
     if not ddl or not isinstance(ddl, str):
@@ -767,6 +970,7 @@ def sanitize_ddl_for_storage(ddl: str) -> str:
         return ddl
 
     fixed = fix_truncated_ddl(ddl)
+    fixed = fix_missing_commas_in_ddl(fixed)
     cleaned = _clean_ddl(fixed)
     return cleaned
 
@@ -1026,6 +1230,7 @@ def extract_enhanced_metadata_from_ddl(
         Dict containing table info, columns, primary keys, foreign keys, and indexes.
     """
     # Validate input
+    sql = fix_missing_commas_in_ddl(sql)
     is_valid, error_msg = validate_sql_input(sql)
     if not is_valid:
         cleaned_sql = sanitize_ddl_for_storage(sql)
@@ -1243,6 +1448,7 @@ def extract_metadata_from_ddl_regex_only(
 
     This is intended for dialects where sqlglot is noisy or fails frequently.
     """
+    sql = fix_missing_commas_in_ddl(sql)
     is_valid, error_msg = validate_sql_input(sql)
     if not is_valid:
         cleaned_sql = sanitize_ddl_for_storage(sql)

@@ -2,11 +2,15 @@ from datus.utils.constants import DBType, SQLType
 from datus.utils.json_utils import llm_result2json
 from datus.utils.sql_utils import (
     _first_statement,
+    ddl_has_missing_commas,
     extract_table_names,
+    extract_enhanced_metadata_from_ddl,
+    fix_missing_commas_in_ddl,
     parse_context_switch,
     parse_metadata_from_ddl,
     parse_sql_type,
     parse_table_name_parts,
+    sanitize_ddl_for_storage,
 )
 
 SQL = """create or replace TABLE GT.GT2.VARIANTS (
@@ -394,6 +398,21 @@ def test_json_utils():
 """
         )
     )
+
+
+def test_fix_missing_commas_in_ddl():
+    ddl = "CREATE TABLE `t` ( `a` varchar(10) `b` int );"
+    assert ddl_has_missing_commas(ddl)
+
+    fixed = fix_missing_commas_in_ddl(ddl)
+    assert "`a` varchar(10), `b` int" in fixed
+    assert not ddl_has_missing_commas(fixed)
+
+    sanitized = sanitize_ddl_for_storage(ddl)
+    assert "`a` varchar(10), `b` int" in sanitized
+
+    metadata = extract_enhanced_metadata_from_ddl(sanitized, dialect=DBType.MYSQL, warn_on_invalid=False)
+    assert len(metadata["columns"]) >= 2
 
 
 def parse_and_print(select_sql, except_tables, dialect=DBType.SQLITE):

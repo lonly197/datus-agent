@@ -339,17 +339,33 @@ class SchemaValidationNode(Node, LLMMixin):
             clarified_task = self.workflow.metadata.get("clarified_task")
             if clarified_task:
                 query_text = clarified_task
-        query_lower = query_text.lower()
-        query_terms = await self._extract_query_terms(query_lower)
+        intent_terms = self._extract_intent_terms_from_metadata()
+        query_terms = await self._extract_query_terms(query_text, protected_terms=intent_terms)
+        query_terms = self._merge_terms(intent_terms, query_terms)
         schema_coverage = self._check_schema_coverage(context.table_schemas, query_terms)
 
         # Calculate dynamic coverage threshold
         coverage_threshold = self._calculate_coverage_threshold(query_terms)
         logger.info(f"Using dynamic coverage threshold: {coverage_threshold:.2f} for {len(query_terms)} query terms")
 
+        invalid_definitions = schema_coverage.get("invalid_tables", [])
+        if invalid_definitions:
+            missing_definitions = sorted(set(missing_definitions + invalid_definitions))
+
+        critical_terms = intent_terms
+        critical_covered = self._intersection_terms(critical_terms, schema_coverage.get("covered_terms", []))
+        critical_uncovered = self._difference_terms(critical_terms, critical_covered)
+        critical_threshold = self._calculate_critical_threshold(critical_terms)
+        critical_coverage_score = (
+            len(critical_covered) / len(critical_terms) if critical_terms else 1.0
+        )
+
         # Determine if schemas are sufficient
         is_sufficient = (
-            table_count > 0 and len(missing_definitions) == 0 and schema_coverage["coverage_score"] > coverage_threshold
+            table_count > 0
+            and len(missing_definitions) == 0
+            and schema_coverage["coverage_score"] > coverage_threshold
+            and critical_coverage_score >= critical_threshold
         )
 
         # Build validation result
@@ -362,8 +378,14 @@ class SchemaValidationNode(Node, LLMMixin):
             "coverage_threshold": coverage_threshold,
             "covered_terms": schema_coverage["covered_terms"],
             "uncovered_terms": schema_coverage["uncovered_terms"],
+            "critical_terms": critical_terms,
+            "critical_terms_covered": critical_covered,
+            "critical_terms_uncovered": critical_uncovered,
+            "critical_coverage_score": critical_coverage_score,
+            "critical_coverage_threshold": critical_threshold,
             "term_evidence": schema_coverage.get("term_evidence", {}),
             "table_coverage": schema_coverage.get("table_coverage", {}),
+            "invalid_definitions": invalid_definitions,
         }
 
         # Add recommendations if insufficient
@@ -385,6 +407,12 @@ class SchemaValidationNode(Node, LLMMixin):
             validation_result["suggestions"] = [
                 f"Load full DDL for tables: {', '.join(validation_result['missing_definitions'][:5])}"
             ]
+        elif validation_result.get("critical_terms_uncovered"):
+            validation_result["suggestions"] = [
+                "Ensure schema includes key business terms before SQL generation",
+                f"Uncovered critical terms: {', '.join(validation_result['critical_terms_uncovered'][:5])}",
+            ]
+            validation_result["missing_tables"] = validation_result["critical_terms_uncovered"][:5]
         elif schema_coverage["coverage_score"] < 0.3:
             validation_result["suggestions"] = [
                 "Use enhanced schema_discovery (with progressive matching and LLM inference) to find matching tables",
@@ -485,7 +513,7 @@ class SchemaValidationNode(Node, LLMMixin):
             output={"error": error_result.error, "error_code": error_result.error_code},
         )
 
-    async def _extract_query_terms(self, query: str) -> List[str]:
+    async def _extract_query_terms(self, query: str, protected_terms: Optional[List[str]] = None) -> List[str]:
         """
         Extract key terms from the query for schema matching using LLM.
 
@@ -519,30 +547,31 @@ class SchemaValidationNode(Node, LLMMixin):
 
             # Ensure all terms are strings and remove duplicates
             cleaned_terms = list(set([str(t) for t in terms if isinstance(t, (str, int, float))]))
-            cleaned_terms = self._filter_generic_terms(cleaned_terms)
+            cleaned_terms = self._filter_generic_terms(cleaned_terms, protected_terms=protected_terms)
 
             logger.info(f"LLM extracted terms for query '{query}': {cleaned_terms}")
             return cleaned_terms
 
         except NodeExecutionResult as e:
             logger.warning(f"LLM term extraction failed after retries: {e.error_message}. Fallback to regex.")
-            return self._fallback_term_extraction(query)
+            return self._fallback_term_extraction(query, protected_terms=protected_terms)
         except Exception as e:
             logger.warning(f"LLM term extraction failed with unexpected error: {e}. Fallback to regex.")
-            return self._fallback_term_extraction(query)
+            return self._fallback_term_extraction(query, protected_terms=protected_terms)
 
-    def _fallback_term_extraction(self, query: str) -> List[str]:
+    def _fallback_term_extraction(self, query: str, protected_terms: Optional[List[str]] = None) -> List[str]:
         """Fallback to simple regex split if LLM fails."""
         words = re.findall(r"\b\w+\b", query)
         # Simple stop word filtering for fallback
         stop_words = {"the", "a", "an", "and", "or", "in", "on", "at", "to", "for", "of", "with", "is", "are"}
         terms = [w for w in words if w.lower() not in stop_words and len(w) > 1]
-        return self._filter_generic_terms(terms)
+        return self._filter_generic_terms(terms, protected_terms=protected_terms)
 
     @staticmethod
-    def _filter_generic_terms(terms: List[str]) -> List[str]:
+    def _filter_generic_terms(terms: List[str], protected_terms: Optional[List[str]] = None) -> List[str]:
         if not terms:
             return []
+        protected = {term for term in (protected_terms or []) if isinstance(term, str)}
         generic_terms = {
             "统计",
             "查询",
@@ -566,7 +595,59 @@ class SchemaValidationNode(Node, LLMMixin):
             "每周",
             "每年",
         }
-        return [term for term in terms if term not in generic_terms]
+        return [term for term in terms if term not in generic_terms or term in protected]
+
+    def _extract_intent_terms_from_metadata(self) -> List[str]:
+        if not self.workflow or not hasattr(self.workflow, "metadata") or not self.workflow.metadata:
+            return []
+        clarification = self.workflow.metadata.get("intent_clarification", {})
+        if not isinstance(clarification, dict):
+            return []
+        entities = clarification.get("entities", {})
+        if not isinstance(entities, dict):
+            return []
+        terms: List[str] = []
+        for key in ("business_terms", "metrics", "dimensions"):
+            values = entities.get(key, []) or []
+            if isinstance(values, list):
+                terms.extend([str(v) for v in values if isinstance(v, (str, int, float))])
+        return self._dedupe_terms(terms)
+
+    @staticmethod
+    def _dedupe_terms(terms: List[str]) -> List[str]:
+        seen = set()
+        deduped = []
+        for term in terms:
+            normalized = str(term).strip()
+            if not normalized:
+                continue
+            if normalized not in seen:
+                deduped.append(normalized)
+                seen.add(normalized)
+        return deduped
+
+    def _merge_terms(self, primary_terms: List[str], secondary_terms: List[str]) -> List[str]:
+        merged = []
+        merged.extend(primary_terms or [])
+        merged.extend(secondary_terms or [])
+        return self._dedupe_terms(merged)
+
+    @staticmethod
+    def _normalize_terms(terms: List[str]) -> List[str]:
+        return [term.lower() for term in terms if isinstance(term, str)]
+
+    def _intersection_terms(self, terms_a: List[str], terms_b: List[str]) -> List[str]:
+        normalized_b = set(self._normalize_terms(terms_b))
+        return [term for term in terms_a if term.lower() in normalized_b]
+
+    def _difference_terms(self, terms_a: List[str], terms_b: List[str]) -> List[str]:
+        normalized_b = set(self._normalize_terms(terms_b))
+        return [term for term in terms_a if term.lower() not in normalized_b]
+
+    def _calculate_critical_threshold(self, critical_terms: List[str]) -> float:
+        if not critical_terms:
+            return 0.0
+        return 0.5 if len(critical_terms) <= 3 else 0.3
 
     @staticmethod
     def _tokenize_schema_term(term: str) -> List[str]:
@@ -631,6 +712,7 @@ class SchemaValidationNode(Node, LLMMixin):
         covered = []
         uncovered = []
         term_evidence: Dict[str, Dict[str, Any]] = {}
+        invalid_tables: List[str] = []
 
         # Build a set of all schema terms (table names, column names, AND comments)
         schema_terms = set()
@@ -672,6 +754,8 @@ class SchemaValidationNode(Node, LLMMixin):
                 parsed_columns = [col.get("name") for col in parsed_metadata.get("columns", []) if col.get("name")]
                 if not parsed_columns:
                     parsed_columns = re.findall(r"`(\w+)`", definition)
+                if not parsed_columns:
+                    invalid_tables.append(schema.table_name)
                 for col_name in parsed_columns:
                     add_term_source(col_name, schema.table_name, "column_name", column_name=col_name)
 
@@ -831,6 +915,7 @@ class SchemaValidationNode(Node, LLMMixin):
             "uncovered_terms": uncovered,
             "term_evidence": term_evidence,
             "table_coverage": table_coverage,
+            "invalid_tables": invalid_tables,
         }
 
     def execute(self) -> BaseResult:
