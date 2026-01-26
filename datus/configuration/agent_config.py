@@ -115,6 +115,8 @@ class SchemaDiscoveryConfig:
     hybrid_rerank_top_n: int = 50
     hybrid_rerank_model: str = "BAAI/bge-reranker-large"
     hybrid_rerank_column: str = "definition"
+    hybrid_rerank_min_cpu_count: int = 4
+    hybrid_rerank_min_memory_gb: float = 8.0
 
     def __post_init__(self):
         logger = get_logger(__name__)
@@ -141,6 +143,15 @@ class SchemaDiscoveryConfig:
         if self.hybrid_rerank_top_n < 1:
             logger.warning("schema_discovery.hybrid_rerank_top_n must be >= 1; using 50")
             self.hybrid_rerank_top_n = 50
+        if self.hybrid_rerank_min_cpu_count < 0:
+            logger.warning("schema_discovery.hybrid_rerank_min_cpu_count must be >= 0; using 4")
+            self.hybrid_rerank_min_cpu_count = 4
+        if not isinstance(self.hybrid_rerank_min_memory_gb, (int, float)):
+            logger.warning("schema_discovery.hybrid_rerank_min_memory_gb must be numeric; using 8.0")
+            self.hybrid_rerank_min_memory_gb = 8.0
+        if self.hybrid_rerank_min_memory_gb < 0:
+            logger.warning("schema_discovery.hybrid_rerank_min_memory_gb must be >= 0; using 8.0")
+            self.hybrid_rerank_min_memory_gb = 8.0
 
 
 @dataclass

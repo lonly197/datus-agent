@@ -6,6 +6,9 @@
 SchemaDiscoveryNode implementation for discovering relevant schema and tables.
 """
 
+import os
+import sys
+import subprocess
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from datus.agent.node.node import Node, execute_with_async_stream
@@ -80,6 +83,118 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             tools=tools,
         )
         LLMMixin.__init__(self)
+        self._rerank_check_cache: Dict[tuple, Dict[str, Any]] = {}
+
+    def _get_available_cpu_count(self) -> int:
+        try:
+            return len(os.sched_getaffinity(0))
+        except Exception:
+            return os.cpu_count() or 0
+
+    def _get_available_memory_bytes(self) -> int:
+        try:
+            import psutil
+
+            return int(psutil.virtual_memory().available)
+        except Exception:
+            pass
+
+        if sys.platform.startswith("linux"):
+            try:
+                with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+                    for line in handle:
+                        if line.startswith("MemAvailable:"):
+                            parts = line.split()
+                            if len(parts) >= 2 and parts[1].isdigit():
+                                return int(parts[1]) * 1024
+            except Exception:
+                return 0
+            return 0
+
+        if sys.platform == "darwin":
+            try:
+                result = subprocess.run(["vm_stat"], capture_output=True, text=True, check=False)
+                if result.returncode != 0:
+                    return 0
+                page_size = 4096
+                total_pages = 0
+                for line in result.stdout.splitlines():
+                    if "page size of" in line:
+                        digits = "".join(ch for ch in line if ch.isdigit())
+                        if digits:
+                            page_size = int(digits)
+                    if line.startswith("Pages free") or line.startswith("Pages inactive") or line.startswith(
+                        "Pages speculative"
+                    ):
+                        parts = line.replace(".", "").split(":")
+                        if len(parts) == 2:
+                            count = parts[1].strip()
+                            if count.isdigit():
+                                total_pages += int(count)
+                return total_pages * page_size
+            except Exception:
+                return 0
+
+        if sys.platform == "win32":
+            try:
+                import ctypes
+
+                class MemoryStatus(ctypes.Structure):
+                    _fields_ = [
+                        ("dwLength", ctypes.c_uint32),
+                        ("dwMemoryLoad", ctypes.c_uint32),
+                        ("ullTotalPhys", ctypes.c_uint64),
+                        ("ullAvailPhys", ctypes.c_uint64),
+                        ("ullTotalPageFile", ctypes.c_uint64),
+                        ("ullAvailPageFile", ctypes.c_uint64),
+                        ("ullTotalVirtual", ctypes.c_uint64),
+                        ("ullAvailVirtual", ctypes.c_uint64),
+                        ("ullAvailExtendedVirtual", ctypes.c_uint64),
+                    ]
+
+                status = MemoryStatus()
+                status.dwLength = ctypes.sizeof(MemoryStatus)
+                if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                    return int(status.ullAvailPhys)
+            except Exception:
+                return 0
+
+        return 0
+
+    def _check_rerank_resources(
+        self, model_path: str, min_cpu_count: int, min_memory_gb: float
+    ) -> Dict[str, Any]:
+        available_cpus = self._get_available_cpu_count()
+        available_memory_bytes = self._get_available_memory_bytes()
+        available_memory_gb = available_memory_bytes / (1024 ** 3) if available_memory_bytes else 0.0
+        model_exists = bool(model_path) and os.path.exists(model_path)
+
+        reasons = []
+        if not model_exists:
+            reasons.append(f"model_not_found:{model_path}")
+        if min_cpu_count > 0 and available_cpus < min_cpu_count:
+            reasons.append(f"cpu_insufficient:{available_cpus}<{min_cpu_count}")
+        if min_memory_gb > 0 and available_memory_gb < min_memory_gb:
+            reasons.append(f"memory_insufficient:{available_memory_gb:.2f}<{min_memory_gb}")
+
+        return {
+            "ok": not reasons,
+            "reasons": reasons,
+            "available_cpus": available_cpus,
+            "available_memory_gb": available_memory_gb,
+            "model_exists": model_exists,
+        }
+
+    def _get_rerank_check(
+        self, model_path: str, min_cpu_count: int, min_memory_gb: float
+    ) -> Dict[str, Any]:
+        cache_key = (model_path, min_cpu_count, min_memory_gb)
+        cached = self._rerank_check_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        result = self._check_rerank_resources(model_path, min_cpu_count, min_memory_gb)
+        self._rerank_check_cache[cache_key] = result
+        return result
 
     def setup_input(self, workflow: Workflow) -> Dict[str, Any]:
         """
@@ -751,6 +866,18 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             rerank_top_n = getattr(cfg, "hybrid_rerank_top_n", 50)
             rerank_model = getattr(cfg, "hybrid_rerank_model", "BAAI/bge-reranker-large")
             rerank_column = getattr(cfg, "hybrid_rerank_column", "definition")
+            rerank_min_cpu_count = getattr(cfg, "hybrid_rerank_min_cpu_count", 4)
+            rerank_min_memory_gb = getattr(cfg, "hybrid_rerank_min_memory_gb", 8.0)
+            rerank_device = get_device()
+            rerank_check = None
+            if rerank_enabled:
+                rerank_check = self._get_rerank_check(rerank_model, rerank_min_cpu_count, rerank_min_memory_gb)
+                if not rerank_check["ok"]:
+                    logger.info(
+                        "Rerank disabled due to resource/model constraints: "
+                        + ", ".join(rerank_check["reasons"])
+                    )
+                    rerank_enabled = False
             stats.update(
                 {
                     "hybrid_enabled": hybrid_enabled,
@@ -766,6 +893,14 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     "hybrid_rerank_top_n": rerank_top_n,
                     "hybrid_rerank_model": rerank_model,
                     "hybrid_rerank_column": rerank_column,
+                    "hybrid_rerank_min_cpu_count": rerank_min_cpu_count,
+                    "hybrid_rerank_min_memory_gb": rerank_min_memory_gb,
+                    "hybrid_rerank_model_exists": rerank_check["model_exists"] if rerank_check else False,
+                    "hybrid_rerank_available_cpus": rerank_check["available_cpus"] if rerank_check else 0,
+                    "hybrid_rerank_available_memory_gb": (
+                        rerank_check["available_memory_gb"] if rerank_check else 0.0
+                    ),
+                    "hybrid_rerank_device": rerank_device,
                 }
             )
 
@@ -918,7 +1053,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                             else:
                                 reranker = CrossEncoderReranker(
                                     model_name=rerank_model,
-                                    device=get_device(),
+                                    device=rerank_device,
                                     column=rerank_column,
                                 )
                                 self._schema_reranker = reranker

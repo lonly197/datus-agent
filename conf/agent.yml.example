@@ -125,8 +125,10 @@ agent:
     hybrid_rerank_weight: 0.2
     hybrid_rerank_min_tables: 20
     hybrid_rerank_top_n: 50
-    hybrid_rerank_model: "BAAI/bge-reranker-large"
+    hybrid_rerank_model: "./models/bge-reranker-large"
     hybrid_rerank_column: "definition"
+    hybrid_rerank_min_cpu_count: 4
+    hybrid_rerank_min_memory_gb: 8.0
 
   export:
     max_lines: 1000  # Maximum number of exported data rows, default is 1000
