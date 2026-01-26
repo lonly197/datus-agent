@@ -1,12 +1,18 @@
 # Datus Text2SQL 任务处理流程介绍
 
-> **文档版本**: v2.10
-> **更新日期**: 2026-01-23
+> **文档版本**: v2.11
+> **更新日期**: 2026-01-26
 > **相关模块**: `datus/agent/workflow.yml`, `datus/agent/node/`
 
 ---
 
-基于最新的系统优化与实战验证（2026-01-23），Text2SQL 任务处理流程已升级为**具备高度自愈能力的智能工作流**。系统采用了证据驱动的生成架构，引入了**Preflight 预检编排**、**意图澄清节点**、**专用 SQL 验证节点**、**数仓开发版 SQL 报告**、**多层级 Schema 发现**、**Schema 充分性验证**与**动态反思纠错**机制，确保在生成 SQL 之前先完成意图分析、Schema 探查和验证，然后进行 SQL 生成和验证，若不合适则通过 Reflect 进行反思，继续尝试，直到找不到满足的表才报错终止。
+基于最新的系统优化与实战验证（2026-01-26），Text2SQL 任务处理流程已升级为**具备高度自愈能力的智能工作流**。系统采用了证据驱动的生成架构，引入了**Preflight 预检编排**、**意图澄清节点**、**专用 SQL 验证节点**、**数仓开发版 SQL 报告**、**多层级 Schema 发现**、**Schema 充分性验证**与**动态反思纠错**机制，确保在生成 SQL 之前先完成意图分析、Schema 探查和验证，然后进行 SQL 生成和验证，若不合适则通过 Reflect 进行反思，继续尝试，直到找不到满足的表才报错终止。
+
+**v2.11 新增特性**（2026-01-26）：
+
+- ✅ **SQL 审查任务说明**：新增第 8 章，补充 SQL 审查任务的处理流程说明
+- ✅ **工作流对比**：添加 Text2SQL 与 SQL 审查工作流的详细对比表
+- ✅ **交叉引用**：添加到 SQL 审查文档的链接，方便用户查阅完整实现
 
 **v2.10 新增特性**（2026-01-23）：
 
@@ -632,3 +638,63 @@ pip install sqlglot
 - 🛑 **主动终止**：工作流终止机制 + 硬失败避免无效执行
 - 📊 **开发者友好**：6 部分 SQL 报告 + 带注释的 SQL + 元数据展示
 - 🎛️ **预检编排**：Preflight Orchestrator 确保证据充分
+
+## 8. SQL 审查任务说明
+
+### 8.1 任务识别与分类
+
+`IntentAnalysisNode` 负责识别任务类型。当检测到 SQL 审查关键词时（如"审查"、"review"、"检查"、"audit"等），会将任务类型识别为 `sql_review`。
+
+### 8.2 SQL 审查工作流
+
+SQL 审查任务使用专用的 `chat_agentic_plan` 工作流，而非 `text2sql` 工作流：
+
+```yaml
+# SQL审查专用工作流
+chat_agentic_plan:
+  - chat_agentic  # 对话式 AI 交互，支持工具调用
+  - output        # 结果输出
+```
+
+**关键配置**（`datus/api/service.py`）:
+
+| 配置项 | 值 |
+|--------|-----|
+| 工作流 | `chat_agentic_plan` |
+| plan_mode | `False` |
+| system_prompt | `sql_review` |
+| output_format | `markdown` |
+| 预检工具 | 7 个强制工具序列 |
+
+### 8.3 强制预检工具序列
+
+SQL 审查任务在 LLM 推理前强制执行 7 个预检工具：
+
+| 序号 | 工具名称 | 功能 |
+|------|----------|------|
+| 1 | `describe_table` | 获取表结构信息 |
+| 2 | `search_external_knowledge` | 检索 StarRocks 规则 |
+| 3 | `read_query` | SQL 语法验证 |
+| 4 | `get_table_ddl` | DDL 定义获取 |
+| 5 | `analyze_query_plan` | 查询计划分析 |
+| 6 | `check_table_conflicts` | 表冲突检测 |
+| 7 | `validate_partitioning` | 分区验证 |
+
+### 8.4 Text2SQL vs SQL 审查对比
+
+| 特性 | Text2SQL | SQL 审查 |
+|------|----------|----------|
+| 工作流 | `text2sql` (10 步) | `chat_agentic_plan` |
+| 执行模式 | Preflight Orchestrator | 强制工具序列 |
+| 输出格式 | JSON 数据 | Markdown 报告 |
+| 反思机制 | Reflect 节点 | 无 |
+| 验证节点 | sql_validate, result_validation | 无 |
+
+### 8.5 详细文档
+
+SQL 审查任务的完整处理流程、工具详解和配置示例，请参阅：
+
+- **[SQL 审查任务处理流程介绍](Datus%20SQL%20Review%20任务处理流程介绍.md)**
+- 包含 7 个预检工具的完整实现
+- 包含 SQL 审查提示词模板
+- 包含错误处理和事件流机制
