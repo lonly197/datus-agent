@@ -137,8 +137,7 @@ class ReflectNode(Node):
                 return self._execute_strategy(details, workflow, StrategyType.REASONING)
             else:
                 # All strategies exhausted - proceed to output node for report generation
-                from datus.agent.workflow_runner import \
-                    WorkflowTerminationStatus
+                from datus.agent.workflow_status import WorkflowTerminationStatus
 
                 workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
                 workflow.metadata["termination_reason"] = (
@@ -156,7 +155,7 @@ class ReflectNode(Node):
         max_round = get_env_int("MAX_REFLECTION_ROUNDS", 3)
         if workflow.reflection_round > max_round:
             logger.info("Max reflection rounds exceeded, proceeding to output node for report generation")
-            from datus.agent.workflow_runner import WorkflowTerminationStatus
+            from datus.agent.workflow_status import WorkflowTerminationStatus
 
             workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
             workflow.metadata["termination_reason"] = f"Max reflection rounds ({max_round}) exceeded"
@@ -187,7 +186,7 @@ class ReflectNode(Node):
 
         # Unknown strategy - terminate with error
         logger.error(f"Unknown reflection strategy: {strategy}")
-        from datus.agent.workflow_runner import WorkflowTerminationStatus
+        from datus.agent.workflow_status import WorkflowTerminationStatus
 
         workflow.metadata["termination_status"] = WorkflowTerminationStatus.TERMINATE_WITH_ERROR
         workflow.metadata["termination_reason"] = f"Unknown strategy: {strategy}"

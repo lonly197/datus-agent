@@ -135,7 +135,7 @@ class ReasonSQLNode(Node):
                 # reasoning failed, use a final try with generate_sql
                 # CRITICAL: If reasoning fails, proceed to output instead of endless regeneration
                 # This prevents step count exhaustion and ensures report generation
-                from datus.agent.workflow_runner import WorkflowTerminationStatus
+                from datus.agent.workflow_status import WorkflowTerminationStatus
 
                 logger.warning(
                     f"Reasoning failed after {getattr(workflow, 'reflection_round', 0)} rounds. "

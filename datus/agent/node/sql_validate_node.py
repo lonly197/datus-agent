@@ -25,7 +25,7 @@ from datus.utils.constants import DBType
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import validate_and_suggest_sql_fixes
-from datus.agent.workflow_runner import WorkflowTerminationStatus
+from datus.agent.workflow_status import WorkflowTerminationStatus
 from datus.utils.env import get_env_int
 
 logger = get_logger(__name__)
@@ -468,10 +468,6 @@ class SQLValidateNode(Node):
             # If validation failed, signal workflow to skip to reflect
             is_valid = data.get("is_valid", False)
             if not is_valid:
-                # Import here to avoid circular imports
-                from datus.agent.workflow_runner import \
-                    WorkflowTerminationStatus
-
                 workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
 
                 logger.info(f"SQL validation failed, skipping to reflect: " f"errors={data.get('errors', [])}")

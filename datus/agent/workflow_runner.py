@@ -3,13 +3,13 @@ import asyncio
 import os
 import time
 from datetime import datetime
-from enum import Enum
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from datus.agent.evaluate import evaluate_result, setup_node_input
 from datus.agent.node import Node
 from datus.agent.plan import generate_workflow
 from datus.agent.workflow import Workflow
+from datus.agent.workflow_status import WorkflowTerminationStatus
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.node_type import NodeType
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
@@ -21,15 +21,6 @@ from datus.utils.loggings import get_logger
 from datus.utils.traceable_utils import optional_traceable
 
 logger = get_logger(__name__)
-
-
-class WorkflowTerminationStatus(str, Enum):
-    """工作流终止状态"""
-    CONTINUE = "continue"  # 继续执行
-    SKIP_TO_REFLECT = "skip_to_reflect"  # 跳转到反思节点
-    PROCEED_TO_OUTPUT = "proceed_to_output"  # 继续执行到输出节点（生成报告）
-    TERMINATE_WITH_ERROR = "terminate_with_error"  # 终止并报错
-    TERMINATE_SUCCESS = "terminate_success"  # 成功终止
 
 
 class WorkflowRunner:
