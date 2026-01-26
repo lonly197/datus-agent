@@ -974,6 +974,10 @@ class WorkflowRunner:
         finally:
             # ALWAYS emit a completion action, regardless of how the workflow terminated
             # This ensures the frontend receives a CompleteEvent for all workflows
+            try:
+                self._ensure_output_node_execution({})
+            except Exception as e:
+                logger.error(f"Failed to execute output node during finalization: {e}", exc_info=True)
 
             # Check for termination status and yield ErrorEvent if needed
             if self.workflow and self.workflow.metadata:

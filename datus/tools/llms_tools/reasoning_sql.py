@@ -59,7 +59,7 @@ async def reasoning_sql_with_builtin_tools_stream(
     if action_history_manager is None:
         action_history_manager = ActionHistoryManager()
 
-    max_turns = tool_config.get("max_turns", 10)
+    max_turns = tool_config.get("max_turns", 20)
 
     # Find the read_query tool
     read_query_tool = _get_read_query_tool(tools)
