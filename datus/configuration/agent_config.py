@@ -368,7 +368,7 @@ class AgentConfig:
         self.parallel_min_workers = int(kwargs.get("parallel_min_workers", 1))
 
         # Plan executor configuration (keyword map and fallback toggle)
-        plan_executor_config = kwargs.get("plan_executor", {})
+        plan_executor_config = kwargs.get("plan_executor") or {}
         self.plan_executor_keyword_map = plan_executor_config.get("keyword_tool_map", None)
         self.plan_executor_enable_fallback = plan_executor_config.get("enable_fallback", True)
 
@@ -392,7 +392,7 @@ class AgentConfig:
             self.scenarios[scenario_name] = ScenarioConfig(**scenario_cfg)
 
         # Initialize SQL review preflight configuration (v2.4)
-        plan_executor_config = kwargs.get("plan_executor", {})
+        plan_executor_config = kwargs.get("plan_executor") or {}
         sql_review_cfg = plan_executor_config.get("sql_review_preflight", {})
         self.sql_review_preflight = SQLReviewPreflightConfig(**sql_review_cfg)
 
