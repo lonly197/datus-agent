@@ -137,14 +137,14 @@ async def reasoning_sql_with_builtin_tools_stream(
         yield iteration_action
 
         try:
-            # Generate with tools (single turn)
+            # Generate with tools
             exec_result = await model.generate_with_tools(
                 prompt=prompt,
                 mcp_servers={},  # No MCP servers, use builtin tools
                 instruction=instruction,
                 tools=tools,
                 output_type=str,
-                max_turns=1,  # Single turn per iteration
+                max_turns=max_turns,
             )
 
             # Extract the generated SQL

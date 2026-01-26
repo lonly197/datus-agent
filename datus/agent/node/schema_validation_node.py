@@ -846,13 +846,16 @@ class SchemaValidationNode(Node, LLMMixin):
     def update_context(self, workflow: "Workflow") -> Dict[str, Any]:
         """Update workflow context with validation results."""
         try:
-            if not self.result or not self.result.success:
+            if not self.result:
                 return {"success": False, "message": "Schema validation failed, cannot update context"}
 
             # Store validation result in workflow metadata
             if not hasattr(workflow, "metadata"):
                 workflow.metadata = {}
             workflow.metadata["schema_validation"] = self.result.data
+
+            if not self.result.success:
+                return {"success": False, "message": "Schema validation failed, stored validation result"}
 
             return {
                 "success": True,

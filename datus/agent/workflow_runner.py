@@ -848,6 +848,11 @@ class WorkflowRunner:
 
                         is_soft_failure = False
                         jump_to_reflect = False
+                        last_action_status = getattr(current_node, "last_action_status", None)
+                        if last_action_status == ActionStatus.SOFT_FAILED:
+                            is_soft_failure = True
+                            jump_to_reflect = True
+
                         if current_node.status == "failed":
                             # Use new termination status API
                             termination_status = self._handle_node_failure(current_node, node_start_action)
@@ -861,6 +866,7 @@ class WorkflowRunner:
                                 break
                             elif termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
                                 is_soft_failure = True
+                                jump_to_reflect = True
 
                         # Check for workflow metadata termination status (set by nodes like SQLValidateNode)
                         metadata_termination_status = self.workflow.metadata.get("termination_status") if self.workflow.metadata else None
