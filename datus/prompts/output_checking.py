@@ -5,6 +5,7 @@
 from typing import Dict, List, Union
 
 from datus.schemas.node_models import Metric, TableSchema
+from datus.prompts.gen_sql import build_schema_metadata_summary
 from datus.utils.constants import DBType
 
 from .prompt_manager import prompt_manager
@@ -18,7 +19,7 @@ def gen_prompt(
     metrics: List[Metric] = None,
     dialect: str = DBType.SQLITE,
     external_knowledge: str = "",
-    prompt_version: str = "1.0",
+    prompt_version: str = "1.1",
 ) -> List[Dict[str, str]]:
     """Generate a prompt for checking the output of a SQL query.
 
@@ -53,8 +54,10 @@ def gen_prompt(
 
     if isinstance(table_schemas, str):
         table_schemas_str = table_schemas
+        schema_metadata = ""
     else:
         table_schemas_str = "\n".join([schema.to_prompt(dialect) for schema in table_schemas])
+        schema_metadata = build_schema_metadata_summary(table_schemas, table_schemas_str)
 
     # Render template
     content = prompt_manager.render_template(
@@ -62,6 +65,7 @@ def gen_prompt(
         dialect=dialect,
         user_question=user_question,
         table_schemas=table_schemas_str,
+        schema_metadata=schema_metadata,
         external_knowledge=external_knowledge,
         metrics=metrics_str,
         sql_query=sql_query,

@@ -99,6 +99,15 @@ class TableSchema(BaseTableSchema):
 
     definition: str = Field(..., description="DDL schema text of the table")
     table_type: str = Field("table", description="Type of the schema")
+    table_comment: Optional[str] = Field(default="", description="Table comment")
+    column_comments: Optional[str] = Field(default="", description="Column comments JSON")
+    column_enums: Optional[str] = Field(default="", description="Column enums JSON")
+    business_tags: Optional[List[str]] = Field(default_factory=list, description="Business tags")
+    row_count: Optional[int] = Field(default=0, description="Row count")
+    sample_statistics: Optional[str] = Field(default="", description="Sample statistics JSON")
+    relationship_metadata: Optional[str] = Field(default="", description="Relationship metadata JSON")
+    metadata_version: Optional[int] = Field(default=0, description="Metadata version")
+    last_updated: Optional[int] = Field(default=0, description="Last updated timestamp")
 
     def to_prompt(self, dialect: str = "snowflake", include_ddl: bool = True) -> str:
         """
@@ -147,6 +156,15 @@ class TableSchema(BaseTableSchema):
             schema_name=data.get("schema_name", ""),
             definition=data["definition"],
             table_type=data.get("table_type", "table"),
+            table_comment=data.get("table_comment", ""),
+            column_comments=data.get("column_comments", ""),
+            column_enums=data.get("column_enums", ""),
+            business_tags=data.get("business_tags", []) or [],
+            row_count=data.get("row_count", 0),
+            sample_statistics=data.get("sample_statistics", ""),
+            relationship_metadata=data.get("relationship_metadata", ""),
+            metadata_version=data.get("metadata_version", 0),
+            last_updated=data.get("last_updated", 0),
         )
 
     @classmethod
@@ -162,6 +180,29 @@ class TableSchema(BaseTableSchema):
                     schema_name=table["schema_name"][index].as_py(),
                     definition=table["definition"][index].as_py(),
                     table_type=table["table_type"][index].as_py(),
+                    table_comment=table["table_comment"][index].as_py()
+                    if "table_comment" in table.column_names
+                    else "",
+                    column_comments=table["column_comments"][index].as_py()
+                    if "column_comments" in table.column_names
+                    else "",
+                    column_enums=table["column_enums"][index].as_py()
+                    if "column_enums" in table.column_names
+                    else "",
+                    business_tags=table["business_tags"][index].as_py()
+                    if "business_tags" in table.column_names
+                    else [],
+                    row_count=table["row_count"][index].as_py() if "row_count" in table.column_names else 0,
+                    sample_statistics=table["sample_statistics"][index].as_py()
+                    if "sample_statistics" in table.column_names
+                    else "",
+                    relationship_metadata=table["relationship_metadata"][index].as_py()
+                    if "relationship_metadata" in table.column_names
+                    else "",
+                    metadata_version=table["metadata_version"][index].as_py()
+                    if "metadata_version" in table.column_names
+                    else 0,
+                    last_updated=table["last_updated"][index].as_py() if "last_updated" in table.column_names else 0,
                 )
             )
         return result

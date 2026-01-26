@@ -1,0 +1,27 @@
+Database Type: {{ database_type }}{{ database_notes }}{{ database_docs }}
+Table Schemas:
+{{ processed_schemas }}
+Schema Metadata (enhanced):
+{{ processed_schema_metadata }}
+Data Details:
+{{ processed_details }}
+Metrics (Semantic Layer):
+{{ metrics }}
+{% if date_ranges %}
+Parsed Date Ranges:
+{{ date_ranges }}
+{% endif %}
+{% if validation_summary %}
+Schema Validation Summary:
+{{ validation_summary }}
+If coverage_score <= coverage_threshold or uncovered_terms are present:
+- avoid inventing tables/columns not in schema;
+- prefer using covered terms only;
+- note limitations in the explanation.
+{% endif %}
+{{ knowledge_content }}
+Natural Language Question:
+{{ question }}
+Context:
+{{ processed_context }}
+Current Date: {{ current_date }}

@@ -7,6 +7,7 @@ from typing import Dict, List
 from pydantic import BaseModel
 
 from datus.schemas.node_models import TableSchema, TableValue
+from datus.prompts.gen_sql import build_schema_metadata_summary
 from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
 
@@ -68,7 +69,7 @@ def get_reasoning_prompt(
     metrics: str,
     question: str,
     context: List[str],
-    prompt_version: str = "1.0",
+    prompt_version: str = "1.1",
     max_table_schemas_length: int = 4000,
     max_data_details_length: int = 2000,
     max_context_length: int = 8000,
@@ -78,8 +79,10 @@ def get_reasoning_prompt(
 ) -> List[Dict[str, str]]:
     if isinstance(table_schemas, str):
         processed_schemas = table_schemas
+        processed_schema_metadata = ""
     else:
         processed_schemas = "\n".join(schema.to_prompt(database_type) for schema in table_schemas)
+        processed_schema_metadata = build_schema_metadata_summary(table_schemas, processed_schemas)
 
     if data_details:
         processed_details = "\n---\n".join(
@@ -120,6 +123,7 @@ def get_reasoning_prompt(
         database_notes=database_notes,
         question=question,
         processed_schemas=processed_schemas,
+        processed_schema_metadata=processed_schema_metadata,
         processed_details=processed_details,
         metrics=metrics,
         processed_context=processed_context,

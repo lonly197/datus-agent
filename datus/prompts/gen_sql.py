@@ -14,6 +14,100 @@ from .prompt_manager import prompt_manager
 logger = get_logger(__name__)
 
 
+def _safe_parse_json(value: Optional[str]) -> Dict[str, Any]:
+    if not value or not isinstance(value, str):
+        return {}
+    try:
+        import json
+
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _should_skip_text(text: str, haystack: str) -> bool:
+    if not text:
+        return True
+    return text.strip() in haystack
+
+
+def build_schema_metadata_summary(
+    table_schemas: List[TableSchema],
+    processed_schemas: str,
+    max_per_table: int = 800,
+    max_total: int = 4000,
+) -> str:
+    if not table_schemas:
+        return ""
+
+    haystack = processed_schemas or ""
+    parts: List[str] = []
+    total_len = 0
+
+    for schema in table_schemas:
+        block_lines: List[str] = []
+        has_extra = False
+        title = f"Table: {schema.table_name}"
+        if schema.table_comment and not _should_skip_text(schema.table_comment, haystack):
+            title = f"{title} - {schema.table_comment}"
+            has_extra = True
+        block_lines.append(title)
+
+        if schema.business_tags:
+            block_lines.append(f"Tags: {', '.join(schema.business_tags)}")
+            has_extra = True
+
+        column_comments = _safe_parse_json(schema.column_comments)
+        if column_comments:
+            items = [f"{k}({v})" for k, v in column_comments.items() if v and not _should_skip_text(v, haystack)]
+            if items:
+                block_lines.append(f"Columns: {', '.join(items[:10])}")
+                has_extra = True
+
+        column_enums = _safe_parse_json(schema.column_enums)
+        if column_enums:
+            enum_items = []
+            for col, enums in column_enums.items():
+                if not enums:
+                    continue
+                values = [str(item.get("value", "")) for item in enums if isinstance(item, dict)]
+                values = [v for v in values if v]
+                if values:
+                    enum_items.append(f"{col}=[{', '.join(values[:10])}]")
+            if enum_items:
+                block_lines.append(f"Enums: {', '.join(enum_items[:5])}")
+                has_extra = True
+
+        relationship_metadata = _safe_parse_json(schema.relationship_metadata)
+        if relationship_metadata:
+            join_paths = relationship_metadata.get("join_paths") or relationship_metadata.get("foreign_keys")
+            if join_paths:
+                if isinstance(join_paths, list):
+                    join_preview = ", ".join([str(item) for item in join_paths[:5]])
+                else:
+                    join_preview = str(join_paths)
+                block_lines.append(f"Relations: {join_preview}")
+                has_extra = True
+
+        if schema.row_count:
+            block_lines.append(f"Stats: row_count={schema.row_count}")
+            has_extra = True
+
+        block = "\n".join(block_lines)
+        if not has_extra:
+            continue
+        if len(block) > max_per_table:
+            block = block[:max_per_table] + "\n... (truncated)"
+
+        if total_len + len(block) > max_total:
+            break
+        parts.append(block)
+        total_len += len(block) + 1
+
+    return "\n\n".join(parts)
+
+
 def get_sql_prompt(
     database_type: str,
     table_schemas: Union[List[TableSchema], str],
@@ -21,7 +115,7 @@ def get_sql_prompt(
     metrics: List[Metric],
     question: str,
     external_knowledge: str = "",
-    prompt_version: str = "1.0",
+    prompt_version: str = "1.1",
     context=None,
     max_table_schemas_length: int = 4000,
     max_data_details_length: int = 2000,
@@ -47,6 +141,10 @@ def get_sql_prompt(
             max_table_schemas_length,
             validation_summary,
         )
+
+    processed_schema_metadata = ""
+    if not isinstance(table_schemas, str):
+        processed_schema_metadata = build_schema_metadata_summary(table_schemas, processed_schemas)
 
     if data_details:
         processed_details = "\n---\n".join(
@@ -95,6 +193,7 @@ def get_sql_prompt(
         database_type=database_type,
         database_notes=database_notes,
         processed_schemas=processed_schemas,
+        processed_schema_metadata=processed_schema_metadata,
         processed_details=processed_details,
         metrics=processed_metrics,
         knowledge_content=knowledge_content,

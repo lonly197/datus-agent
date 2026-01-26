@@ -707,7 +707,24 @@ class SchemaWithValueRAG:
         # Search schemas
         schema_results = (
             schema_query.select(
-                ["identifier", "catalog_name", "database_name", "schema_name", "table_name", "table_type", "definition"]
+                [
+                    "identifier",
+                    "catalog_name",
+                    "database_name",
+                    "schema_name",
+                    "table_name",
+                    "table_type",
+                    "definition",
+                    "table_comment",
+                    "column_comments",
+                    "column_enums",
+                    "business_tags",
+                    "row_count",
+                    "sample_statistics",
+                    "relationship_metadata",
+                    "metadata_version",
+                    "last_updated",
+                ]
             )
             .limit(len(tables))
             .to_arrow()
