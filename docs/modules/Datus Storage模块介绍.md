@@ -462,6 +462,39 @@ schema_discovery:
 - `hybrid_rerank_min_tables` 必须 `>= 0`，否则回退为 20
 - `hybrid_rerank_top_n` 必须 `>= 1`，否则回退为 50
 
+**量大场景推荐组合**:
+
+1) SQL 生成（高并发 + 覆盖优先）
+```yaml
+schema_discovery:
+  hybrid_search_enabled: true
+  hybrid_use_fts: true
+  hybrid_vector_weight: 0.5
+  hybrid_fts_weight: 0.4
+  hybrid_row_count_weight: 0.2
+  hybrid_tag_bonus: 0.1
+  hybrid_comment_bonus: 0.05
+  hybrid_rerank_enabled: false
+```
+建议：偏重 FTS 提升召回稳定性，关闭 rerank 降低算力成本。
+
+2) SQL 审查（高精度 + 误报控制）
+```yaml
+schema_discovery:
+  hybrid_search_enabled: true
+  hybrid_use_fts: true
+  hybrid_vector_weight: 0.6
+  hybrid_fts_weight: 0.3
+  hybrid_row_count_weight: 0.2
+  hybrid_tag_bonus: 0.1
+  hybrid_comment_bonus: 0.05
+  hybrid_rerank_enabled: true
+  hybrid_rerank_weight: 0.2
+  hybrid_rerank_min_tables: 10
+  hybrid_rerank_top_n: 50
+```
+建议：审查场景更强调表/列精确度，开启 rerank 并降低触发门槛。
+
 ---
 
 ## 初始化命令

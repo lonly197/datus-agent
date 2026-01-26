@@ -141,6 +141,37 @@ schema_discovery:
 - `semantic_rerank_hits`：rerank 参与表数量
 - `hybrid_*`：混合检索开关与权重配置快照（用于排查）
 
+**量大场景推荐组合（Text2SQL）**:
+
+1) SQL 生成（高并发 + 覆盖优先）
+```yaml
+schema_discovery:
+  hybrid_search_enabled: true
+  hybrid_use_fts: true
+  hybrid_vector_weight: 0.5
+  hybrid_fts_weight: 0.4
+  hybrid_row_count_weight: 0.2
+  hybrid_tag_bonus: 0.1
+  hybrid_comment_bonus: 0.05
+  hybrid_rerank_enabled: false
+```
+
+2) SQL 审查（高精度 + 误报控制）
+```yaml
+schema_discovery:
+  hybrid_search_enabled: true
+  hybrid_use_fts: true
+  hybrid_vector_weight: 0.6
+  hybrid_fts_weight: 0.3
+  hybrid_row_count_weight: 0.2
+  hybrid_tag_bonus: 0.1
+  hybrid_comment_bonus: 0.05
+  hybrid_rerank_enabled: true
+  hybrid_rerank_weight: 0.2
+  hybrid_rerank_min_tables: 10
+  hybrid_rerank_top_n: 50
+```
+
 #### **阶段 2: 深度元数据扫描** (Context Search)
 
 **触发条件**：阶段 1 召回表数量 < 10
