@@ -1,8 +1,8 @@
-# SQL History Intelligence
+# Reference SQL Intelligence
 
 ## Overview
 
-Bootstrap-KB SQL History is a powerful component that processes, analyzes, and indexes SQL query files to create an intelligent searchable repository. It transforms raw SQL files with comments into a structured knowledge base with semantic search capabilities.
+Bootstrap-KB Reference SQL processes `.sql` files, analyzes comment-SQL pairs, and indexes them into a searchable knowledge base. It turns raw SQL files into structured, searchable reference entries backed by semantic search.
 
 ## Core Value
 
@@ -25,10 +25,10 @@ Bootstrap-KB SQL History is a powerful component that processes, analyzes, and i
 ### Basic Command
 
 ```bash
-# Initialize SQL history component
-datus bootstrap-kb \
+# Initialize reference SQL component
+datus-agent bootstrap-kb \
     --namespace your_namespace \
-    --components sql_history \
+    --components reference_sql \
     --sql_dir /path/to/sql/directory \
     --kb_update_strategy overwrite
 ```
@@ -38,17 +38,18 @@ datus bootstrap-kb \
 | Parameter | Required | Description | Example |
 |-----------|----------|-------------|---------|
 | `--namespace` | ✅ | Database namespace | `analytics_db` |
-| `--components` | ✅ | Components to initialize | `sql_history` |
-| `--sql_dir` | ✅ | Directory containing SQL files | `/sql/queries` |
+| `--components` | ✅ | Components to initialize | `reference_sql` |
+| `--sql_dir` | ⚠️ | Directory containing SQL files (required to ingest) | `/sql/queries` |
 | `--kb_update_strategy` | ✅ | Update strategy | `overwrite`/`incremental` |
 | `--validate-only` | ❌ | Only validate, don't store | `true`/`false` |
 | `--pool_size` | ❌ | Concurrent processing threads | `8` |
+| `--subject_tree` | ❌ | Predefined subject taxonomy (comma-separated) | `Sales/Reporting/Daily,Sales/Analytics/Trends` |
 
 ## SQL File Format
 
 ### Expected Format
 
-SQL files should use comment blocks to describe each query:
+SQL files should use `--` comment blocks immediately before each query:
 
 ```sql
 -- Daily active users count
@@ -74,11 +75,19 @@ GROUP BY DATE_TRUNC('month', order_date), category
 ORDER BY month, total_revenue DESC;
 ```
 
+### Processing Rules
+
+- Only `SELECT` queries are indexed (DDL/DML are skipped).
+- Only `*.sql` files in the given directory are scanned (non-recursive).
+- Comment/SQL pairs are separated by semicolons that appear outside `--` comments.
+- Parameter placeholders like `#param#`, `:param`, `@param`, and `${param}` are normalized for validation.
+- Empty comments are allowed; they are stored as empty strings.
+
 ## Advanced Features
 
 ### 1. Multi-Dialect SQL Validation
 
-Support for multiple SQL dialects with automatic detection:
+Validation uses `sqlglot` with multiple dialects:
 
 - **MySQL**: Standard MySQL syntax
 - **Hive**: Hadoop Hive SQL dialect
@@ -86,25 +95,40 @@ Support for multiple SQL dialects with automatic detection:
 
 ### 2. Intelligent Classification
 
-Automatically categorizes SQL queries into hierarchical structure:
+SqlSummaryAgenticNode generates `name`, `summary`, `subject_path`, and `tags` for each SQL entry:
 
 ```json
 {
-    "subject_tree": "analytics/user_analytics/activity_metrics",
-    "tags": ["daily", "users", "engagement"]
+    "name": "daily_active_users",
+    "subject_path": ["Analytics", "User Analytics", "Activity Metrics"],
+    "tags": "daily,users,engagement"
 }
 ```
 
 ### 3. Vector Search Capabilities
 
-- **Semantic Search**: Find queries by meaning, not just keywords
-- **Hybrid Search**: Combine vector search with traditional filtering
-- **Relevance Scoring**: Results ranked by semantic relevance
+- **Semantic Search**: Vector search over `search_text` (derived from name + summary)
+- **Full-text Index**: FTS index over SQL/name/comment/summary/tags for fast filtering
+- **Subject Filtering**: Limit results to a subject path in the taxonomy
 
 ### 4. Incremental Updates
 
 - **Incremental Mode**: Add new queries to existing index
 - **Overwrite Mode**: Complete rebuild of the index
+
+## Stored Fields
+
+Reference SQL entries are stored with the following fields:
+
+- `id`: Hash of SQL + comment (used for incremental de-duplication)
+- `name`: LLM-generated title
+- `sql`: Cleaned SQL statement
+- `comment`: Combined `--` comment text (may be empty)
+- `summary`: LLM-generated summary
+- `search_text`: Embedding source text
+- `subject_path`: Subject taxonomy path (resolved into `subject_node_id` in LanceDB; tree persisted in `subject_tree.db`)
+- `tags`: LLM-generated tags
+- `filepath`: Source `.sql` file path
 
 ## Best Practices
 
@@ -135,17 +159,17 @@ WHERE conditions;
 
 ```bash
 # High-performance processing
-datus bootstrap-kb \
+datus-agent bootstrap-kb \
     --namespace your_db \
-    --components sql_history \
+    --components reference_sql \
     --sql_dir /large_sql_directory \
     --kb_update_strategy incremental \
     --pool_size 16
 
 # Validation only (fast check)
-datus bootstrap-kb \
+datus-agent bootstrap-kb \
     --namespace your_db \
-    --components sql_history \
+    --components reference_sql \
     --sql_dir /new_sql_files \
     --validate-only
 ```
@@ -162,9 +186,9 @@ datus bootstrap-kb \
 
 ```bash
 # First time setup with complete SQL directory
-datus bootstrap-kb \
+datus-agent bootstrap-kb \
     --namespace production_db \
-    --components sql_history \
+    --components reference_sql \
     --sql_dir /company/sql_repository \
     --kb_update_strategy overwrite \
     --pool_size 8
@@ -174,9 +198,9 @@ datus bootstrap-kb \
 
 ```bash
 # Add new SQL files incrementally
-datus bootstrap-kb \
+datus-agent bootstrap-kb \
     --namespace production_db \
-    --components sql_history \
+    --components reference_sql \
     --sql_dir /new_sql_queries \
     --kb_update_strategy incremental
 ```
@@ -185,15 +209,15 @@ datus bootstrap-kb \
 
 ```bash
 # Validate SQL files before processing
-datus bootstrap-kb \
+datus-agent bootstrap-kb \
     --namespace production_db \
-    --components sql_history \
+    --components reference_sql \
     --sql_dir /untested_queries \
     --validate-only
 ```
 
 ## Summary
 
-The Bootstrap-KB SQL History component transforms scattered SQL files into an intelligent, searchable knowledge base. It combines advanced NLP capabilities with robust SQL processing to create a powerful tool for SQL discovery and reuse.
+The Bootstrap-KB Reference SQL component transforms scattered SQL files into an intelligent, searchable knowledge base. It combines LLM-based summarization with robust SQL processing to create a powerful tool for SQL discovery and reuse.
 
-By implementing SQL History, teams can break down knowledge silos and build a collective SQL intelligence asset that grows over time.
+By implementing Reference SQL, teams can break down knowledge silos and build a collective SQL intelligence asset that grows over time.

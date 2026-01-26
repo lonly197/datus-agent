@@ -25,16 +25,23 @@ The Datus Agent Knowledge Base is a multi-modal intelligence system that transfo
 - **Capabilities**: Find metrics by concept, get calculations, discover related metrics
 - **Use**: Standardized definitions, quick lookup, consistent reporting
 
-### 3. [SQL History](sql_history.md)
-**Purpose**: Capture, analyze, and make searchable SQL expertise.
+### 3. [Reference SQL](reference_sql.md)
+**Purpose**: Capture, analyze, and make searchable SQL expertise from `.sql` files.
 
 - **Stores**: Historical queries, LLM summaries, query patterns, best practices
 - **Capabilities**: Find queries by intent, get similar queries, learn patterns
 - **Use**: Knowledge sharing, optimization through examples, team onboarding
 
+### Other Bootstrap Components
+
+The `bootstrap-kb` command also supports `ext_knowledge` (external knowledge CSV) and `document` (document chunk store).
+These are initialized via `datus-agent bootstrap-kb --components ext_knowledge|document`.
+
+> Note: `table_lineage` appears in CLI choices but is not accepted by the bootstrap validator in the current codebase.
+
 ## How It Works
 
-1. **Data Ingestion**: Initialize components via `datus bootstrap-kb` command with various data sources
+1. **Data Ingestion**: Initialize components via `datus-agent bootstrap-kb` command with various data sources
 2. **Processing Pipeline**: Raw data → Parsing → LLM Analysis → Vector Embedding → Indexing
 3. **Search**: Multi-modal search combining vector similarity, full-text search, and filtering for optimal results
 4. **Storage**: Built on LanceDB vector database with optimized indexing and scalable architecture

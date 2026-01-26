@@ -4,21 +4,35 @@
 
 The metadata module is primarily used to enable LLMs to quickly match possible related table definition information and sample data based on user questions.
 
-When you use the `bootstrap-kb` command, we initialize the SQL statements and sample data for creating tables/views/materialized views in the data source you specify into LanceDB.
+When you use the `bootstrap-kb` command, we initialize table/view (and optional materialized view) DDL plus sample rows from
+the target data source into LanceDB.
 
-This module contains two types of information: **table definition** and **sample data**.
+This module contains two types of information: **table definition** (`schema_metadata.lance`) and **sample data**
+(`schema_value.lance`).
 
 ## Data Structure of Table Definition
 
-| Field Name | Explanation | Supported Database Types |
-|------------|-------------|--------------------------|
-| `catalog_name` | The top-level container in a database system. It typically represents a collection of databases and provides metadata about them, such as available schemas, tables, and security settings | StarRocks/Snowflake |
-| `database_name` | A logical container that stores related data. It usually groups together multiple schemas and provides boundaries for data organization, security, and management. | DuckDB/MySQL/StarRocks/Snowflake |
-| `schema_name` | A namespace inside a database. It organizes objects such as tables, views, functions, and procedures into logical groups. Schemas help avoid name conflicts and support role-based access. | DuckDB/Snowflake |
-| `table_type` | The types of tables in the database, including `table`, `view`, and `mv` (abbreviation for materialized view). Each database supports table and view. DuckDB and Snowflake support materialized views. | All supported databases |
-| `table_name` | Name of the table/view/materialized view | All supported databases |
-| `definition` | SQL statements for creating tables/views/materialized views | All supported databases |
-| `identifier` | The unique identifier of the current table, which is composed of `catalog_name`, `database_name`, `schema_name` and `table_name`. You don't need to worry about it, because you won't need it in most scenarios. | All supported databases |
+| Field Name | Explanation |
+|------------|-------------|
+| `identifier` | Unique key composed from catalog/database/schema/table/type |
+| `catalog_name` | Top-level container (only populated for dialects that support catalogs) |
+| `database_name` | Database name (populated when the dialect supports databases) |
+| `schema_name` | Schema name (populated when the dialect supports schemas) |
+| `table_type` | `table`, `view`, or `mv` (materialized view) |
+| `table_name` | Name of the table/view/materialized view |
+| `definition` | DDL statement for the table/view/materialized view; may be augmented with parsed comments |
+| `table_comment` | Table-level comment extracted from DDL (when available) |
+| `column_comments` | JSON string map of column comments |
+| `column_enums` | JSON string map of enumerated values parsed from comments |
+| `business_tags` | List of inferred business tags |
+| `row_count` | Row count if available from the connector/metadata extractor |
+| `sample_statistics` | JSON string of basic column statistics when extracted |
+| `relationship_metadata` | JSON string of inferred relationships (e.g., foreign keys, join paths) |
+| `metadata_version` | Metadata schema version (0 legacy, 1 enhanced) |
+| `last_updated` | Unix timestamp of last update |
+
+> `catalog_name`, `database_name`, and `schema_name` are populated based on the database dialect. For example,
+Snowflake/StarRocks/BigQuery populate catalogs, while SQLite leaves catalog/database/schema empty.
 
 ## Data Structure of Sample Data
 
@@ -29,15 +43,18 @@ This module contains two types of information: **table definition** and **sample
 | `schema_name` | Same as above |
 | `table_type` | Same as above |
 | `table_name` | Same as above |
-| `sample_rows` | Sample data for the current table/view/mv. Usually it will be the first 5 items in the current table |
+| `sample_rows` | Sample data for the current table/view/mv (stored as CSV text) |
 | `identifier` | Same as above |
 
 ## How to Build
 
-You can build it using the `datus-agent bootstrap-kb` command:
+You can build it using the `datus-agent bootstrap-kb` command (the default component is `metadata`):
 
 ```bash
-datus-agent bootstrap-kb --namespace <your_namespace> --kb_update_strategy [check/overwrite/incremental]
+datus-agent bootstrap-kb \
+    --namespace <your_namespace> \
+    --components metadata \
+    --kb_update_strategy [check/overwrite/incremental]
 ```
 
 ### Command Line Parameter Description
@@ -47,6 +64,9 @@ datus-agent bootstrap-kb --namespace <your_namespace> --kb_update_strategy [chec
   - `check`: Check the number of data entries currently constructed
   - `overwrite`: Fully overwrite existing data
   - `incremental`: Incremental update: if existing data has changed, update it and append non-existent data
+- `--schema_linking_type`: Limit to `table`, `view`, `mv`, or `full` (default `full`)
+- `--catalog`: Optional catalog name (for catalog-aware databases)
+- `--database_name`: Optional database name (for database-aware databases)
 
 ## Usage Examples
 
