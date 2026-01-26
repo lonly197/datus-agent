@@ -17,6 +17,18 @@ datus-agent bootstrap-kb \
     --kb_update_strategy overwrite
 ```
 
+### Sample Data Example
+
+The repo includes a small example CSV at `sample_data/ext_knowledge_sample.csv`:
+
+```bash
+datus-agent bootstrap-kb \
+    --namespace your_namespace \
+    --components ext_knowledge \
+    --ext_knowledge sample_data/ext_knowledge_sample.csv \
+    --kb_update_strategy overwrite
+```
+
 ### Key Parameters
 
 | Parameter | Required | Description | Example |
@@ -29,15 +41,11 @@ datus-agent bootstrap-kb \
 
 ## CSV Format
 
-The CSV is read directly into the store. Keep columns consistent and include a subject path for organization.
-The exact schema is flexible, but should at least include a subject path and a knowledge term.
-
-Example:
+The loader expects the following required columns:
 
 ```csv
-subject_path,terminology,description
-Sales/Revenue,GMV,"Gross merchandise value before refunds"
-Finance/Accounting,NetRevenue,"Revenue after refunds and chargebacks"
+subject_path,name,terminology,explanation
+Sales/Revenue,GMV,gmv,Gross merchandise value before refunds.
 ```
 
 ## Behavior Notes

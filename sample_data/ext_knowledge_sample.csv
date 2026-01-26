@@ -1,0 +1,4 @@
+subject_path,name,terminology,explanation
+Sales/Revenue,GMV,gmv,Gross merchandise value before refunds.
+Sales/Revenue,NetRevenue,net_revenue,Revenue after refunds and chargebacks.
+Operations/Logistics,OnTimeRate,on_time_rate,Percent of orders delivered on or before promised date.

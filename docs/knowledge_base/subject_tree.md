@@ -38,3 +38,37 @@ datus-agent bootstrap-kb \
 ```
 
 If `--subject_tree` is not provided, the system reuses existing subject paths in storage or creates new ones as needed.
+
+## Search Examples
+
+### Metrics Search Scoped to a Subject Path
+
+```python
+from datus.configuration.agent_config_loader import load_agent_config
+from datus.storage.metric.store import SemanticMetricsRAG
+
+agent_config = load_agent_config("conf/agent.yml")
+rag = SemanticMetricsRAG(agent_config)
+
+results = rag.search_metrics(
+    query_text="revenue growth",
+    subject_path=["Sales", "Revenue"],
+    top_n=5,
+)
+```
+
+### Reference SQL Search Scoped to a Subject Path
+
+```python
+from datus.configuration.agent_config_loader import load_agent_config
+from datus.storage.reference_sql.store import ReferenceSqlRAG
+
+agent_config = load_agent_config("conf/agent.yml")
+rag = ReferenceSqlRAG(agent_config)
+
+results = rag.search_reference_sql(
+    query_text="daily active users",
+    subject_path=["Analytics", "User Analytics"],
+    top_n=5,
+)
+```
