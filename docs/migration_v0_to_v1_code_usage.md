@@ -1,9 +1,9 @@
-# LanceDB Schema Migration: v0 -> v1 (Code Usage)
+# LanceDB Schema 迁移指南：v0 -> v1（代码方式）
 
-> This doc covers programmatic usage. For script-based migration and validation, see
-> `docs/migration_v0_to_v1.md`.
+> 本文档涵盖程序化使用方式。如需基于脚本的迁移和验证，请参考
+> `docs/migration_v0_to_v1.md`。
 
-## 1. Run migration in code
+## 1. 在代码中运行迁移
 
 ```python
 from datus.storage.schema_metadata import SchemaWithValueRAG
@@ -22,7 +22,7 @@ ok = verify_migration(storage)
 print(f"migrated={migrated}, ok={ok}")
 ```
 
-## 2. Check version distribution
+## 2. 检查版本分布
 
 ```python
 from collections import Counter
@@ -39,7 +39,7 @@ rows = store._search_all(where=None, select_fields=["metadata_version"]).to_pyli
 print(Counter(r.get("metadata_version", 0) for r in rows))
 ```
 
-## 3. Incremental bootstrap from a live DB
+## 3. 从实时数据库增量引导
 
 ```python
 from datus.storage.schema_metadata import SchemaWithValueRAG
