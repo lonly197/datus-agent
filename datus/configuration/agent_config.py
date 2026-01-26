@@ -99,6 +99,23 @@ class SchemaDiscoveryConfig:
     chinese_query_threshold_reduction: float = 0.6  # Apply 40% reduction (0.6 multiplier) for Chinese queries
     enable_chinese_detection: bool = True  # Enable automatic Chinese text detection
 
+    # Hybrid retrieval configuration (vector + FTS + optional rerank)
+    hybrid_search_enabled: bool = True
+    hybrid_use_fts: bool = True
+    hybrid_vector_weight: float = 0.6
+    hybrid_fts_weight: float = 0.3
+    hybrid_row_count_weight: float = 0.2
+    hybrid_tag_bonus: float = 0.1
+    hybrid_comment_bonus: float = 0.05
+
+    # Hybrid rerank (LanceDB rerank)
+    hybrid_rerank_enabled: bool = False
+    hybrid_rerank_weight: float = 0.2
+    hybrid_rerank_min_tables: int = 20
+    hybrid_rerank_top_n: int = 50
+    hybrid_rerank_model: str = "BAAI/bge-reranker-large"
+    hybrid_rerank_column: str = "definition"
+
 
 @dataclass
 class DbConfig:

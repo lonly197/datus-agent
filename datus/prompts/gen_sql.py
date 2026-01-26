@@ -15,6 +15,8 @@ logger = get_logger(__name__)
 
 
 def _safe_parse_json(value: Optional[str]) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
     if not value or not isinstance(value, str):
         return {}
     try:

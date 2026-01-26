@@ -132,7 +132,17 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             logger.warning(f"Failed to create scalar index for {self.table_name} table: {str(e)}")
 
         # self.create_vector_index()
-        self.create_fts_index(["database_name", "schema_name", "table_name", self.vector_source_name])
+        self.create_fts_index(
+            [
+                "database_name",
+                "schema_name",
+                "table_name",
+                self.vector_source_name,
+                "table_comment",
+                "column_comments",
+                "business_tags",
+            ]
+        )
 
     def search_all(
         self,
@@ -153,6 +163,34 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             table_type=table_type,
         )
         return self._search_all(where=where, select_fields=select_fields)
+
+    def search_fts(
+        self,
+        query_text: str,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_type: TABLE_TYPE = "table",
+        top_n: int = 5,
+        select_fields: Optional[List[str]] = None,
+    ) -> pa.Table:
+        self._ensure_table_ready()
+        if select_fields:
+            available_fields = set(self.table.schema.names)
+            select_fields = [field for field in select_fields if field in available_fields]
+        where = _build_where_clause(
+            catalog_name=catalog_name,
+            database_name=database_name,
+            schema_name=schema_name,
+            table_type=table_type,
+        )
+        where_clause = build_where(where)
+        query_builder = self.table.search(query_text, query_type="fts")
+        query_builder = BaseEmbeddingStore._fill_query(query_builder, select_fields, where_clause)
+        results = query_builder.limit(top_n).to_arrow()
+        if self.vector_column_name in results.column_names:
+            results = results.drop([self.vector_column_name])
+        return results
 
 
 class SchemaStorage(BaseMetadataStorage):
@@ -705,30 +743,27 @@ class SchemaWithValueRAG:
             value_query = self.value_store.table.search()
 
         # Search schemas
-        schema_results = (
-            schema_query.select(
-                [
-                    "identifier",
-                    "catalog_name",
-                    "database_name",
-                    "schema_name",
-                    "table_name",
-                    "table_type",
-                    "definition",
-                    "table_comment",
-                    "column_comments",
-                    "column_enums",
-                    "business_tags",
-                    "row_count",
-                    "sample_statistics",
-                    "relationship_metadata",
-                    "metadata_version",
-                    "last_updated",
-                ]
-            )
-            .limit(len(tables))
-            .to_arrow()
-        )
+        schema_select_fields = [
+            "identifier",
+            "catalog_name",
+            "database_name",
+            "schema_name",
+            "table_name",
+            "table_type",
+            "definition",
+            "table_comment",
+            "column_comments",
+            "column_enums",
+            "business_tags",
+            "row_count",
+            "sample_statistics",
+            "relationship_metadata",
+            "metadata_version",
+            "last_updated",
+        ]
+        available_schema_fields = set(self.schema_store.table.schema.names)
+        schema_select_fields = [field for field in schema_select_fields if field in available_schema_fields]
+        schema_results = schema_query.select(schema_select_fields).limit(len(tables)).to_arrow()
         schemas_result = TableSchema.from_arrow(schema_results)
 
         value_results = (

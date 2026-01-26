@@ -731,110 +731,195 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             # ✅ Enhanced: Use dynamic top_n from progressive matching
             schema_results, _ = rag.search_similar(query_text=enhanced_query, top_n=top_n)
 
+            candidate_map: Dict[str, Dict[str, Any]] = {}
+            vector_total_hits = 0
+            fts_total_hits = 0
+            rerank_total_hits = 0
+
+            cfg = self.agent_config.schema_discovery_config if self.agent_config else None
+            hybrid_enabled = getattr(cfg, "hybrid_search_enabled", True)
+            use_fts = getattr(cfg, "hybrid_use_fts", True)
+            vector_weight = getattr(cfg, "hybrid_vector_weight", 0.6)
+            fts_weight = getattr(cfg, "hybrid_fts_weight", 0.3)
+            row_count_weight = getattr(cfg, "hybrid_row_count_weight", 0.2)
+            tag_bonus_weight = getattr(cfg, "hybrid_tag_bonus", 0.1)
+            comment_bonus_weight = getattr(cfg, "hybrid_comment_bonus", 0.05)
+            rerank_enabled = getattr(cfg, "hybrid_rerank_enabled", False)
+            rerank_weight = getattr(cfg, "hybrid_rerank_weight", 0.2)
+            rerank_min_tables = getattr(cfg, "hybrid_rerank_min_tables", 20)
+            rerank_top_n = getattr(cfg, "hybrid_rerank_top_n", 50)
+            rerank_model = getattr(cfg, "hybrid_rerank_model", "BAAI/bge-reranker-large")
+            rerank_column = getattr(cfg, "hybrid_rerank_column", "definition")
+
             if schema_results and len(schema_results) > 0:
-                # ✅ Enhanced: Filter by similarity threshold (from config)
-                # LanceDB vector search returns _distance column (lower = more similar)
-                # Convert distance to similarity: similarity = 1 / (1 + distance)
-                # similarity_threshold is now from schema_discovery_config
-
                 try:
-                    # Check if _distance column exists
-                    if "_distance" in schema_results.column_names:
-                        distances = schema_results.column("_distance").to_pylist()
-                        table_names = schema_results.column("table_name").to_pylist()
-
-                        # ✅ Enhanced: Extract additional metadata for ranking
-                        table_comments = (
-                            schema_results.column("table_comment").to_pylist()
-                            if "table_comment" in schema_results.column_names
-                            else [""] * len(table_names)
-                        )
-                        row_counts = (
-                            schema_results.column("row_count").to_pylist()
-                            if "row_count" in schema_results.column_names
-                            else [0] * len(table_names)
-                        )
-                        business_tags_list = []
-                        if "business_tags" in schema_results.column_names:
-                            # Convert from list if present
-                            for tags in schema_results.column("business_tags").to_pylist():
-                                if isinstance(tags, list):
-                                    business_tags_list.append(tags)
-                                else:
-                                    business_tags_list.append([])
-                        else:
-                            business_tags_list = [[]] * len(table_names)
-
-                        # ✅ Enhanced: Multi-factor ranking (similarity + row_count + tag matching)
-                        scored_tables = []
-                        for idx, (table_name, distance, table_comment, row_count, tags) in enumerate(
-                            zip(table_names, distances, table_comments, row_counts, business_tags_list)
-                        ):
-                            # Calculate similarity from distance (LanceDB uses Euclidean distance)
-                            similarity = 1.0 / (1.0 + distance)
-
-                            # Filter by similarity threshold
-                            if similarity < similarity_threshold:
-                                continue
-
-                            # ✅ Enhanced: Row count boost (prefer larger tables for analytics)
-                            # Cap at 1M rows for normalization
-                            row_count_score = min(row_count / 1_000_000, 1.0) if row_count else 0
-
-                            # ✅ Enhanced: Tag matching bonus (business domain relevance)
-                            tag_bonus = len(set(tags) & set(query_tags)) * 0.1 if query_tags else 0
-
-                            # ✅ Enhanced: Comment match bonus (if table comment contains query terms)
-                            comment_bonus = 0
-                            if table_comment and any(
-                                term.lower() in table_comment.lower() for term in task_text.split()
-                            ):
-                                comment_bonus = 0.05
-
-                            # Final score: similarity + weighted enhancements
-                            final_score = similarity + (row_count_score * 0.2) + tag_bonus + comment_bonus
-                            scored_tables.append((table_name, final_score))
-
-                        if scored_tables:
-                            # Sort by final score and extract table names
-                            scored_tables.sort(key=lambda x: x[1], reverse=True)
-                            tables.extend(
-                                [
-                                    {"table_name": name, "score": score}
-                                    for name, score in scored_tables[:top_n]
-                                ]
-                            )
-                            logger.info(
-                                f"Semantic search found {len(scored_tables)}/{len(table_names)} tables "
-                                f"via enhanced metadata (threshold={similarity_threshold}, tags={query_tags}): "
-                                f"{[t[0] for t in scored_tables[:5]]}"
-                            )
-                            stats["semantic_tables"] = len(scored_tables[:top_n])
-                            stats["semantic_total_hits"] = len(table_names)
-                        else:
-                            logger.warning(
-                                f"No tables passed similarity threshold ({similarity_threshold}). "
-                                f"Using all {len(table_names)} results as fallback."
-                            )
-                            tables.extend([{"table_name": name, "score": 0.0} for name in table_names])
-                            stats["semantic_tables"] = len(table_names)
-                            stats["semantic_total_hits"] = len(table_names)
+                    table_names = schema_results.column("table_name").to_pylist()
+                    vector_total_hits = len(table_names)
+                    distances = (
+                        schema_results.column("_distance").to_pylist()
+                        if "_distance" in schema_results.column_names
+                        else [None] * len(table_names)
+                    )
+                    table_comments = (
+                        schema_results.column("table_comment").to_pylist()
+                        if "table_comment" in schema_results.column_names
+                        else [""] * len(table_names)
+                    )
+                    row_counts = (
+                        schema_results.column("row_count").to_pylist()
+                        if "row_count" in schema_results.column_names
+                        else [0] * len(table_names)
+                    )
+                    business_tags_list = []
+                    if "business_tags" in schema_results.column_names:
+                        for tags in schema_results.column("business_tags").to_pylist():
+                            business_tags_list.append(tags if isinstance(tags, list) else [])
                     else:
-                        # No _distance column, use all results
-                        found_tables = schema_results.column("table_name").to_pylist()
-                        tables.extend([{"table_name": name, "score": 0.0} for name in found_tables])
-                        logger.info(
-                            f"Semantic search found tables via metadata (no distance filtering): {found_tables}"
+                        business_tags_list = [[]] * len(table_names)
+
+                    for table_name, distance, table_comment, row_count, tags in zip(
+                        table_names, distances, table_comments, row_counts, business_tags_list
+                    ):
+                        similarity = 0.1 if distance is None else 1.0 / (1.0 + distance)
+                        if similarity_threshold and similarity < similarity_threshold:
+                            continue
+                        candidate = candidate_map.setdefault(
+                            table_name,
+                            {
+                                "vector_score": 0.0,
+                                "fts_score": 0.0,
+                                "rerank_score": 0.0,
+                                "table_comment": table_comment or "",
+                                "row_count": row_count or 0,
+                                "tags": tags or [],
+                            },
                         )
-                        stats["semantic_tables"] = len(found_tables)
-                        stats["semantic_total_hits"] = len(found_tables)
+                        candidate["vector_score"] = max(candidate["vector_score"], similarity)
+                        if table_comment:
+                            candidate["table_comment"] = table_comment
+                        if row_count:
+                            candidate["row_count"] = row_count
+                        if tags:
+                            candidate["tags"] = tags
 
                 except Exception as filter_error:
-                    logger.warning(f"Similarity filtering failed: {filter_error}. Using all results.")
-                    found_tables = schema_results.column("table_name").to_pylist()
-                    tables.extend([{"table_name": name, "score": 0.0} for name in found_tables])
-                    stats["semantic_tables"] = len(found_tables)
-                    stats["semantic_total_hits"] = len(found_tables)
+                    logger.warning(f"Vector search parsing failed: {filter_error}.")
+
+            fts_results = None
+            if hybrid_enabled and use_fts:
+                try:
+                    task_context = getattr(self.workflow, "task", None) if self.workflow else None
+                    fts_catalog = task_context.catalog_name if task_context else ""
+                    fts_database = task_context.database_name if task_context else ""
+                    fts_schema = task_context.schema_name if task_context else ""
+                    fts_table_type = (
+                        getattr(task_context, "schema_linking_type", "table") if task_context else "table"
+                    )
+                    fts_results = rag.schema_store.search_fts(
+                        query_text=enhanced_query,
+                        catalog_name=fts_catalog or "",
+                        database_name=fts_database or "",
+                        schema_name=fts_schema or "",
+                        table_type=fts_table_type,
+                        top_n=top_n,
+                        select_fields=["table_name", "table_comment", "row_count", "business_tags"],
+                    )
+                except Exception as fts_error:
+                    logger.warning(f"FTS search failed: {fts_error}")
+
+            if fts_results is not None and len(fts_results) > 0:
+                fts_table_names = fts_results.column("table_name").to_pylist()
+                fts_total_hits = len(fts_table_names)
+                fts_scores = (
+                    fts_results.column("_score").to_pylist() if "_score" in fts_results.column_names else []
+                )
+                max_fts_score = max(fts_scores) if fts_scores else 0.0
+                fts_table_comments = (
+                    fts_results.column("table_comment").to_pylist()
+                    if "table_comment" in fts_results.column_names
+                    else [""] * len(fts_table_names)
+                )
+                fts_row_counts = (
+                    fts_results.column("row_count").to_pylist()
+                    if "row_count" in fts_results.column_names
+                    else [0] * len(fts_table_names)
+                )
+                fts_tags_list = []
+                if "business_tags" in fts_results.column_names:
+                    for tags in fts_results.column("business_tags").to_pylist():
+                        fts_tags_list.append(tags if isinstance(tags, list) else [])
+                else:
+                    fts_tags_list = [[]] * len(fts_table_names)
+
+                for idx, (table_name, table_comment, row_count, tags) in enumerate(
+                    zip(fts_table_names, fts_table_comments, fts_row_counts, fts_tags_list)
+                ):
+                    raw_score = fts_scores[idx] if idx < len(fts_scores) else 1.0
+                    norm_score = (raw_score / max_fts_score) if max_fts_score else 0.5
+                    candidate = candidate_map.setdefault(
+                        table_name,
+                        {
+                            "vector_score": 0.0,
+                            "fts_score": 0.0,
+                            "rerank_score": 0.0,
+                            "table_comment": table_comment or "",
+                            "row_count": row_count or 0,
+                            "tags": tags or [],
+                        },
+                    )
+                    candidate["fts_score"] = max(candidate["fts_score"], norm_score)
+                    if table_comment:
+                        candidate["table_comment"] = table_comment
+                    if row_count:
+                        candidate["row_count"] = row_count
+                    if tags:
+                        candidate["tags"] = tags
+
+            if candidate_map:
+                scored_tables = []
+                for table_name, payload in candidate_map.items():
+                    row_count = payload.get("row_count", 0) or 0
+                    tags = payload.get("tags", []) or []
+                    table_comment = payload.get("table_comment", "") or ""
+                    vector_score = payload.get("vector_score", 0.0) or 0.0
+                    fts_score = payload.get("fts_score", 0.0) or 0.0
+                    rerank_score = payload.get("rerank_score", 0.0) or 0.0
+
+                    row_count_score = min(row_count / 1_000_000, 1.0) if row_count else 0
+                    tag_bonus = len(set(tags) & set(query_tags)) * tag_bonus_weight if query_tags else 0
+                    comment_bonus = 0.0
+                    if table_comment and any(term.lower() in table_comment.lower() for term in task_text.split()):
+                        comment_bonus = comment_bonus_weight
+
+                    if not hybrid_enabled:
+                        final_score = vector_score
+                    else:
+                        final_score = (vector_score * vector_weight) + (fts_score * fts_weight)
+                        final_score += row_count_score * row_count_weight
+                        final_score += rerank_score * rerank_weight
+                    final_score += tag_bonus + comment_bonus
+                    scored_tables.append((table_name, final_score))
+
+                scored_tables.sort(key=lambda x: x[1], reverse=True)
+                tables.extend([{"table_name": name, "score": score} for name, score in scored_tables[:top_n]])
+                stats["semantic_tables"] = len(scored_tables[:top_n])
+                stats["semantic_total_hits"] = max(vector_total_hits, fts_total_hits, rerank_total_hits)
+                stats["semantic_vector_hits"] = vector_total_hits
+                stats["semantic_fts_hits"] = fts_total_hits
+                stats["semantic_rerank_hits"] = rerank_total_hits
+
+                logger.info(
+                    f"Hybrid semantic search produced {len(scored_tables[:top_n])} tables "
+                    f"(vector={vector_total_hits}, fts={fts_total_hits}, tags={query_tags})"
+                )
+            elif vector_total_hits:
+                logger.warning(
+                    f"No tables passed similarity threshold ({similarity_threshold}). "
+                    f"Using all {vector_total_hits} vector results as fallback."
+                )
+                tables.extend([{"table_name": name, "score": 0.0} for name in schema_results.column("table_name")])
+                stats["semantic_tables"] = vector_total_hits
+                stats["semantic_total_hits"] = vector_total_hits
 
             # 2. Use ContextSearchTools for metrics/business logic search (complementary)
             context_search = ContextSearchTools(self.agent_config)
@@ -1932,3 +2017,37 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         except Exception as e:
             logger.warning(f"LLM-based schema matching failed: {e}")
             return []
+            if hybrid_enabled and rerank_enabled and (vector_total_hits + fts_total_hits) >= rerank_min_tables:
+                try:
+                    from lancedb.rerankers import CrossEncoderReranker
+                    from datus.utils.device_utils import get_device
+
+                    reranker = CrossEncoderReranker(
+                        model_name=rerank_model,
+                        device=get_device(),
+                        column=rerank_column,
+                    )
+                    rerank_results = rag.schema_store.search_similar(
+                        query_text=enhanced_query,
+                        top_n=rerank_top_n,
+                        reranker=reranker,
+                    )
+                    if rerank_results is not None and len(rerank_results) > 0:
+                        rerank_table_names = rerank_results.column("table_name").to_pylist()
+                        rerank_total_hits = len(rerank_table_names)
+                        for idx, table_name in enumerate(rerank_table_names):
+                            score = 1.0 - (idx / max(1, rerank_top_n))
+                            candidate = candidate_map.setdefault(
+                                table_name,
+                                {
+                                    "vector_score": 0.0,
+                                    "fts_score": 0.0,
+                                    "rerank_score": 0.0,
+                                    "table_comment": "",
+                                    "row_count": 0,
+                                    "tags": [],
+                                },
+                            )
+                            candidate["rerank_score"] = max(candidate["rerank_score"], score)
+                except Exception as rerank_error:
+                    logger.warning(f"Hybrid rerank failed: {rerank_error}")

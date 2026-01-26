@@ -113,8 +113,22 @@ time_range = "最近30天"（如有）
 #### **阶段 1: 快速混合召回**
 
 - **语义检索**：`SchemaWithValueRAG.search_similar()`，`top_n=20`，相似度阈值 0.5
+- **混合检索**：向量 + FTS 融合排序，可选 LanceDB rerank（hybrid query + rerank）
 - **关键词匹配**：基于硬编码的业务术语映射
 - **LLM 推断**：中文查询或模糊术语时触发，1 小时 TTL 缓存
+
+**混合检索配置示例**（`agent.yml`）：
+```yaml
+schema_discovery:
+  hybrid_search_enabled: true
+  hybrid_use_fts: true
+  hybrid_vector_weight: 0.6
+  hybrid_fts_weight: 0.3
+  hybrid_row_count_weight: 0.2
+  hybrid_tag_bonus: 0.1
+  hybrid_comment_bonus: 0.05
+  hybrid_rerank_enabled: false
+```
 
 #### **阶段 2: 深度元数据扫描** (Context Search)
 

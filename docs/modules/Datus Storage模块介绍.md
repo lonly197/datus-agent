@@ -428,6 +428,35 @@ search_with_subject_filter(
 )
 ```
 
+### 5. Schema Discovery 混合检索（向量 + FTS + Rerank）
+
+Schema metadata 同时支持向量检索与 FTS（全文检索）。在 Text2SQL 的 Schema Discovery 中会进行融合排序，并可选
+启用 LanceDB rerank（hybrid query + rerank）提升精度。
+
+**配置参数（agent.yml）**:
+```yaml
+schema_discovery:
+  hybrid_search_enabled: true
+  hybrid_use_fts: true
+  hybrid_vector_weight: 0.6
+  hybrid_fts_weight: 0.3
+  hybrid_row_count_weight: 0.2
+  hybrid_tag_bonus: 0.1
+  hybrid_comment_bonus: 0.05
+  hybrid_rerank_enabled: false
+  hybrid_rerank_weight: 0.2
+  hybrid_rerank_min_tables: 20
+  hybrid_rerank_top_n: 50
+  hybrid_rerank_model: "BAAI/bge-reranker-large"
+  hybrid_rerank_column: "definition"
+```
+
+**使用建议**:
+- 短 Query 或命名依赖场景：提高 `hybrid_fts_weight`
+- 表数量较大时启用 `hybrid_rerank_enabled`
+- 若资源紧张，保持 rerank 关闭（默认）
+- 启用 rerank 需要对应模型可用（如 `BAAI/bge-reranker-large`）
+
 ---
 
 ## 初始化命令
