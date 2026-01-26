@@ -258,7 +258,36 @@ class BaseEmbeddingStore(StorageBase):
     def create_fts_index(self, field_names: Union[str, List[str]]):
         self._ensure_table_ready()
         try:
-            self.table.create_fts_index(field_names=field_names, replace=True)
+            if isinstance(field_names, str):
+                requested_fields = [field_names]
+            else:
+                requested_fields = list(field_names)
+
+            available_fields = set(self.table.schema.names)
+            valid_fields = []
+            dropped_fields = []
+            for field_name in requested_fields:
+                if field_name not in available_fields:
+                    dropped_fields.append(f"{field_name} (missing)")
+                    continue
+                field_type = self.table.schema.field(field_name).type
+                if pa.types.is_string(field_type) or pa.types.is_large_string(field_type):
+                    valid_fields.append(field_name)
+                else:
+                    dropped_fields.append(f"{field_name} ({field_type})")
+
+            if dropped_fields:
+                logger.warning(
+                    "Skipping non-string fields for FTS index on %s: %s",
+                    self.table_name,
+                    ", ".join(dropped_fields),
+                )
+
+            if not valid_fields:
+                logger.warning("No valid string fields available for FTS index on %s", self.table_name)
+                return
+
+            self.table.create_fts_index(field_names=valid_fields, replace=True)
         except Exception as e:
             # Does not affect usage, so no exception is thrown.
             logger.warning(f"Failed to create fts index for {self.table_name} table: {str(e)}")

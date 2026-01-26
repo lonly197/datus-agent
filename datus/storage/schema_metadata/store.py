@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -140,9 +141,16 @@ class BaseMetadataStorage(BaseEmbeddingStore):
                 self.vector_source_name,
                 "table_comment",
                 "column_comments",
-                "business_tags",
             ]
         )
+
+    @staticmethod
+    def _sanitize_fts_query(query_text: str) -> str:
+        if not query_text:
+            return ""
+        sanitized = re.sub(r"[^\w\s\u4e00-\u9fff]", " ", query_text)
+        sanitized = re.sub(r"\s+", " ", sanitized).strip()
+        return sanitized
 
     def search_all(
         self,
@@ -178,6 +186,10 @@ class BaseMetadataStorage(BaseEmbeddingStore):
         if select_fields:
             available_fields = set(self.table.schema.names)
             select_fields = [field for field in select_fields if field in available_fields]
+        sanitized_query = self._sanitize_fts_query(query_text)
+        if not sanitized_query:
+            logger.warning("FTS query is empty after sanitization; skipping FTS search")
+            return pa.table({})
         where = _build_where_clause(
             catalog_name=catalog_name,
             database_name=database_name,
@@ -185,12 +197,16 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             table_type=table_type,
         )
         where_clause = build_where(where)
-        query_builder = self.table.search(query_text, query_type="fts")
-        query_builder = BaseEmbeddingStore._fill_query(query_builder, select_fields, where_clause)
-        results = query_builder.limit(top_n).to_arrow()
-        if self.vector_column_name in results.column_names:
-            results = results.drop([self.vector_column_name])
-        return results
+        try:
+            query_builder = self.table.search(sanitized_query, query_type="fts")
+            query_builder = BaseEmbeddingStore._fill_query(query_builder, select_fields, where_clause)
+            results = query_builder.limit(top_n).to_arrow()
+            if self.vector_column_name in results.column_names:
+                results = results.drop([self.vector_column_name])
+            return results
+        except Exception as exc:
+            logger.warning(f"FTS search failed: {exc}")
+            return pa.table({})
 
 
 class SchemaStorage(BaseMetadataStorage):

@@ -235,9 +235,32 @@ class IntentClarificationNode(Node, LLMMixin):
                     max_retries=1,  # Reduce retries on each attempt
                 )
 
-                # Parse LLM response using robust JSON utility
-                response_text = response.get("text", "")
-                clarification_result = llm_result2json(response_text, expected_type=dict)
+                clarification_result = None
+                response_text = ""
+                if isinstance(response, dict):
+                    if "clarified_task" in response:
+                        clarification_result = response
+                    else:
+                        response_text = (
+                            response.get("text")
+                            or response.get("result")
+                            or response.get("raw_response")
+                            or ""
+                        )
+                else:
+                    response_text = str(response)
+
+                if not clarification_result:
+                    if not response_text.strip():
+                        logger.warning(
+                            "Intent clarification received empty response (attempt %d of %d)",
+                            attempt + 1,
+                            max_attempts,
+                        )
+                        continue
+
+                    # Parse LLM response using robust JSON utility
+                    clarification_result = llm_result2json(response_text, expected_type=dict)
 
                 if clarification_result is not None:
                     # Validate and normalize required fields

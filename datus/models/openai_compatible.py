@@ -282,6 +282,7 @@ class OpenAICompatibleModel(LLMBaseModel):
             response = self.client.chat.completions.create(messages=messages, **params)
             message = response.choices[0].message
             content = message.content
+            finish_reason = response.choices[0].finish_reason if response.choices else None
 
             # Handle reasoning content for reasoning models (DeepSeek R1, OpenAI O-series)
             reasoning_content = None
@@ -294,6 +295,22 @@ class OpenAICompatibleModel(LLMBaseModel):
                     logger.debug(f"Found reasoning_content: {reasoning_content[:100]}...")
 
             final_content = content or ""
+
+            if finish_reason and finish_reason != "stop":
+                logger.warning(
+                    "LLM generation finished with reason: %s, content_length: %d",
+                    finish_reason,
+                    len(final_content),
+                )
+                if finish_reason == "length":
+                    logger.warning("LLM generation may be truncated due to max token limit")
+                elif finish_reason == "content_filter":
+                    logger.error("LLM content was filtered by safety policy")
+                elif finish_reason == "insufficient_system_resource":
+                    logger.error("LLM generation failed due to insufficient system resources")
+
+            if not final_content.strip():
+                logger.warning("LLM generation returned empty content (finish_reason=%s)", finish_reason)
 
             if hasattr(self, "_save_llm_trace"):
                 self._save_llm_trace(messages, final_content, reasoning_content)
@@ -314,7 +331,7 @@ class OpenAICompatibleModel(LLMBaseModel):
                 "usage": usage_info,
                 "model": self.model_name,
                 "response_metadata": {
-                    "finish_reason": response.choices[0].finish_reason if response.choices else None,
+                    "finish_reason": finish_reason,
                     "model": response.model if hasattr(response, "model") else self.model_name,
                 },
             }
@@ -341,9 +358,35 @@ class OpenAICompatibleModel(LLMBaseModel):
         json_kwargs = kwargs.copy()
         json_kwargs["response_format"] = {"type": "json_object"}
 
+        def _append_json_instruction(raw_prompt: Any) -> Any:
+            json_instruction = (
+                "\n\nRespond ONLY with a valid JSON object. "
+                "Do not include markdown code fences or any extra text."
+            )
+            if isinstance(raw_prompt, list):
+                messages = []
+                for message in raw_prompt:
+                    if isinstance(message, dict):
+                        messages.append(message.copy())
+                    else:
+                        messages.append(message)
+                for msg in reversed(messages):
+                    if isinstance(msg, dict) and msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        msg["content"] = f"{content}{json_instruction}"
+                        return messages
+                messages.append({"role": "user", "content": f"{json_instruction.strip()}"})
+                return messages
+            return f"{raw_prompt}{json_instruction}"
+
+        prompt_with_json = _append_json_instruction(prompt)
+
         # Pass through enable_thinking if provided
         enable_thinking_param = json_kwargs.pop("enable_thinking", False)
-        response_text = self.generate(prompt, enable_thinking=enable_thinking_param, **json_kwargs)
+        response_text = self.generate(prompt_with_json, enable_thinking=enable_thinking_param, **json_kwargs)
+
+        if not response_text or not str(response_text).strip():
+            logger.warning("LLM JSON generation returned empty content")
 
         try:
             parsed_json = json.loads(response_text)
