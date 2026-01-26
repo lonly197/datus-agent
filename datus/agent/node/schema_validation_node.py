@@ -12,6 +12,7 @@ are sufficient for generating SQL for the given query. It checks for:
 - Basic query-schema alignment (keywords in query match schema)
 """
 
+import hashlib
 import re
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -499,7 +500,9 @@ class SchemaValidationNode(Node, LLMMixin):
 
         try:
             # ✅ Use LLMMixin with retry and caching
-            cache_key = f"llm_term_extraction:{hash(query)}"
+            # Use stable SHA256 hash instead of built-in hash() for cross-process consistency
+            query_hash = hashlib.sha256(query.encode('utf-8')).hexdigest()[:16]
+            cache_key = f"llm_term_extraction:{query_hash}"
             max_retries = LLM_TERM_EXTRACTION_CONFIG.get("max_retries", 3)
             cache_enabled = LLM_TERM_EXTRACTION_CONFIG.get("cache_enabled", True)
             cache_ttl_seconds = LLM_TERM_EXTRACTION_CONFIG.get("cache_ttl_seconds") if cache_enabled else None
@@ -514,9 +517,9 @@ class SchemaValidationNode(Node, LLMMixin):
 
             terms = response.get("terms", [])
 
-        # Ensure all terms are strings and remove duplicates
-        cleaned_terms = list(set([str(t) for t in terms if isinstance(t, (str, int, float))]))
-        cleaned_terms = self._filter_generic_terms(cleaned_terms)
+            # Ensure all terms are strings and remove duplicates
+            cleaned_terms = list(set([str(t) for t in terms if isinstance(t, (str, int, float))]))
+            cleaned_terms = self._filter_generic_terms(cleaned_terms)
 
             logger.info(f"LLM extracted terms for query '{query}': {cleaned_terms}")
             return cleaned_terms

@@ -138,13 +138,25 @@ class GlmModel(OpenAICompatibleModel):
         """
         估算文本的 token 数量。
 
+        GLM 模型针对中文优化，使用更准确的中英文混合启发式算法：
+        - 中文字符：约 0.6 token/字符（CJK 统一汉字范围）
+        - 英文字符：约 0.25 token/字符（与 GPT 类似）
+
         Args:
             prompt: 输入文本
 
         Returns:
             估算的 token 数量
         """
-        return int(len(prompt) * 0.3 + 0.5)
+        # 统计中文字符数量（CJK 统一汉字范围）
+        chinese_chars = len([c for c in prompt if '\u4e00' <= c <= '\u9fff'])
+        # 统计其他字符数量（英文、数字、符号等）
+        other_chars = len(prompt) - chinese_chars
+
+        # 使用不同的比率估算 token 数量
+        estimated_tokens = int(chinese_chars * 0.6 + other_chars * 0.25 + 0.5)
+
+        return max(1, estimated_tokens)  # 至少返回 1
 
     def _uses_completion_tokens_parameter(self) -> bool:
         """

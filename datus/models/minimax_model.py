@@ -8,7 +8,7 @@ MiniMax API is OpenAI-compatible, so this implementation inherits from OpenAICom
 See https://platform.minimaxi.com/docs/guides/models-intro for API documentation.
 """
 
-from typing import Optional
+from typing import Dict, Optional
 
 from datus.configuration.agent_config import ModelConfig
 from datus.models.openai_compatible import OpenAICompatibleModel
@@ -29,6 +29,21 @@ class MiniMaxModel(OpenAICompatibleModel):
     - MiniMax-M2.1-lightning: 与 M2.1 同等效果，速度大幅提升
     - MiniMax-M2: 专为高效编码与Agent工作流而生
     """
+
+    # MiniMax model specifications
+    # Based on official MiniMax documentation:
+    # - M1 series supports up to 1 million token context length
+    # - M2 series is optimized for coding and agent workflows
+    MODEL_SPECS = {
+        # MiniMax-M2.1 Series (Current Flagship)
+        "MiniMax-M2.1": {"context_length": 1048576, "max_tokens": 65536},
+        "MiniMax-M2.1-lightning": {"context_length": 1048576, "max_tokens": 65536},
+        # MiniMax-M2 Series (Coding & Agent Optimized)
+        "MiniMax-M2": {"context_length": 1048576, "max_tokens": 65536},
+        # Legacy M1 Series (for backward compatibility)
+        "MiniMax-M1": {"context_length": 1048576, "max_tokens": 65536},
+        "MiniMax-Text-01": {"context_length": 1048576, "max_tokens": 65536},
+    }
 
     def __init__(self, model_config: ModelConfig, **kwargs):
         """Initialize MiniMax model with configuration."""
@@ -66,27 +81,9 @@ class MiniMaxModel(OpenAICompatibleModel):
         return "https://api.minimax.chat/v1/text/chatcompletion_v2"
 
     @property
-    def model_specs(self) -> dict:
-        """
-        MiniMax model specifications.
-
-        Based on official MiniMax documentation:
-        - M1 series supports up to 1 million token context length
-        - M2 series is optimized for coding and agent workflows
-
-        Returns:
-            Dictionary containing context_length and max_tokens for MiniMax models.
-        """
-        return {
-            # MiniMax-M2.1 Series (Current Flagship)
-            "MiniMax-M2.1": {"context_length": 1048576, "max_tokens": 65536},
-            "MiniMax-M2.1-lightning": {"context_length": 1048576, "max_tokens": 65536},
-            # MiniMax-M2 Series (Coding & Agent Optimized)
-            "MiniMax-M2": {"context_length": 1048576, "max_tokens": 65536},
-            # Legacy M1 Series (for backward compatibility)
-            "MiniMax-M1": {"context_length": 1048576, "max_tokens": 65536},
-            "MiniMax-Text-01": {"context_length": 1048576, "max_tokens": 65536},
-        }
+    def model_specs(self) -> Dict[str, Dict[str, int]]:
+        """MiniMax model specifications (context_length and max_tokens)."""
+        return self.MODEL_SPECS
 
     def _uses_completion_tokens_parameter(self) -> bool:
         """

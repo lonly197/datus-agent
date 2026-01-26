@@ -26,6 +26,7 @@ from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import validate_and_suggest_sql_fixes
 from datus.agent.workflow_runner import WorkflowTerminationStatus
+from datus.utils.env import get_env_int
 
 logger = get_logger(__name__)
 
@@ -168,7 +169,25 @@ class SQLValidateNode(Node):
                 if self.workflow:
                     if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
                         self.workflow.metadata = {}
-                    self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
+                    # Check if reflection retries are exhausted before skipping to reflect
+                    max_reflection_rounds = get_env_int("MAX_REFLECTION_ROUNDS", 3)
+                    current_reflection_round = getattr(self.workflow, "reflection_round", 0)
+                    if current_reflection_round >= max_reflection_rounds:
+                        # Reflection exhausted, proceed to output for final report
+                        self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+                        self.workflow.metadata["termination_reason"] = (
+                            f"Max reflection rounds ({max_reflection_rounds}) exceeded after SQL validation failed"
+                        )
+                        logger.info(
+                            f"SQL validation failed but reflection exhausted (round {current_reflection_round}/{max_reflection_rounds}), "
+                            "proceeding to output"
+                        )
+                    else:
+                        # Still have reflection retries available, skip to reflect
+                        self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
+                        logger.info(
+                            f"SQL validation failed, skipping to reflect (round {current_reflection_round}/{max_reflection_rounds})"
+                        )
                 yield ActionHistory(
                     action_id=f"{self.id}_validation",
                     role=ActionRole.TOOL,

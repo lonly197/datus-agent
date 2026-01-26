@@ -177,12 +177,25 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         if min_memory_gb > 0 and available_memory_gb < min_memory_gb:
             reasons.append(f"memory_insufficient:{available_memory_gb:.2f}<{min_memory_gb}")
 
+        # Check runtime dependencies for reranker
+        dependencies_ok = True
+        missing_deps = []
+        try:
+            import sentence_transformers
+            import torch
+        except ImportError as e:
+            dependencies_ok = False
+            missing_deps.append(str(e).split("'")[1] if "'" in str(e) else "unknown")
+            reasons.append(f"missing_dependencies:{','.join(missing_deps)}")
+
         return {
             "ok": not reasons,
             "reasons": reasons,
             "available_cpus": available_cpus,
             "available_memory_gb": available_memory_gb,
             "model_exists": model_exists,
+            "dependencies_ok": dependencies_ok,
+            "missing_dependencies": missing_deps,
         }
 
     def _get_rerank_check(
