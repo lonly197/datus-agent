@@ -1,211 +1,188 @@
-This guide introduces three supported usage **modes** that allow you to adopt Datus based on your needs and environment:
+# Quickstart Guide
 
-### **🗨️ 1. Datus CLI (Chat Mode)**
+> **文档版本**: v2.0
+> **更新日期**: 2026-01-26
 
-Use Datus like a chatbot: type natural language questions, get SQL or summaries back. Ideal for **ad hoc queries** and *
-*fast metric exploration**.
+This guide introduces three supported usage **modes** that allow you to adopt Datus based on your needs and environment.
 
-1. Install Datus:
+---
+
+## 1. Datus CLI (Chat Mode)
+
+Use Datus like a chatbot: type natural language questions, get SQL or summaries back. Ideal for **ad hoc queries** and **fast metric exploration**.
+
+### Installation
 
 ```bash
-pip install datus
+# Install from PyPI
+pip install datus-agent
+
+# Or install development version
+pip install git+https://github.com/Datus-ai/Datus-agent.git
 ```
 
-- Configure your environment
+### Quick Initialization
+
+Use the built-in initialization command to set up the configuration:
 
 ```bash
-datus-init
-cp ~/.datus/conf/agent.yml.qs ~/.datus/conf/agent.yml
+# Interactive initialization (recommended)
+datus init
+
+# Or manually copy the template configuration
+mkdir -p ~/.datus/conf
+cp /path/to/datus-agent/conf/agent.yml.qs ~/.datus/conf/agent.yml
 ```
 
-Export environment variables (e.g., default model is DeepSeek-v3)
+### Set Environment Variables
 
 ```bash
+# Default model is DeepSeek-v3
 export DEEPSEEK_API_KEY="your-api-key-here"
+
+# Optional: For other models
+export KIMI_API_KEY="your-kimi-api-key"
 ```
 
-- Launch the CLI
+### Launch the CLI
 
 ```bash
+# Using installed script
 datus-cli --namespace local_duckdb
+
+# Or using python module
+python -m datus.cli.main --namespace local_duckdb
 ```
 
-- Start chat with Datus.
-
-```bash
-Datus> /Ask any questions you'd like to know
-```
-
-For example:
+### Start Chatting
 
 ```bash
 Datus> /list all tables
-Using existing session: chat_session_97e067fb (tokens: 31586, actions: 24)
-Processing chat request...
-╭─────────────────────────────────────────────────────────────────────────────────── Action Stream ────────────────────────────────────────────────────────────────────────────────────╮
-│ 🟡 User: list all tables                                                                                                                                                             │
-│ 💬 Generated response: # All Tables in the Database                                                                                                                                  │
-│                                                                                                                                                                                      │
-│ Here is the complete list of all tables available in the main schema:                                                                                                                │
-│ ...                                                                                                                                                                                  │
-│ 🔧 Tool call - list_tables('{"catalog": "", "database": "", "schema_name": "ma...') - ✓                                                                                              │
-│     ✓ Success (0.5s)                                                                                                                                                                 │
-│ 💬 Thinking: ```json                                                                                                                                                                 │
-│ {                                                                                                                                                                                    │
-│   "output": "# All Tables in the Database\n\nHere is the complete list of all tables available in the main schema:\n\n## Tables List\n\n| Table Name | Type                          │
-│ |\n|------------|------|\n| bank_failures | table |\n| boxplot | table |\n| calendar | table |\n| candle | table |\n| christmas_cost | table |\n| companies | table |\n|             │
-│ country_stats_scatter | table |\n| gold_vs_bitcoin | table |\n| japan_births_deaths | table |\n| japan_population | table |\n| metrics | table |\n| niger_population | table |\n|    │
-│ quotes | table |\n| radar | table |\n| sankey | table |\n| search_trends | table |\n| tree | table |\n\n## Total Tables: 17\n\nThe database contains a diverse set of tables         │
-│ covering various topics including:\n- Financial data (bank_failures, gold_vs_bitcoin)\n- Demographic data (japan_population, niger_population)\n- Company information (companies)\n- │
-│ Holiday/seasonal data (christmas_cost)\n- Search trends and metrics\n- Various visualization-ready datasets (boxplot, candle, radar, sankey, tree)\n\nWould you like me to explore   │
-│ any specific table in more detail or help you with queries on any of these datasets?"                                                                                                │
-│ }                                                                                                                                                                                    │
-│ ```                                                                                                                                                                                  │
-│ 💬 Chat interaction completed successfully                                                                                                                                           │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃                                                                              All Tables in the Database                                                                              ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-
-Here is the complete list of all tables available in the main schema:                                                                                                                   
-
-                                                                                      Tables List                                                                                       
-
-                                 
-  Table Name              Type   
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 
-  bank_failures           table  
-  boxplot                 table  
-  calendar                table  
-  candle                  table  
-  christmas_cost          table  
-  companies               table  
-  country_stats_scatter   table  
-  gold_vs_bitcoin         table  
-  japan_births_deaths     table  
-  japan_population        table  
-  metrics                 table  
-  niger_population        table  
-  quotes                  table  
-  radar                   table  
-  sankey                  table  
-  search_trends           table  
-  tree                    table  
-                                 
-
-                                                                                    Total Tables: 17                                                                                    
-
-The database contains a diverse set of tables covering various topics including:                                                                                                        
-
- • Financial data (bank_failures, gold_vs_bitcoin)                                                                                                                                      
- • Demographic data (japan_population, niger_population)                                                                                                                                
- • Company information (companies)                                                                                                                                                      
- • Holiday/seasonal data (christmas_cost)                                                                                                                                               
- • Search trends and metrics                                                                                                                                                            
- • Various visualization-ready datasets (boxplot, candle, radar, sankey, tree)                                                                                                          
-
-Would you like me to explore any specific table in more detail or help you with queries on any of these datasets? 
-Datus>  
 ```
 
-For more command references and options, see the documentation: [Cli references](./cli/reference.md)
+**Example output:**
 
-### **🧪 2. Datus Benchmark (Docker Mode)**
+```
+Datus> /list all tables
+Processing chat request...
+# All Tables in the Database
 
-Run benchmark tests in a pre-configured Docker image to evaluate Datus using standard benchmark datasets: Bird and
-Spider-snow
+Here is the complete list of all tables available in the main schema:
 
-- pull image
+## Tables List
+
+| Table Name | Type |
+|------------|------|
+| bank_failures | table |
+| boxplot | table |
+| calendar | table |
+...
+
+Total Tables: 17
+
+The database contains a diverse set of tables covering various topics including:
+- Financial data (bank_failures, gold_vs_bitcoin)
+- Demographic data (japan_population, niger_population)
+...
+
+Would you like me to explore any specific table in more detail?
+Datus>
+```
+
+For more command references, see the [CLI documentation](../cli/introduction.md).
+
+---
+
+## 2. Datus Benchmark (Docker Mode)
+
+Run benchmark tests in a pre-configured Docker image to evaluate Datus using standard benchmark datasets: Bird and Spider-snow.
+
+### Pull Image
 
 ```bash
 docker pull luochen2025/datus-agent
 ```
 
-- start container
+### Start Container
 
 ```bash
 docker run --name datus \
---env DEEPSEEK_API_KEY=<your_api_key>  \
---env SNOWFLAKE_ACCOUNT=<your_snowflake_acount>  \
---env SNOWFLAKE_USERNAME=<your_snowflake_username>  \
---env SNOWFLAKE_PASSWORD=<your_snowflake_password>  \
--d luochen2025/datus-agent
+  --env DEEPSEEK_API_KEY=<your_api_key> \
+  --env SNOWFLAKE_ACCOUNT=<your_snowflake_account> \
+  --env SNOWFLAKE_USERNAME=<your_snowflake_username> \
+  --env SNOWFLAKE_PASSWORD=<your_snowflake_password> \
+  -d luochen2025/datus-agent
 ```
 
-- running benchmark
-    - Bird
+### Running Benchmarks
 
-  Run a specific task by ID
+**Note:** Before running benchmarks, you need to download and set up the benchmark databases. Refer to `conf/agent.yml.example` for configuration details.
 
-   ```bash
-   docker exec -it datus python -m datus.main benchmark  \
-   --namespace bird_sqlite \
-   --benchmark bird_dev \
-   --benchmark_task_ids 14
-   ```
-
-  Run all tasks
-
-   ```bash
-   docker exec -it datus python -m datus.main benchmark  \
-   --namespace bird_sqlite \
-   --benchmark bird_dev
-   ```
-
-    - Spider-snow
-
-  Run a specific task by ID
-
-   ```bash
-   docker exec -it datus python -m datus.main benchmark  \
-   --namespace snowflake \
-   --benchmark spider2 \
-   --benchmark_task_ids sf_bq104
-   ```
-
-  Run all tasks
-
-   ```bash
-   docker exec -it datus python -m datus.main benchmark  \
-   --namespace snowflake \
-   --benchmark spider2
-   ```
-
-For more detailed information about Datus benchmarking: [Benchmark](./benchmark/benchmark_manual.md)
-
-### **📊 3. Datus Metric (MetricFlow Integration)**
-
-Connect Datus to **MetricFlow** and a data warehouse (e.g., StarRocks) to enable **semantic understanding of metrics** —
-with support for model-based reasoning, date interpretation, and domain code mapping.
-
-**Prerequisites**
-
-- **Python:**
-    - Datus Agent already installed
-    - MetricFlow CLI itself: **Python 3.9** (separate venv via Poetry)
-- install metricflow mcp server
+**Bird Benchmark:**
 
 ```bash
-pip show datus_agent           # note the installed path
+# Run specific task by ID
+docker exec -it datus python -m datus.main benchmark \
+  --namespace bird_sqlite \
+  --benchmark bird_dev \
+  --benchmark_task_ids 14
+
+# Run all tasks
+docker exec -it datus python -m datus.main benchmark \
+  --namespace bird_sqlite \
+  --benchmark bird_dev
+```
+
+**Spider-snow Benchmark:**
+
+```bash
+# Run specific task by ID
+docker exec -it datus python -m datus.main benchmark \
+  --namespace snowflake \
+  --benchmark spider2 \
+  --benchmark_task_ids sf_bq104
+
+# Run all tasks
+docker exec -it datus python -m datus.main benchmark \
+  --namespace snowflake \
+  --benchmark spider2
+```
+
+For more detailed information about Datus benchmarking, see [Benchmark Manual](../benchmark/benchmark_manual.md).
+
+---
+
+## 3. Datus Metric (MetricFlow Integration)
+
+Connect Datus to **MetricFlow** and a data warehouse (e.g., StarRocks) to enable **semantic understanding of metrics** — with support for model-based reasoning, date interpretation, and domain code mapping.
+
+### Prerequisites
+
+- **Datus Agent** already installed
+- **MetricFlow CLI**: Requires Python 3.9 (separate venv via Poetry)
+
+### Install MCP Server
+
+```bash
+# Find Datus installation path
+pip show datus-agent
+
 cd <datus_install_path>/mcp/mcp-metricflow-server
 uv sync
 ```
 
-- Set up MetricFlow. Since MetricFlow requires Python 3.9, open a new terminal
+### Set Up MetricFlow
+
+Create a dedicated directory for your MetricFlow project:
 
 ```bash
-# Before continuing, create a dedicated directory for your MetricFlow project. This path will be reused in later steps — if you change it here, be sure to update it consistently throughout the guide.
 mkdir -p ~/mf
 cd ~/mf
 ```
 
-<aside>
-💡You’ll reference this directory later as MF_PROJECT_DIR. Adjust paths accordingly if you use a different location.
+> **Note:** You'll reference this directory later as `MF_PROJECT_DIR`.
 
-</aside>
-
-- Clone the repository and set up the environment
+Clone and set up MetricFlow:
 
 ```bash
 git clone https://github.com/Datus-ai/metricflow.git
@@ -216,7 +193,7 @@ poetry install
 source .venv/bin/activate
 ```
 
-- Verify MetricFlow installation
+Verify installation:
 
 ```bash
 mf setup
@@ -224,47 +201,40 @@ mf tutorial
 mf validate-configs
 ```
 
-- Set up MetricFlow for Datus Demo
+### Configure MetricFlow for Datus Demo
 
-Edit the `~/.metricflow/config.yml` file
+Edit `~/.metricflow/config.yml`:
 
-```bash
-model_path: ~/mf/metricflow/semantic_models   # Path to directory containing defined models (Leave until after DWH setup)
+```yaml
+model_path: ~/mf/metricflow/semantic_models
 email: ''  # Optional
 dwh_schema: demo
 dwh_dialect: duckdb
-dwh_database: ~/.datus/demo/demo.duckdb  # For DuckDB, this is the data file.
+dwh_database: ~/.datus/demo/demo.duckdb
 ```
 
----
+### Configure Datus
 
-<aside>
-💡Return to the Datus terminal, which uses Python version 3.12
-
-</aside>
-
-- Install the filesystem MCP server
+1. Install the filesystem MCP server:
 
 ```bash
 npm install -g @modelcontextprotocol/server-filesystem
 ```
 
-- Configure Datus for metrics integration.
+2. Add metrics configuration to `~/.datus/conf/agent.yml`:
 
-Add the following section to `~/.datus/conf/agent.yml`
-
-```bash
-  metrics:
-    demo:
-      subject_path: economic/bank/bank_failures
+```yaml
+metrics:
+  demo:
+    subject_path: economic/bank/bank_failures
 ```
 
-- Set up environment variables
+3. Set environment variables:
 
 ```bash
 # MetricFlow MCP server path + CLI
 export METRICFLOW_MCP_DIR=~/mf/metricflow
-export MF_PATH=~/mf//metricflow/.venv/bin/mf
+export MF_PATH=~/mf/metricflow/.venv/bin/mf
 export MF_PROJECT_DIR=~/mf/metricflow
 export MF_VERBOSE=true
 
@@ -273,49 +243,52 @@ mkdir -p ~/mf/metricflow/semantic_models
 export FILESYSTEM_MCP_DIRECTORY=~/mf/metricflow/semantic_models
 ```
 
-- Start the Datus CLI and generate metrics
+### Generate Metrics
+
+1. Start the Datus CLI:
 
 ```bash
 datus-cli --namespace local_duckdb
 ```
 
-- Ask Datus a natural language question, and it will automatically generate the appropriate SQL query for you.
+2. Ask a natural language question:
 
 ```bash
-Datus> /which state  has the highest total asset value of failure bank?
+Datus> /which state has the highest total asset value of failure bank?
+```
 
-#run the sql generated
-Datus>SELECT 
+3. Run the generated SQL:
+
+```bash
+Datus> SELECT
     State,
     SUM("Assets ($mil.)") as Total_Assets_Millions,
     COUNT(*) as Number_of_Failures
-FROM demo.main.bank_failures 
-GROUP BY State 
-ORDER BY Total_Assets_Millions DESC 
+FROM demo.main.bank_failures
+GROUP BY State
+ORDER BY Total_Assets_Millions DESC
 LIMIT 1
 ```
 
-- Generate metrics based on your question
+4. Generate metrics:
 
 ```bash
 Datus> !gen_metrics
 ```
 
-- View the generated metric definitions
-
-Navigate to the directory specified in `FILESYSTEM_MCP_DIRECTORY`
+5. View generated metric definitions:
 
 ```bash
 cd ~/mf/metricflow/semantic_models
-
-less bank_failures.yaml 
+less bank_failures.yaml
 ```
+
+**Generated YAML example:**
 
 ```yaml
 data_source:
   name: bank_failures
   description: Bank failures data with state and asset information
-
   sql_table: demo.main.bank_failures
 
   measures:
@@ -350,11 +323,11 @@ metric:
   type_params:
     measure: number_of_failures
   constraint: "{{ Dimension('state__state') }} = (
-    SELECT State 
-    FROM demo.main.bank_failures 
-    GROUP BY State 
+    SELECT State
+    FROM demo.main.bank_failures
+    GROUP BY State
     ORDER BY SUM("Assets ($mil.)") DESC
-                LIMIT 1
+    LIMIT 1
   )"
   locked_metadata:
     display_name: "Failure Count in Highest Asset State"
@@ -365,6 +338,43 @@ metric:
       - "Risk Analysis"
 ```
 
-For more details about metrics: [Metrics](./metrics/metrics.md)
+---
 
+## Quick Reference
 
+| Mode | Command | Use Case |
+|------|---------|----------|
+| CLI Chat | `datus-cli --namespace <name>` | Interactive SQL exploration |
+| API Server | `datus-agent --host 0.0.0.0 --port 8000` | REST API with SSE streaming |
+| Benchmark | `python -m datus.main benchmark ...` | Model evaluation |
+
+### Common Commands
+
+```bash
+# CLI with web interface
+datus-cli --namespace local_duckdb --web --port 8501
+
+# With custom configuration
+datus-cli --namespace local_duckdb --config /path/to/agent.yml
+
+# Enable debug logging
+datus-cli --namespace local_duckdb --debug
+```
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `KIMI_API_KEY` | Kimi (Moonshot) API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `DATUS_CONFIG` | Path to agent.yml configuration |
+
+---
+
+## Next Steps
+
+- [CLI Documentation](../cli/introduction.md)
+- [Configuration Guide](../configuration/introduction.md)
+- [Benchmark Manual](../benchmark/benchmark_manual.md)
+- [GitHub Repository](https://github.com/Datus-ai/Datus-agent)
