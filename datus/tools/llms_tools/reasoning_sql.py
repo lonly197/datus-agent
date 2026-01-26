@@ -185,12 +185,19 @@ async def reasoning_sql_with_builtin_tools_stream(
 
             # Call the read_query tool
             try:
-                if hasattr(read_query_tool, "_func"):
-                    # It's a wrapped function tool
+                if hasattr(read_query_tool, "on_invoke_tool"):
+                    # It's a FunctionTool with async invoker
+                    import json
+                    result_dict = await read_query_tool.on_invoke_tool(None, json.dumps({"sql": sql_query}))
+                    # Convert dict to FuncToolResult-like object
+                    from datus.tools.func_tool.base import FuncToolResult
+                    result = FuncToolResult(**result_dict)
+                elif hasattr(read_query_tool, "_func"):
+                    # It's a wrapped function tool (legacy)
                     result = read_query_tool._func(sql=sql_query)
                 else:
-                    # It's a standard Tool, use tool call
-                    result = await model.call_tool(read_query_tool, {"sql": sql_query})
+                    # Unknown tool type, raise error
+                    raise AttributeError(f"Tool {read_query_tool.name} has no callable interface")
 
                 # Check if result is successful
                 if hasattr(result, 'success'):

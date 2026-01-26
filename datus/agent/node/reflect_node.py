@@ -75,7 +75,9 @@ class ReflectNode(Node):
 
         task = self.input.task_description
 
-        if len(self.input.sql_context) == 0:
+        # Check if sql_context is None or empty
+        sql_context = self.input.sql_context if self.input.sql_context is not None else []
+        if len(sql_context) == 0:
             return ReflectionResult(success=False, error="No SQL context provided", strategy="UNKNOWN", details={})
 
         # TODO: use all the sql_contexts to evaluate
@@ -262,7 +264,7 @@ class ReflectNode(Node):
                 messages="Analyzing SQL execution results and determining next steps",
                 action_type="reflection_analysis",
                 input={
-                    "sql_contexts_count": len(self.input.sql_context) if hasattr(self.input, "sql_context") else 0,
+                    "sql_contexts_count": len(self.input.sql_context) if hasattr(self.input, "sql_context") and self.input.sql_context is not None else 0,
                     "task_description": (
                         getattr(self.input.task_description, "task", "")
                         if hasattr(self.input, "task_description")
