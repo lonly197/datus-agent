@@ -1,5 +1,8 @@
 # Schema 元数据管理 - 程序化使用
 
+> **文档版本**: v1.0
+> **更新日期**: 2026-01-26
+
 > 本文档介绍在 Python 代码中调用迁移/引导 API 的方式。如需使用命令行脚本，请参考 `docs/migration_v0_to_v1.md`。
 
 > **注意**：脚本文件已迁移至 `scripts/` 目录，API 模块仍在 `datus.storage.schema_metadata` 中。

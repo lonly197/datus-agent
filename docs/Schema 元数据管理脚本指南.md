@@ -1,5 +1,8 @@
 # Schema 元数据管理脚本指南
 
+> **文档版本**: v1.0
+> **更新日期**: 2026-01-26
+
 > 本指南介绍 `scripts/` 目录下所有 Schema 管理脚本的用法。如需程序化使用，请参考 `docs/migration_v0_to_v1_code_usage.md`。
 
 ## 脚本概览

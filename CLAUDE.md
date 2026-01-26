@@ -600,6 +600,55 @@ datus-agent --validate-workflow
 datus-agent --version
 ```
 
+## Documentation Standards
+
+### Document Validation Before Changes
+
+When modifying documentation, always verify against source code:
+
+1. **API Documentation**: Check `datus/api/models.py` and `datus/api/service.py` for exact request/response formats
+2. **Template Lists**: Use `ls datus/prompts/prompt_templates/*.j2` to get current templates
+3. **Tool Parameters**: Verify in the actual tool class implementation, not documentation
+
+**Common discrepancies to catch:**
+- JSON return format mismatches (e.g., `check_table_conflicts` missing `target_table` field in docs)
+- Non-existent API endpoints (e.g., `/metrics` endpoint doesn't exist)
+- Incorrect parameter names (e.g., `tool_timeout_seconds` is not a valid API parameter)
+- Hardcoded version numbers that don't match actual files
+
+### When to Delete vs Update Documentation
+
+**Delete documentation when:**
+- Document describes features that no longer exist in code
+- Document has >3 critical errors that would mislead users
+- Document is fully duplicated in another file (e.g., `curl_examples.md` vs `workflow/api.md`)
+- Document describes an API endpoint that doesn't exist
+
+**Update documentation when:**
+- Minor errors can be fixed with small edits
+- Content is unique and valuable
+- Template lists need expansion (not correction)
+
+### Document Version Headers
+
+Add version headers to new documentation files:
+
+```markdown
+> **文档版本**: v1.0
+> **更新日期**: YYYY-MM-DD
+```
+
+### Documentation Review Checklist
+
+Before submitting documentation changes:
+
+- [ ] Verify API endpoint exists in `service.py`
+- [ ] Check request parameters match `models.py` definitions
+- [ ] Confirm template lists match actual files in `prompt_templates/`
+- [ ] Remove hardcoded version numbers (use `*.j2` pattern instead)
+- [ ] Verify cURL examples use correct `--config` path format
+- [ ] Check for duplication with existing docs
+
 ## Resources
 
 ### Documentation
