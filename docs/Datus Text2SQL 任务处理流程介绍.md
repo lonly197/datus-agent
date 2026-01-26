@@ -113,7 +113,7 @@ time_range = "最近30天"（如有）
 #### **阶段 1: 快速混合召回**
 
 - **语义检索**：`SchemaWithValueRAG.search_similar()`，`top_n=20`，相似度阈值 0.5
-- **混合检索**：向量 + FTS 融合排序，可选 LanceDB rerank（hybrid query + rerank）
+- **混合检索**：向量 + FTS 融合排序，可选 LanceDB rerank（hybrid query + rerank）。当 `hybrid_rerank_enabled=true` 且候选表数量 ≥ `hybrid_rerank_min_tables` 时触发；若 reranker 初始化失败则跳过。
 - **关键词匹配**：基于硬编码的业务术语映射
 - **LLM 推断**：中文查询或模糊术语时触发，1 小时 TTL 缓存
 
@@ -134,6 +134,7 @@ schema_discovery:
 - `hybrid_*_weight`、`hybrid_tag_bonus`、`hybrid_comment_bonus` 必须在 `[0,1]`，否则回退默认值并记录 warning
 - `hybrid_rerank_min_tables` 必须 `>= 0`，否则回退为 20
 - `hybrid_rerank_top_n` 必须 `>= 1`，否则回退为 50
+ - `hybrid_rerank_model` / `hybrid_rerank_column` 用于配置 reranker 模型与输入列
 
 **统计字段说明**（写入 `workflow.metadata["schema_discovery_stats"]`）:
 - `semantic_vector_hits`：向量召回数量

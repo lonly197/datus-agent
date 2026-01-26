@@ -682,6 +682,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         try:
             from datus.configuration.business_term_config import \
                 infer_business_tags
+            from datus.utils.device_utils import get_device
 
             if not self.agent_config:
                 return []
@@ -891,6 +892,87 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         candidate["row_count"] = row_count
                     if tags:
                         candidate["tags"] = tags
+
+            rerank_results = None
+            if hybrid_enabled and rerank_enabled:
+                candidate_count = max(len(candidate_map), vector_total_hits, fts_total_hits)
+                if candidate_count < rerank_min_tables:
+                    logger.info(
+                        f"Rerank skipped: candidates={candidate_count} below min_tables={rerank_min_tables}"
+                    )
+                else:
+                    try:
+                        reranker_key = f"{rerank_model}:{rerank_column}"
+                        cached_key = getattr(self, "_schema_reranker_key", "")
+                        if cached_key == reranker_key:
+                            reranker = getattr(self, "_schema_reranker", None)
+                        else:
+                            reranker = None
+
+                        if reranker is None:
+                            try:
+                                from lancedb.rerankers import CrossEncoderReranker
+                            except Exception as import_error:
+                                logger.warning(f"Rerank disabled: failed to import CrossEncoderReranker: {import_error}")
+                                reranker = None
+                            else:
+                                reranker = CrossEncoderReranker(
+                                    model_name=rerank_model,
+                                    device=get_device(),
+                                    column=rerank_column,
+                                )
+                                self._schema_reranker = reranker
+                                self._schema_reranker_key = reranker_key
+
+                        if reranker:
+                            rag.schema_store.reranker = reranker
+                            rerank_results, _ = rag.search_similar(
+                                query_text=enhanced_query,
+                                top_n=rerank_top_n,
+                                use_rerank=True,
+                            )
+                    except Exception as rerank_error:
+                        logger.warning(f"Rerank search failed: {rerank_error}")
+
+            if rerank_results is not None and len(rerank_results) > 0:
+                rerank_table_names = rerank_results.column("table_name").to_pylist()
+                rerank_total_hits = len(rerank_table_names)
+                rerank_scores = []
+                score_column = None
+                for candidate_column in ("_score", "_relevance", "_distance"):
+                    if candidate_column in rerank_results.column_names:
+                        score_column = candidate_column
+                        break
+                if score_column == "_distance":
+                    distances = rerank_results.column("_distance").to_pylist()
+                    rerank_scores = [0.1 if d is None else 1.0 / (1.0 + d) for d in distances]
+                elif score_column:
+                    rerank_scores = rerank_results.column(score_column).to_pylist()
+                else:
+                    rerank_scores = []
+
+                max_rerank_score = max(rerank_scores) if rerank_scores else 0.0
+                for idx, table_name in enumerate(rerank_table_names):
+                    raw_score = rerank_scores[idx] if idx < len(rerank_scores) else None
+                    if raw_score is None:
+                        score = 1.0 - (idx / max(len(rerank_table_names), 1))
+                    elif score_column == "_distance":
+                        score = raw_score
+                    else:
+                        score = (raw_score / max_rerank_score) if max_rerank_score else 0.5
+
+                    candidate = candidate_map.setdefault(
+                        table_name,
+                        {
+                            "vector_score": 0.0,
+                            "fts_score": 0.0,
+                            "rerank_score": 0.0,
+                            "table_comment": "",
+                            "row_count": 0,
+                            "tags": [],
+                        },
+                    )
+                    candidate["rerank_score"] = max(candidate["rerank_score"], score)
 
             if candidate_map:
                 scored_tables = []
@@ -2034,37 +2116,3 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         except Exception as e:
             logger.warning(f"LLM-based schema matching failed: {e}")
             return []
-            if hybrid_enabled and rerank_enabled and (vector_total_hits + fts_total_hits) >= rerank_min_tables:
-                try:
-                    from lancedb.rerankers import CrossEncoderReranker
-                    from datus.utils.device_utils import get_device
-
-                    reranker = CrossEncoderReranker(
-                        model_name=rerank_model,
-                        device=get_device(),
-                        column=rerank_column,
-                    )
-                    rerank_results = rag.schema_store.search_similar(
-                        query_text=enhanced_query,
-                        top_n=rerank_top_n,
-                        reranker=reranker,
-                    )
-                    if rerank_results is not None and len(rerank_results) > 0:
-                        rerank_table_names = rerank_results.column("table_name").to_pylist()
-                        rerank_total_hits = len(rerank_table_names)
-                        for idx, table_name in enumerate(rerank_table_names):
-                            score = 1.0 - (idx / max(1, rerank_top_n))
-                            candidate = candidate_map.setdefault(
-                                table_name,
-                                {
-                                    "vector_score": 0.0,
-                                    "fts_score": 0.0,
-                                    "rerank_score": 0.0,
-                                    "table_comment": "",
-                                    "row_count": 0,
-                                    "tags": [],
-                                },
-                            )
-                            candidate["rerank_score"] = max(candidate["rerank_score"], score)
-                except Exception as rerank_error:
-                    logger.warning(f"Hybrid rerank failed: {rerank_error}")
