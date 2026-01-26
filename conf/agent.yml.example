@@ -7,6 +7,30 @@ agent:
     openai:
       type: openai
       vendor: openai
+      base_url: https://api.openai.com/v1
+      api_key: ${OPENAI_API_KEY}
+      model: gpt-4o-mini
+
+    google:
+      type: gemini
+      vendor: google
+      base_url: https://generativelanguage.googleapis.com/v1beta
+      api_key: ${GEMINI_API_KEY}
+      model: gemini-2.0-flash-exp
+
+    anthropic:
+      type: claude
+      vendor: anthropic
+      base_url: https://api.anthropic.com
+      api_key: ${ANTHROPIC_API_KEY}
+      model: claude-haiku-4-5
+
+    deepseek_v3:
+      type: deepseek
+      vendor: deepseek
+      base_url: https://api.deepseek.com
+      api_key: ${DEEPSEEK_API_KEY}
+      model: deepseek-chat
 
   # Plan executor configuration (optional)
   # Controls how the server-side plan executor matches todo text to tools and handles execution
@@ -61,27 +85,6 @@ agent:
         strict_mode: true
         # Dialect-specific validation (uses db_type from config)
         use_dialect: true
-
-    google:
-      type: gemini
-      vendor: google
-      base_url: https://generativelanguage.googleapis.com/v1beta
-      api_key: ${GEMINI_API_KEY}
-      model: gemini-2.0-flash-exp
-
-    anthropic:
-      type: claude
-      vendor: anthropic
-      base_url: https://api.anthropic.com
-      api_key: ${ANTHROPIC_API_KEY}
-      model: claude-haiku-4-5
-
-    deepseek_v3:
-      type: deepseek
-      vendor: deepseek
-      base_url: https://api.deepseek.com
-      api_key: ${DEEPSEEK_API_KEY}
-      model: deepseek-chat
 
   nodes:
     schema_linking:
@@ -197,9 +200,7 @@ agent:
 
   metrics:
     duckdb:
-      domain: sale
-      layer1: layer1
-      layer2: layer2
+      subject_path: sale/layer1/layer2
       ext_knowledge: ""
 
   storage:
@@ -260,76 +261,76 @@ agent:
       - execute_sql
       - reflect
 
-  # Workflow configuration with parallel execution and selection
-  workflow:
-    plan: bird_para
-
-    bird_para:
-      - schema_linking
-      - parallel:
-        - generate_sql
-        - reasoning
-      - selection
-      - execute_sql
-      - output
+  # Workflow configuration with parallel execution and selection (example)
+  # workflow:
+  #   plan: bird_para
+  #
+  #   bird_para:
+  #     - schema_linking
+  #     - parallel:
+  #         - generate_sql
+  #         - reasoning
+  #     - selection
+  #     - execute_sql
+  #     - output
 
   # Sub-workflow example
-  workflow:
-    plan: bird_para
-
-    bird_para:
-      - schema_linking
-      - parallel:
-        - subworkflow1
-        - subworkflow2
-        - subworkflow3
-      - selection
-      - execute_sql
-      - output
-
-    subworkflow1:
-      - search_metrics
-      - generate_sql
-
-    subworkflow2:
-      - search_metrics
-      - reasoning
-
-    subworkflow3:
-      - reasoning
-      - reflect
+  # workflow:
+  #   plan: bird_para
+  #
+  #   bird_para:
+  #     - schema_linking
+  #     - parallel:
+  #         - subworkflow1
+  #         - subworkflow2
+  #         - subworkflow3
+  #     - selection
+  #     - execute_sql
+  #     - output
+  #
+  #   subworkflow1:
+  #     - search_metrics
+  #     - generate_sql
+  #
+  #   subworkflow2:
+  #     - search_metrics
+  #     - reasoning
+  #
+  #   subworkflow3:
+  #     - reasoning
+  #     - reflect
 
   # Sub-workflow with config example
-   workflow:
-    plan: bird_para
-
-    bird_para:
-      - schema_linking
-      - parallel:
-        - subworkflow1
-        - subworkflow2
-        - subworkflow3
-      - selection
-      - execute_sql
-      - output
-
-    subworkflow1:
-      steps:
-      - search_metrics
-      - generate_sql
-      config: multi/agent1.yaml
-
-    subworkflow2:
-      steps:
-      - search_metrics
-      - reasoning
-      config: multi/agent2.yaml
-
-    subworkflow3:
-      steps:
-      - reasoning
-      - reflect
-      config: multi/agent3.yaml
+  # workflow:
+  #   plan: bird_para
+  #
+  #   bird_para:
+  #     - schema_linking
+  #     - parallel:
+  #         - subworkflow1
+  #         - subworkflow2
+  #         - subworkflow3
+  #     - selection
+  #     - execute_sql
+  #     - output
+  #
+  #   subworkflow1:
+  #     steps:
+  #       - search_metrics
+  #       - generate_sql
+  #     config: multi/agent1.yaml
+  #
+  #   subworkflow2:
+  #     steps:
+  #       - search_metrics
+  #       - reasoning
+  #     config: multi/agent2.yaml
+  #
+  #   subworkflow3:
+  #     steps:
+  #       - reasoning
+  #       - reflect
+  #     config: multi/agent3.yaml
 
   agentic_nodes:
     gen_semantic_model:
