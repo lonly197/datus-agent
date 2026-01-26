@@ -78,7 +78,7 @@ python scripts/migrate_v0_to_v1.py --config=conf/agent.yml [选项]
 | `--backup-path` | 备份 JSON 路径（来自 cleanup 脚本） | - |
 | `--skip-backup` | 跳过备份创建 | false |
 | `--llm-fallback` | 启用 LLM 作为 DDL 解析回退 | false |
-| `--llm-model` | LLM 模型名称 | - |
+| `--llm-model` | LLM 模型名称（默认使用 agent.yml 中的 agent.target 配置） | - |
 | `--db-path` | 覆盖存储路径 | - |
 
 带值布尔参数（如 `--extract-statistics`、`--extract-relationships`）接受：`true/false`、`yes/no`、`1/0`。
@@ -110,7 +110,15 @@ python scripts/migrate_v0_to_v1.py \
   --extract-statistics=false
 ```
 
-**LLM 回退解析 DDL**
+**LLM 回退解析 DDL（使用配置中的默认模型）**
+```bash
+python scripts/migrate_v0_to_v1.py \
+  --config=conf/agent.yml \
+  --extract-relationships=true \
+  --llm-fallback
+```
+
+**LLM 回退解析 DDL（指定模型）**
 ```bash
 python scripts/migrate_v0_to_v1.py \
   --config=conf/agent.yml \
