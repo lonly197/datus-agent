@@ -27,17 +27,19 @@ with open('conf/agent.yml', 'r') as f:
 - ✅ 添加业务领域标签 (business_tags)：finance, sales, inventory 等 9 大领域
 - ✅ 存储行数统计 (row_count) 和列统计 (sample_statistics)
 - ✅ 提取外键关系 (relationship_metadata) 支持智能 JOIN 建议
+- ✅ 提取枚举值 (column_enums) 支持下钻分析
 - ✅ 支持 5 大分析场景：聚合、下钻、趋势、相关性、对比
 
 ### 核心改进
 
 | 功能 | v0 (Legacy) | v1 (Enhanced) | 提升效果 |
 |------|-------------|---------------|----------|
-| **字段数量** | 7 个字段 | 15 个字段 | +114% |
+| **字段数量** | 7 个字段 | 16 个字段 | +129% |
 | **业务语义** | ❌ COMMENT 丢弃 | ✅ 完整持久化 | 50% 精度提升 |
 | **统计信息** | ❌ 无 | ✅ row_count + 列统计 | 支持聚合优化 |
-| **关系元数据** | ❌ 无 | ✅ FK + JOIN 路径 | 支持多表查询 |
+| **关系元数据** | ❌ 无 | ✅ FK + JOIN 路径 + 来源追踪 | 支持多表查询 |
 | **领域标签** | ❌ 无 | ✅ 9 大领域自动识别 | 域感知发现 |
+| **枚举值** | ❌ 无 | ✅ column_enums | 下钻分析增强 |
 
 ---
 
@@ -76,6 +78,7 @@ pa.schema([
     # Business Semantics (HIGH PRIORITY)
     pa.field("table_comment", pa.string()),          # 表注释
     pa.field("column_comments", pa.string()),        # JSON: {"col1": "comment1", ...}
+    pa.field("column_enums", pa.string()),           # JSON: {"status": [{"value": "0", "label": "未知"}, ...]}
     pa.field("business_tags", pa.list_(pa.string())), # ["finance", "fact_table"]
 
     # Statistics (MEDIUM PRIORITY)
@@ -83,7 +86,7 @@ pa.schema([
     pa.field("sample_statistics", pa.string()),       # JSON: {"col1": {"min": 0, "max": 100}}
 
     # Relationships (MEDIUM PRIORITY)
-    pa.field("relationship_metadata", pa.string()),   # JSON: {"foreign_keys": [...]}
+    pa.field("relationship_metadata", pa.string()),   # JSON: {"foreign_keys": [...], "source": "heuristic|information_schema"}
 
     # Metadata Management
     pa.field("metadata_version", pa.int32()),        # 0=legacy, 1=enhanced
@@ -99,9 +102,27 @@ pa.schema([
 |------|------|------|------|
 | `table_comment` | string | 表级 COMMENT（从 DDL 提取） | `"Customer orders fact table"` |
 | `column_comments` | JSON | 字段 COMMENT 字典 | `{"id": "Primary key", "amount": "Order amount (USD)"}` |
+| `column_enums` | JSON | 枚举值字典（从 COMMENT 解析） | `{"status": [{"value": "0", "label": "未知"}, {"value": "1", "label": "有效"}]}` |
 | `business_tags` | list[str] | 自动推断的业务领域标签 | `["finance", "fact_table", "revenue"]` |
 
-**价值**: COMMENT 包含业务术语和中文描述，是 LLM 准确理解业务语义的关键。
+**价值**:
+- COMMENT 包含业务术语和中文描述，是 LLM 准确理解业务语义的关键
+- `column_enums` 支持下钻分析，自动识别枚举维度（如：状态、类型、类别）
+
+**枚举值提取示例**:
+```sql
+-- DDL 中的 COMMENT 格式
+`status` VARCHAR(10) COMMENT '状态: 0-未知, 1-有效, 2-无效'
+
+-- 解析后 column_enums
+{
+  "status": [
+    {"value": "0", "label": "未知"},
+    {"value": "1", "label": "有效"},
+    {"value": "2", "label": "无效"}
+  ]
+}
+```
 
 #### 2. Statistics (统计信息)
 
@@ -118,7 +139,11 @@ pa.schema([
 
 | 字段 | 类型 | 说明 | 示例 |
 |------|------|------|------|
-| `relationship_metadata` | JSON | 外键和 JOIN 路径 | `{"foreign_keys": [{"from_column": "user_id", "to_table": "users", "to_column": "id"}], "join_paths": ["orders.user_id -> users.id"]}` |
+| `relationship_metadata` | JSON | 外键和 JOIN 路径 | `{"foreign_keys": [{"from_column": "user_id", "to_table": "users", "to_column": "id"}], "join_paths": ["orders.user_id -> users.id"], "source": "information_schema"}` |
+
+**关系来源 (`source`)**:
+- `"information_schema"`: 从数据库元数据提取（准确但需要 DB 连接）
+- `"heuristic"`: 从表名/列名推断（无需 DB 连接，适用于离线迁移）
 
 **价值**: 支持智能 JOIN 路径推荐，自动发现表关系。
 
@@ -132,14 +157,15 @@ pa.schema([
 
 ```python
 {
-    "table_comment": "",           # 空字符串
-    "column_comments": "{}",       # 空 JSON
-    "business_tags": [],           # 空列表
-    "row_count": 0,                # 零值
-    "sample_statistics": "{}",     # 空 JSON
-    "relationship_metadata": "{}", # 空 JSON
-    "metadata_version": 0,         # 0=legacy
-    "last_updated": 0              # 零时间戳
+    "table_comment": "",            # 空字符串
+    "column_comments": "{}",        # 空 JSON
+    "column_enums": "{}",           # 空 JSON
+    "business_tags": [],            # 空列表
+    "row_count": 0,                 # 零值
+    "sample_statistics": "{}",      # 空 JSON
+    "relationship_metadata": "{}",  # 空 JSON
+    "metadata_version": 0,          # 0=legacy
+    "last_updated": 0               # 零时间戳
 }
 ```
 
@@ -207,18 +233,11 @@ ls -lh /root/.datus/data.backup_v0_*/
 
 ```bash
 # 完整迁移（统计信息 + 关系元数据）
-# 方式 1: 显式指定 true/false 值
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --config=path/to/agent.yml \
     --extract-statistics=true \
     --extract-relationships=true \
     --import-schemas \
-    --force
-
-# 方式 2: 使用简写（flags without values, 默认为 true）
-python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
-    --config=path/to/agent.yml \
-    --extract-statistics=true \
     --force
 
 # 快速迁移（跳过统计信息）
@@ -231,6 +250,13 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --config=path/to/agent.yml \
     --extract-statistics=false
+
+# 使用 LLM 作为 DDL 解析的最后兜底方案
+python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+    --config=path/to/agent.yml \
+    --extract-relationships=true \
+    --llm-fallback \
+    --llm-model=deepseek-chat
 ```
 
 **配置文件路径**:
@@ -242,19 +268,42 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
   - `/path/to/your/project/agent.yml` （项目配置）
 
 **参数说明**:
-- `--config`: Agent 配置文件路径（必填，用于读取 storage.base_path）
-- `--extract-statistics`: 提取列统计（耗时长，需要数据库连接）。支持: `true`, `false`, `yes`, `no`, `1`, `0`
-- `--extract-relationships`: 提取外键关系（从 DDL 解析，无需连接 DB）。支持: `true`, `false`, `yes`, `no`, `1`, `0`
-- `--skip-backup`: 跳过自动备份（已手动备份时使用）
-- `--force`: 强制重新迁移（即使已有 v1 记录）
-- `--db-path`: 可选，覆盖配置文件中的存储路径
+| 参数 | 说明 | 支持值 |
+|------|------|--------|
+| `--config` | Agent 配置文件路径（必填） | 文件路径 |
+| `--extract-statistics` | 提取列统计（耗时长，需要 DB 连接） | `true`, `false`, `yes`, `no`, `1`, `0` |
+| `--extract-relationships` | 提取外键关系 | `true`, `false`, `yes`, `no`, `1`, `0` (默认: `true`) |
+| `--import-schemas` | 迁移后从数据库导入 Schema | 开关 |
+| `--import-only` | 仅导入 Schema，跳过迁移 | 需配合 `--import-schemas` |
+| `--clear` | 导入前清空旧数据 | 开关 |
+| `--llm-fallback` | 使用 LLM 作为 DDL 解析兜底 | 开关 |
+| `--llm-model` | LLM 模型名称（可选） | 模型标识符 |
+| `--skip-backup` | 跳过自动备份 | 开关 |
+| `--force` | 强制重新迁移 | 开关 |
+| `--db-path` | 覆盖存储路径 | 目录路径 |
 
-**注意**: 布尔参数支持多种格式：
-- 显式指定: `--extract-statistics=true` 或 `--extract-statistics=false`
-- 简写形式: `true`/`false`/`yes`/`no`/`1`/`0` (不区分大小写)
-- 默认值: `--extract-statistics` 默认为 `false`, `--extract-relationships` 默认为 `true`
+**布尔参数格式**: `--extract-statistics=true` / `--extract-statistics=false` / `--extract-statistics` (默认为 `true`)
 
-#### 方式 2: 手动迁移（开发环境）
+#### 方式 2: 仅导入 Schema（跳过迁移）
+
+对于新安装或已有 v1 数据需要刷新：
+
+```bash
+python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+    --config=path/to/agent.yml \
+    --namespace=<name> \
+    --import-schemas \
+    --import-only \
+    --clear \
+    --force
+
+# 说明：
+# --import-only: 跳过迁移步骤，直接从数据库导入
+# --clear: 导入前清空现有数据
+# --force: 强制重新导入
+```
+
+#### 方式 3: 手动迁移（开发环境）
 
 ```python
 from datus.storage.schema_metadata import SchemaWithValueRAG
@@ -316,7 +365,7 @@ print(f"Version distribution: {version_counts}")
 # 验证新字段是否填充
 sample = storage._search_all(
     where=None,
-    select_fields=["table_name", "table_comment", "business_tags", "row_count"],
+    select_fields=["table_name", "table_comment", "business_tags", "row_count", "column_enums"],
     limit=5
 )
 
@@ -349,6 +398,14 @@ CREATE TABLE orders (
 metadata = extract_enhanced_metadata_from_ddl(ddl, dialect="snowflake")
 print(f"Foreign keys: {metadata['foreign_keys']}")
 # 期望输出: [{"from_column": "user_id", "to_table": "users", "to_column": "id"}]
+
+# 测试枚举值提取
+from datus.utils.sql_utils import extract_enum_values_from_comment
+
+comment = "状态: 0-未知, 1-有效, 2-无效"
+enums = extract_enum_values_from_comment(comment)
+print(f"Enums: {enums}")
+# 期望输出: [("0", "未知"), ("1", "有效"), ("2", "无效")]
 ```
 
 ---
@@ -419,6 +476,29 @@ results = await bootstrap_incremental(
 
 print(f"Updated: {results['updated_tables']}, Unchanged: {results['unchanged_tables']}")
 ```
+
+### 4.3 数据库特定优化
+
+#### StarRocks 元数据提取
+
+StarRocks 提供了专用的元数据提取器，可从 `information_schema` 获取更准确的注释和统计信息：
+
+```bash
+# StarRocks 迁移示例（自动使用 StarRocksMetadataExtractor）
+python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+    --config=conf/agent.yml \
+    --namespace=starrocks_db \
+    --extract-statistics=true \
+    --extract-relationships=true \
+    --import-schemas \
+    --force
+```
+
+**StarRocks 特性**:
+- 从 `information_schema.tables` 提取表注释
+- 从 `information_schema.columns` 提取列注释
+- 自动识别主键和分区字段
+- 使用 `SHOW TABLE STATUS` 获取近似行数
 
 ---
 
@@ -494,11 +574,12 @@ def _semantic_table_discovery(self, task_text: str, top_n: int = 20):
 |------|-------------|---------|-----------|
 | table_comment | ~50 bytes | 50 KB | 500 KB |
 | column_comments | ~500 bytes | 500 KB | 5 MB |
+| column_enums | ~200 bytes | 200 KB | 2 MB |
 | business_tags | ~100 bytes | 100 KB | 1 MB |
 | row_count | 8 bytes | 8 KB | 80 KB |
 | sample_statistics | ~1 KB | 1 MB | 10 MB |
 | relationship_metadata | ~500 bytes | 500 KB | 5 MB |
-| **总计** | **~2.1 KB** | **~2.1 MB** | **~21 MB** |
+| **总计** | **~2.6 KB** | **~2.6 MB** | **~26 MB** |
 
 **结论**: 存储开销 <3 MB/1000 表，**完全可接受**。
 
@@ -521,7 +602,8 @@ def _semantic_table_discovery(self, task_text: str, top_n: int = 20):
 | 行数统计 | 20s | 使用统计表（vs COUNT(*) 慢 1000 倍） |
 | 列统计 | 120s | 采样 10K 行/表 |
 | 关系提取 | 15s | information_schema 查询 |
-| **总计** | **~190s (3 min)** | **目标 <5 min 达成** |
+| 枚举值提取 | 5s | 正则表达式匹配 |
+| **总计** | **~195s (3.25 min)** | **目标 <5 min 达成** |
 
 ---
 
@@ -636,18 +718,25 @@ correlations = await suggest_correlations(storage, "orders", max_correlations=10
 
 **改进后**:
 ```python
-# v1: column_comments 识别对比维度
+# v1: column_comments + column_enums 识别对比维度
 dimensions = []
 for schema in schemas:
-    column_comments = json.loads(schema.column_comments)
+    # 从 column_comments 识别
+    column_comments = json.loads(schema.column_comments or "{}")
     for col, comment in column_comments.items():
         if any(kw in comment.lower() for kw in ["region", "category", "segment"]):
             dimensions.append(f"{schema.table_name}.{col}")
 
-# 结果: ["orders.region", "orders.customer_segment"]
+    # 从 column_enums 识别枚举维度
+    column_enums = json.loads(schema.column_enums or "{}")
+    for col, enums in column_enums.items():
+        if len(enums) >= 2:  # 至少2个值，适合对比
+            dimensions.append(f"{schema.table_name}.{col}")
+
+# 结果: ["orders.region", "orders.customer_segment", "orders.status"]
 ```
 
-**提升**: **35%** - column_comments + business_tags 识别对比维度。
+**提升**: **35%** - column_comments + column_enums 识别对比维度。
 
 ---
 
@@ -673,6 +762,7 @@ pip install sqlglot
 # 始终使用 .get() 方式访问
 table_comment = schema.get("table_comment", "")  # 兼容 v0
 business_tags = schema.get("business_tags", [])  # 兼容 v0
+column_enums = schema.get("column_enums", "{}")  # 兼容 v0
 ```
 
 #### 错误 3: 迁移后查询变慢
@@ -688,7 +778,35 @@ storage.search_similar(query_text, top_n=10, batch_size=100)
 similarity_threshold = 0.6  # 过滤低相似度结果
 ```
 
-### 8.2 调试技巧
+#### 错误 4: "LLM fallback failed"
+
+**原因**: LLM 模型配置错误或 API 不可用
+
+**解决方案**:
+```bash
+# 检查模型配置
+python -c "
+from datus.models.base import LLMBaseModel
+from datus.configuration.agent_config import AgentConfig
+config = AgentConfig.from_yaml('conf/agent.yml')
+model = LLMBaseModel.create_model(config)
+print('Model initialized:', model.model_name)
+"
+
+# 迁移时禁用 LLM fallback
+python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+    --config=conf/agent.yml \
+    --extract-relationships=true  # 无 --llm-fallback
+```
+
+### 8.2 信号处理
+
+迁移脚本支持优雅关闭：
+- `Ctrl+C` (SIGINT) 或 `kill <pid>` (SIGTERM) 会触发快速退出
+- 已处理的记录会被保留
+- 可使用 `--force` 重新运行以恢复中断的迁移
+
+### 8.3 调试技巧
 
 #### 检查字段填充率
 
@@ -707,6 +825,25 @@ for row in all_data.to_pylist():
 fill_rate = comment_count / len(all_data) * 100
 print(f"table_comment fill rate: {fill_rate:.1f}%")
 # 期望: >80% (大部分表有 COMMENT)
+```
+
+#### 检查 column_enums 填充率
+
+```python
+# 统计 column_enums 填充率
+enum_count = 0
+for row in all_data.to_pylist():
+    enums = row.get("column_enums", "{}")
+    if enums and enums != "{}":
+        try:
+            if json.loads(enums):
+                enum_count += 1
+        except:
+            pass
+
+fill_rate = enum_count / len(all_data) * 100
+print(f"column_enums fill rate: {fill_rate:.1f}%")
+# 期望: >30% (有枚举注释的字段)
 ```
 
 #### 检查 business_tags 分布
@@ -728,6 +865,9 @@ for tag, count in tag_counter.most_common(10):
 
 ```python
 fk_count = 0
+info_schema_count = 0
+heuristic_count = 0
+
 for row in all_data.to_pylist():
     rel_meta = row.get("relationship_metadata", "{}")
     if rel_meta != "{}":
@@ -735,10 +875,17 @@ for row in all_data.to_pylist():
             relationships = json.loads(rel_meta)
             if relationships.get("foreign_keys"):
                 fk_count += 1
+                source = relationships.get("source", "")
+                if source == "information_schema":
+                    info_schema_count += 1
+                elif source == "heuristic":
+                    heuristic_count += 1
         except:
             pass
 
 print(f"Tables with FK metadata: {fk_count}/{len(all_data)}")
+print(f"  - From information_schema: {info_schema_count}")
+print(f"  - From heuristic inference: {heuristic_count}")
 # 期望: >30% (至少 1/3 表有外键)
 ```
 
@@ -801,9 +948,16 @@ print(f"Tables with FK metadata: {fk_count}/{len(all_data)}")
        assert "fact_table" in tags
 
    def test_enhanced_metadata_extraction():
-       ddl = "CREATE TABLE test (id INT COMMENT 'Primary key')"
+       ddl = "CREATE TABLE test (id INT COMMENT 'Primary key', status VARCHAR(10) COMMENT '状态: 0-未知, 1-有效')"
        metadata = extract_enhanced_metadata_from_ddl(ddl)
        assert metadata["columns"][0]["comment"] == "Primary key"
+       assert "status" in metadata.get("column_enums", {})
+
+   def test_enum_extraction():
+       from datus.utils.sql_utils import extract_enum_values_from_comment
+       enums = extract_enum_values_from_comment("状态: 0-未知, 1-有效, 2-无效")
+       assert len(enums) == 3
+       assert enums[0] == ("0", "未知")
    ```
 
 3. **性能基准**
@@ -881,18 +1035,19 @@ agent:
 #### 修改的核心文件
 
 1. `datus/storage/schema_metadata/store.py` - LanceDB schema 定义
-2. `datus/utils/sql_utils.py` - DDL 解析增强
+2. `datus/utils/sql_utils.py` - DDL 解析增强、枚举值提取
 3. `datus/configuration/business_term_config.py` - 业务标签推断
 4. `datus/agent/node/schema_discovery_node.py` - 模式发现增强
 5. `datus/storage/schema_metadata/benchmark_init.py` - Bootstrap 集成
 
-#### 新增文件
+#### 新增/增强的文件
 
-1. `datus/tools/db_tools/metadata_extractor.py` - 数据库元数据提取器
+1. `datus/tools/db_tools/metadata_extractor.py` - 数据库元数据提取器（新增 DuckDB/Snowflake/StarRocks）
 2. `datus/storage/schema_metadata/live_bootstrap.py` - 实时数据库引导
-3. `datus/agent/node/join_suggester.py` - JOIN 路径推荐
-4. `datus/agent/node/correlation_suggester.py` - 相关性分析
-5. `datus/storage/schema_metadata/migrate_v0_to_v1.py` - 迁移脚本
+3. `datus/storage/schema_metadata/migrate_v0_to_v1.py` - 迁移脚本（增强 LLM fallback、信号处理）
+4. `datus/agent/node/join_suggester.py` - JOIN 路径推荐
+5. `datus/agent/node/correlation_suggester.py` - 相关性分析
+6. `scripts/check_migration_report.py` - 迁移报告检查脚本（新增关系来源统计）
 
 ### C. 命令速查
 
@@ -921,8 +1076,6 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --clear \
     --force
 
-# 说明：--clear 会在 Step 1 前清空 schema_metadata 与 schema_value
-
 # 仅导入（跳过迁移）
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --config=conf/agent.yml \
@@ -930,6 +1083,12 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
     --import-schemas \
     --import-only \
     --clear
+
+# 使用 LLM 兜底解析
+python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+    --config=conf/agent.yml \
+    --llm-fallback \
+    --llm-model=deepseek-chat
 
 # 覆盖配置路径（不推荐，优先使用配置文件）
 python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
@@ -975,7 +1134,7 @@ print('Version distribution:', Counter(row.get('metadata_version', 0) for row in
 "
 ```
 
-### 3.4 使用检查脚本（推荐）
+### D. 使用检查脚本（推荐）
 
 用于统计迁移后字段覆盖率与业务术语分布，快速判断是否满足文档设计要求。
 
@@ -997,15 +1156,52 @@ python scripts/check_migration_report.py \
   --top-tags=20
 ```
 
-输出内容包括：
+**输出内容包括**：
 - v1 记录占比
-- table_comment / column_comments / column_enums / business_tags 填充率
-- relationship_metadata、row_count、sample_statistics 填充率
+- `table_comment` / `column_comments` / `column_enums` / `business_tags` 填充率
+- `relationship_metadata` 填充率及来源分布（information_schema / heuristic）
+- `row_count` / `sample_statistics` 填充率
 - Top N business_tags 分布
 
-### D. 联系与支持
+### E. 支持的数据库类型
 
-- **文档更新**: 2025-01-18
+| 数据库类型 | 元数据提取器 | DDL 解析 | 统计信息 | 关系检测 |
+|-----------|-------------|----------|----------|----------|
+| StarRocks | ✅ StarRocksMetadataExtractor | ✅ | ✅ | ✅ |
+| DuckDB | ✅ DuckDBMetadataExtractor | ✅ | ✅ | ✅ |
+| Snowflake | ✅ SnowflakeMetadataExtractor | ✅ | ✅ | ✅ |
+| MySQL | ⚠️ 基础支持 | ✅ | ⚠️ | ⚠️ |
+| PostgreSQL | ⚠️ 基础支持 | ✅ | ⚠️ | ⚠️ |
+| SQLite | ⚠️ 基础支持 | ✅ | ⚠️ | ❌ |
+
+**说明**：
+- ✅ 完全支持
+- ⚠️ 部分支持（使用基础实现）
+- ❌ 不支持
+
+### F. 关系来源说明
+
+迁移脚本会追踪关系元数据的来源：
+
+| 来源 | 说明 | 准确度 |
+|------|------|--------|
+| `information_schema` | 从数据库元数据（外键约束）提取 | 高 |
+| `heuristic` | 从表名/列名推断（如 `*_id` → `*` 表） | 中 |
+
+```json
+// relationship_metadata 示例
+{
+  "foreign_keys": [
+    {"from_column": "user_id", "to_table": "users", "to_column": "id"}
+  ],
+  "join_paths": ["orders.user_id -> users.id"],
+  "source": "information_schema"
+}
+```
+
+### G. 联系与支持
+
+- **文档更新**: 2025-01-26
 - **适用版本**: Datus-Agent v1.5+
 - **问题反馈**: [GitHub Issues](https://github.com/anthropics/datus-agent/issues)
 
@@ -1015,11 +1211,12 @@ python scripts/check_migration_report.py \
 - ✅ 所有记录的 `metadata_version` 均为 1（或混合 0/1）
 - ✅ `table_comment` 填充率 >80%
 - ✅ `business_tags` 分布合理（至少 3 个领域标签）
+- ✅ `column_enums` 填充率 >30%（有枚举注释的字段）
 - ✅ `relationship_metadata` 填充率 >30%（有外键的表）
 - ✅ 模式发现精度提升 ≥30%
 
 **预期总体效果**:
 - 🎯 **模式发现精度**: +30-50%
 - ⚡ **查询生成质量**: 显著提升（用户纠正减少）
-- 🚀 **新能力**: 支持相关性分析、智能 JOIN 推荐
+- 🚀 **新能力**: 相关性分析、智能 JOIN 推荐、枚举维度下钻
 - 💾 **存储开销**: <3 MB/1000 表（可接受）
