@@ -32,10 +32,28 @@ The Datus Agent Knowledge Base is a multi-modal intelligence system that transfo
 - **Capabilities**: Find queries by intent, get similar queries, learn patterns
 - **Use**: Knowledge sharing, optimization through examples, team onboarding
 
+### 4. [External Knowledge](ext_knowledge.md)
+**Purpose**: Ingest curated business knowledge from CSV into vector storage.
+
+- **Stores**: Terminology, definitions, business rules, reference facts
+- **Capabilities**: Retrieve relevant context for tasks and validations
+- **Use**: Business context injection, ambiguity reduction, validation hints
+
+### 5. [Document Store](document.md)
+**Purpose**: Chunk and index documents for general-purpose retrieval.
+
+- **Stores**: Document chunks, keywords, hierarchy metadata
+- **Capabilities**: Vector search across document content
+- **Use**: Document-backed answers and context augmentation
+
+### Subject Tree Taxonomy
+
+Metrics and Reference SQL are organized under a shared subject tree taxonomy. See [Subject Tree](subject_tree.md) for
+structure and usage.
+
 ### Other Bootstrap Components
 
-The `bootstrap-kb` command also supports `ext_knowledge` (external knowledge CSV) and `document` (document chunk store).
-These are initialized via `datus-agent bootstrap-kb --components ext_knowledge|document`.
+The `bootstrap-kb` command supports `ext_knowledge` and `document` via `datus-agent bootstrap-kb --components ext_knowledge|document`.
 
 > Note: `table_lineage` appears in CLI choices but is not accepted by the bootstrap validator in the current codebase.
 

@@ -109,7 +109,7 @@ SqlSummaryAgenticNode generates `name`, `summary`, `subject_path`, and `tags` fo
 
 - **Semantic Search**: Vector search over `search_text` (derived from name + summary)
 - **Full-text Index**: FTS index over SQL/name/comment/summary/tags for fast filtering
-- **Subject Filtering**: Limit results to a subject path in the taxonomy
+- **Subject Filtering**: Limit results to a subject path in the taxonomy (see [Subject Tree](subject_tree.md))
 
 ### 4. Incremental Updates
 

@@ -113,7 +113,7 @@ search_results = metrics_store.search("customer retention metrics")
 ### 2. Hierarchical Organization
 
 Metrics are organized under a subject tree (stored in `subject_tree.db`). Each metric is linked to a subject path
-like `["Sales", "Revenue", "Daily"]`.
+like `["Sales", "Revenue", "Daily"]`. See [Subject Tree](subject_tree.md) for details.
 
 ### 3. Multi-strategy Updates
 
