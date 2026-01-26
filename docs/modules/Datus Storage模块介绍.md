@@ -457,6 +457,11 @@ schema_discovery:
 - 若资源紧张，保持 rerank 关闭（默认）
 - 启用 rerank 需要对应模型可用（如 `BAAI/bge-reranker-large`）
 
+**权重校验规则**:
+- `hybrid_*_weight`、`hybrid_tag_bonus`、`hybrid_comment_bonus` 必须在 `[0,1]`，否则回退默认值并记录 warning
+- `hybrid_rerank_min_tables` 必须 `>= 0`，否则回退为 20
+- `hybrid_rerank_top_n` 必须 `>= 1`，否则回退为 50
+
 ---
 
 ## 初始化命令

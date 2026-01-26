@@ -750,6 +750,23 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             rerank_top_n = getattr(cfg, "hybrid_rerank_top_n", 50)
             rerank_model = getattr(cfg, "hybrid_rerank_model", "BAAI/bge-reranker-large")
             rerank_column = getattr(cfg, "hybrid_rerank_column", "definition")
+            stats.update(
+                {
+                    "hybrid_enabled": hybrid_enabled,
+                    "hybrid_use_fts": use_fts,
+                    "hybrid_vector_weight": vector_weight,
+                    "hybrid_fts_weight": fts_weight,
+                    "hybrid_row_count_weight": row_count_weight,
+                    "hybrid_tag_bonus": tag_bonus_weight,
+                    "hybrid_comment_bonus": comment_bonus_weight,
+                    "hybrid_rerank_enabled": rerank_enabled,
+                    "hybrid_rerank_weight": rerank_weight,
+                    "hybrid_rerank_min_tables": rerank_min_tables,
+                    "hybrid_rerank_top_n": rerank_top_n,
+                    "hybrid_rerank_model": rerank_model,
+                    "hybrid_rerank_column": rerank_column,
+                }
+            )
 
             if schema_results and len(schema_results) > 0:
                 try:
