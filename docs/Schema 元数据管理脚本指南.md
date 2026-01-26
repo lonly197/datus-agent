@@ -12,6 +12,7 @@
 | `check_storage_path.py` | Python | 检查存储路径配置 | 验证配置正确性 |
 | `backup_storage.sh` | Bash | 备份存储目录 | 迁移前数据保护 |
 | `migrate_v0_to_v1.py` | Python | v0 到 v1 Schema 迁移 | 升级元数据结构 |
+| `diagnose_schema_ddl.py` | Python | 抽样诊断存储 DDL 与数据库 DDL 差异 | 排查 DDL 缺逗号/截断/解析失败 |
 | `rebuild_schema.sh` | Bash | 重建 Schema（清空+导入） | 完全刷新元数据 |
 | `live_bootstrap.py` | Python | 实时数据库引导 | 从生产库拉取元数据 |
 | `check_migration_report.py` | Python | 验证迁移报告 | 检查迁移覆盖率 |
@@ -166,7 +167,52 @@ bash scripts/rebuild_schema.sh --namespace=my_database --config=custom/agent.yml
 
 ---
 
-## 5. live_bootstrap.py - 实时数据库引导
+## 5. diagnose_schema_ddl.py - DDL 抽样诊断
+
+### 脚本说明
+抽样检查 LanceDB 中存储的 DDL 是否存在缺逗号/截断等问题，并可与数据库原始 DDL 对比。
+
+### 使用方式
+```bash
+python scripts/diagnose_schema_ddl.py --config=conf/agent.yml --namespace=<name> --database=<db>
+```
+
+### 参数说明
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--config` | 配置文件路径 | conf/agent.yml |
+| `--namespace` | 命名空间名称 | 空（自动使用第一个 namespace） |
+| `--catalog` | Catalog 过滤 | 空 |
+| `--database` | Database 过滤 | 空 |
+| `--schema` | Schema 过滤 | 空 |
+| `--limit` | 抽样表数量 | 5 |
+| `--random` | 随机抽样 | false |
+| `--compare-db` | 拉取数据库 DDL 对比 | false |
+| `--output` | 输出 JSON 文件路径 | 空（仅打印） |
+
+### 应用场景
+
+**基础抽样诊断**
+```bash
+python scripts/diagnose_schema_ddl.py --config=conf/agent.yml --namespace=my_database --database=test
+```
+
+**随机抽样 + 数据库 DDL 对比**
+```bash
+python scripts/diagnose_schema_ddl.py \
+  --config=conf/agent.yml \
+  --namespace=my_database \
+  --database=test \
+  --limit=10 \
+  --random \
+  --compare-db \
+  --output=/tmp/ddl_sample.json
+```
+
+---
+
+## 6. live_bootstrap.py - 实时数据库引导
 
 ### 脚本说明
 从实时数据库直接拉取 Schema 元数据，支持增量更新。
