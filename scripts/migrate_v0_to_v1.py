@@ -25,6 +25,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.agent_config_loader import load_agent_config
 from datus.storage.embedding_models import get_db_embedding_model
