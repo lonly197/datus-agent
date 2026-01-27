@@ -1251,6 +1251,7 @@ def import_schema_metadata(
     clear_before_import: bool = False,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
+    llm_enum_extraction: bool = False,
 ) -> int:
     """
     Import schema metadata from database into LanceDB after migration.
@@ -1336,7 +1337,7 @@ def import_schema_metadata(
             pool_size=4,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
-            llm_enum_extraction=args.llm_enum_extraction,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
         # Verify import was successful
@@ -1856,6 +1857,7 @@ def main():
                         clear_before_import=args.clear,
                         extract_statistics=args.extract_statistics,
                         extract_relationships=args.extract_relationships,
+                        llm_enum_extraction=args.llm_enum_extraction,
                     )
                     migration_results["schemas_imported"] = imported_count
 
