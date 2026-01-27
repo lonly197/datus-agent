@@ -89,7 +89,7 @@ Before building the Docker image, you need to download the required HuggingFace 
 **Option 1: Use the automated script (recommended)**
 
 ```bash
-./download_model.sh
+./scripts/download_models_docker.sh
 ```
 
 **Option 2: Manual download**
@@ -107,6 +107,8 @@ hf download --resume-download qdrant/all-MiniLM-L6-v2-onnx \
   --local-dir docker/huggingface/fastembed/qdrant--all-MiniLM-L6-v2-onnx \
   --local-dir-use-symlinks False
 ```
+
+**Note**: For regular model downloads (not Docker build), use `./scripts/download_models_cn.sh` instead, which supports China mirror and ModelScope fallback.
 
 ### Build and Run
 
