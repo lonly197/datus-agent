@@ -15,6 +15,7 @@ from typing import AsyncGenerator, Optional
 from datus.agent.node.agentic_node import AgenticNode
 from datus.cli.generation_hooks import GenerationHooks
 from datus.configuration.agent_config import AgentConfig
+from datus.configuration.node_config import DEFAULT_SQL_SUMMARY_TOP_N
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
 from datus.schemas.sql_summary_agentic_node_models import (
@@ -184,7 +185,7 @@ class SqlSummaryAgenticNode(AgenticNode):
             logger.error(f"Error getting existing subject_paths: {e}")
             return []
 
-    def _get_similar_sqls(self, query_text: str, top_n: int = 5) -> list:
+    def _get_similar_sqls(self, query_text: str, top_n: int = DEFAULT_SQL_SUMMARY_TOP_N) -> list:
         """
         Find similar reference SQLs based on query text.
 
@@ -261,7 +262,7 @@ class SqlSummaryAgenticNode(AgenticNode):
         if not query_text and user_input.sql_query:
             query_text = user_input.sql_query[:200]
 
-        similar_items = self._get_similar_sqls(query_text, top_n=5)
+        similar_items = self._get_similar_sqls(query_text, top_n=DEFAULT_SQL_SUMMARY_TOP_N)
         context["similar_items"] = similar_items
         if similar_items:
             logger.info(f"Found {len(similar_items)} similar reference SQLs for context")
