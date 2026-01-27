@@ -25,7 +25,7 @@ Preflight check: has_workflow={bool}, has_metadata={bool}, has_required_tools={b
 
 ### 2. 创建测试脚本
 
-**文件**: `test_sql_review.sh`
+**文件**: `scripts/test_sql_review.sh`
 
 自动化测试脚本，用于发送 SQL Review 请求并保存日志。
 
@@ -55,7 +55,7 @@ cd /Users/lpp/workspace/lonly/datus-agent
 source .venv/bin/activate
 
 # 运行测试
-./test_sql_review.sh
+./scripts/test_sql_review.sh
 ```
 
 ### 步骤 3: 查看日志输出
@@ -208,7 +208,7 @@ Tool sequence: [...]
 ## 相关文件
 
 - **修改**: `datus/agent/node/chat_agentic_node.py`
-- **测试脚本**: `test_sql_review.sh`
+- **测试脚本**: `scripts/test_sql_review.sh`
 - **配置**: `datus/api/service.py` (Line 736-751)
 - **日志**: `test_output/sql_review_*.log`
 
