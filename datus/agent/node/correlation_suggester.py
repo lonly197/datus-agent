@@ -12,6 +12,7 @@ based on sample statistics and business domain context.
 import json
 from typing import Any, Dict, List
 
+from datus.configuration.node_config import DEFAULT_MAX_CORRELATIONS
 from datus.storage.schema_metadata import SchemaStorage
 from datus.utils.loggings import get_logger
 
@@ -21,7 +22,7 @@ logger = get_logger(__name__)
 async def suggest_correlations(
     storage: SchemaStorage,
     table_name: str,
-    max_correlations: int = 10,
+    max_correlations: int = DEFAULT_MAX_CORRELATIONS,
     catalog_name: str = "",
     database_name: str = "",
     schema_name: str = "",

@@ -13,6 +13,7 @@ import json
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
+from datus.configuration.node_config import DEFAULT_JOIN_DEPTH
 from datus.storage.schema_metadata import SchemaStorage
 from datus.utils.loggings import get_logger
 
@@ -23,7 +24,7 @@ async def suggest_join_paths(
     storage: SchemaStorage,
     source_tables: List[str],
     target_tables: List[str],
-    max_depth: int = 3,
+    max_depth: int = DEFAULT_JOIN_DEPTH,
     catalog_name: str = "",
     database_name: str = "",
     schema_name: str = "",
