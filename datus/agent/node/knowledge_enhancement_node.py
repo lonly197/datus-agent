@@ -18,6 +18,11 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
+from datus.configuration.node_config import (
+    DEFAULT_KNOWLEDGE_ENHANCEMENT_RETRIES,
+    DEFAULT_MAX_KNOWLEDGE_LENGTH,
+    DEFAULT_VECTOR_SEARCH_TOP_N,
+)
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
@@ -48,8 +53,8 @@ class KnowledgeEnhancementNode(Node, LLMMixin):
         input_data: Optional[BaseInput] = None,
         agent_config: Optional[AgentConfig] = None,
         tools: Optional[list] = None,
-        max_knowledge_length: int = 5000,
-        vector_search_top_n: int = 5,
+        max_knowledge_length: int = DEFAULT_MAX_KNOWLEDGE_LENGTH,
+        vector_search_top_n: int = DEFAULT_VECTOR_SEARCH_TOP_N,
     ):
         Node.__init__(
             self,
@@ -266,7 +271,7 @@ class KnowledgeEnhancementNode(Node, LLMMixin):
                 prompt=prompt,
                 operation_name="knowledge_filter",
                 cache_key=cache_key,
-                max_retries=2,
+                max_retries=DEFAULT_KNOWLEDGE_ENHANCEMENT_RETRIES,
             )
 
             filtered_knowledge = response.get("text", knowledge).strip()

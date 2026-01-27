@@ -14,6 +14,7 @@ from agents import Tool
 from datus.agent.error_handling import ErrorHandlerMixin
 from datus.agent.error_handling import NodeErrorResult as AgentNodeErrorResult
 from datus.configuration.agent_config import AgentConfig
+from datus.configuration.node_config import DEFAULT_NODE_TIMEOUT
 from datus.configuration.node_type import NodeType
 from datus.models.base import LLMBaseModel
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
@@ -66,9 +67,9 @@ def _run_async_stream_to_result(node: "Node") -> BaseResult:
     import concurrent.futures
 
     # Determine timeout from agent config or use default
-    timeout = 60  # Default timeout
+    timeout = DEFAULT_NODE_TIMEOUT
     if hasattr(node, "agent_config") and node.agent_config:
-        timeout = getattr(node.agent_config, "async_stream_timeout_seconds", 60)
+        timeout = getattr(node.agent_config, "async_stream_timeout_seconds", DEFAULT_NODE_TIMEOUT)
 
     # Determine max_workers from agent config or use default
     max_workers = 1  # Default to single thread for async stream execution

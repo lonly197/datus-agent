@@ -21,6 +21,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
+from datus.configuration.node_config import DEFAULT_INTENT_CLARIFICATION_RETRIES
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
@@ -232,7 +233,7 @@ class IntentClarificationNode(Node, LLMMixin):
                     prompt=prompt,
                     operation_name="intent_clarification",
                     cache_key=cache_key,
-                    max_retries=1,  # Reduce retries on each attempt
+                    max_retries=DEFAULT_INTENT_CLARIFICATION_RETRIES,
                 )
 
                 clarification_result = None

@@ -12,6 +12,8 @@ import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict
 
+from datus.configuration.scenario_enum import ExecutionScenario
+
 if TYPE_CHECKING:
     from datus.schemas.action_history import (ActionHistory,
                                               ActionHistoryManager)
@@ -41,7 +43,7 @@ class ExecutionContext:
         model: Any = None,
         workflow_metadata: Dict[str, Any] = None,
     ):
-        self.scenario = scenario  # "text2sql", "data_analysis", "sql_review", "smart_query", "deep_analysis"
+        self.scenario = scenario  # ExecutionScenario enum value or string
         self.task_data = task_data
         self.agent_config = agent_config
         self.model = model
@@ -911,18 +913,18 @@ def create_execution_mode(
 ) -> BaseExecutionMode:
     """Factory function to create execution mode based on scenario."""
     mode_classes = {
-        "text2sql": Text2SQLExecutionMode,
-        "sql_review": SQLReviewExecutionMode,
-        "data_analysis": DataAnalysisExecutionMode,
-        "smart_query": SmartQueryExecutionMode,
-        "deep_analysis": DeepAnalysisExecutionMode,
+        ExecutionScenario.TEXT2SQL: Text2SQLExecutionMode,
+        ExecutionScenario.SQL_REVIEW: SQLReviewExecutionMode,
+        ExecutionScenario.DATA_ANALYSIS: DataAnalysisExecutionMode,
+        ExecutionScenario.SMART_QUERY: SmartQueryExecutionMode,
+        ExecutionScenario.DEEP_ANALYSIS: DeepAnalysisExecutionMode,
     }
 
     mode_class = mode_classes.get(scenario)
     if not mode_class:
         raise ValueError(f"Unsupported execution scenario: {scenario}")
 
-    if scenario == "sql_review":
+    if scenario == ExecutionScenario.SQL_REVIEW:
         return mode_class(event_manager, context, chat_node)
     else:
         return mode_class(event_manager, context)

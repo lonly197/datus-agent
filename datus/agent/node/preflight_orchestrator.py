@@ -13,6 +13,8 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
+from datus.configuration.node_config import DEFAULT_PREFLIGHT_TOOL_TIMEOUT
+from datus.configuration.scenario_enum import ExecutionScenario
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
 from datus.tools.date_tools.date_parser import DateParserTool
@@ -137,14 +139,14 @@ class PreflightOrchestrator:
         # Get continue_on_failure setting from agent config (default: true for text2sql)
         continue_on_failure = True  # Default to continue on failure
         if self.agent_config and hasattr(self.agent_config, "scenarios"):
-            text2sql_config = self.agent_config.scenarios.get("text2sql", {})
+            text2sql_config = self.agent_config.scenarios.get(ExecutionScenario.TEXT2SQL, {})
             continue_on_failure = text2sql_config.get("continue_on_failure", True)
 
         # Get tool timeout from agent config (default: 30 seconds)
-        tool_timeout = 30.0
+        tool_timeout = DEFAULT_PREFLIGHT_TOOL_TIMEOUT
         if self.agent_config and hasattr(self.agent_config, "scenarios"):
-            text2sql_config = self.agent_config.scenarios.get("text2sql", {})
-            tool_timeout = text2sql_config.get("tool_timeout_seconds", 30.0)
+            text2sql_config = self.agent_config.scenarios.get(ExecutionScenario.TEXT2SQL, {})
+            tool_timeout = text2sql_config.get("tool_timeout_seconds", DEFAULT_PREFLIGHT_TOOL_TIMEOUT)
 
         # Ensure plan_hooks are available for caching support
         if not self.plan_hooks:

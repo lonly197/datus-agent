@@ -22,6 +22,7 @@ from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 from datus.agent.workflow import Workflow
 from datus.api.models import TodoItem, TodoStatus
 from datus.configuration.agent_config import AgentConfig
+from datus.configuration.scenario_enum import ExecutionScenario
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
 from datus.schemas.chat_agentic_node_models import ChatNodeInput
@@ -1695,13 +1696,13 @@ class ChatAgenticNode(GenSQLAgenticNode):
         Determine the execution scenario based on input content.
 
         Uses keyword-based detection with logging for transparency and debugging.
-        Always defaults to "text2sql" for unmatched inputs to ensure preflight execution.
+        Always defaults to TEXT2SQL for unmatched inputs to ensure preflight execution.
 
         Args:
         user_input: User input data
 
         Returns:
-        str: Execution scenario ("text2sql", "sql_review", "data_analysis", "smart_query", "deep_analysis")
+        str: Execution scenario (ExecutionScenario enum values)
         """
         try:
             message = (
@@ -1729,7 +1730,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
 
             if has_sql_review_keywords and has_sql_content:
                 logger.info("Detected scenario: sql_review (SQL review keywords + SQL content)")
-                return "sql_review"
+                return ExecutionScenario.SQL_REVIEW
             elif has_sql_review_keywords:
                 logger.debug("Found SQL review keywords but no SQL content, continuing with detection")
 
@@ -1750,27 +1751,27 @@ class ChatAgenticNode(GenSQLAgenticNode):
             ]
             if any(keyword in message for keyword in analysis_keywords):
                 logger.info("Detected scenario: data_analysis (analysis keywords)")
-                return "data_analysis"
+                return ExecutionScenario.DATA_ANALYSIS
 
             # Check for deep analysis indicators
             deep_analysis_keywords = ["深入", "deep", "详细", "detailed", "全面", "comprehensive", "优化", "optimize"]
             if any(keyword in message for keyword in deep_analysis_keywords):
                 logger.info("Detected scenario: deep_analysis (deep analysis keywords)")
-                return "deep_analysis"
+                return ExecutionScenario.DEEP_ANALYSIS
 
             # Default to text2sql for any SQL-related content or unmatched inputs
             sql_related_keywords = ["查询", "query", "转化", "下定", "统计", "平均", "总数", "count", "sum", "avg"]
             if any(keyword in message for keyword in sql_related_keywords) or len(message.strip()) > 10:
                 logger.info("Detected scenario: text2sql (SQL-related keywords or substantial input)")
-                return "text2sql"
+                return ExecutionScenario.TEXT2SQL
 
             # Fallback for very short or unclear inputs
             logger.info("Detected scenario: text2sql (default fallback)")
-            return "text2sql"
+            return ExecutionScenario.TEXT2SQL
 
         except Exception as e:
             logger.warning(f"Error in scenario detection, defaulting to text2sql: {e}")
-            return "text2sql"
+            return ExecutionScenario.TEXT2SQL
 
     def _build_enhanced_message(self, user_input) -> str:
         """Build enhanced message with context for chat interactions."""
