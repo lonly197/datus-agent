@@ -241,18 +241,66 @@ class BaseMetadataStorage(BaseEmbeddingStore):
         has_chinese = any("\u4e00" <= ch <= "\u9fff" for ch in sanitized)
         if not has_chinese:
             return sanitized
-        compact = "".join(ch for ch in sanitized if "\u4e00" <= ch <= "\u9fff")
-        if len(compact) <= 2:
-            return sanitized
-        bigrams = []
-        for i in range(len(compact) - 1):
-            token = compact[i : i + 2]
-            if token and token not in bigrams:
-                bigrams.append(token)
-        tokens = bigrams[:4]
+
+        tokens: List[str] = []
+        seen = set()
+
+        def _add(token: str) -> None:
+            if not token:
+                return
+            token = token.strip()
+            if not token or token in seen:
+                return
+            seen.add(token)
+            tokens.append(token)
+
+        # Preserve mixed tokens like "铂智3X" or "3X"
+        mixed_tokens = re.findall(r"[\u4e00-\u9fff]+[A-Za-z0-9]+|[A-Za-z0-9]+", sanitized)
+        for token in mixed_tokens:
+            _add(token)
+
+        # Extract Chinese sequences
+        chinese_segments = re.findall(r"[\u4e00-\u9fff]+", sanitized)
+
+        # Common business terms to preserve
+        common_terms = [
+            "线索",
+            "试驾",
+            "订单",
+            "漏斗",
+            "到店",
+            "转化",
+            "统计",
+            "渠道",
+            "有效",
+            "意向",
+            "车型",
+            "车种",
+        ]
+        for segment in chinese_segments:
+            for term in common_terms:
+                if term in segment:
+                    _add(term)
+
+        # Fallback: generate bigrams for longer Chinese segments
+        stop_chars = {"的", "和", "与", "及", "或", "按", "对", "在", "中", "以", "于", "为"}
+        for segment in chinese_segments:
+            if len(segment) <= 2:
+                _add(segment)
+                continue
+            for i in range(len(segment) - 1):
+                token = segment[i : i + 2]
+                if any(ch in stop_chars for ch in token):
+                    continue
+                _add(token)
+                if len(tokens) >= 6:
+                    break
+            if len(tokens) >= 6:
+                break
+
         if not tokens:
             return sanitized
-        return " ".join(tokens)
+        return " ".join(tokens[:6])
 
 
 class SchemaStorage(BaseMetadataStorage):
