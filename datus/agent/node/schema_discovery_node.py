@@ -174,6 +174,29 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
         return 0
 
+    def _rewrite_fts_query_with_llm(self, query_text: str) -> str:
+        if not query_text or not self.model:
+            return query_text
+        try:
+            prompt = (
+                "You are a data analyst. Rewrite the user query into short Chinese keywords for schema search.\n"
+                "Return ONLY JSON: {\"query\": \"<keywords>\"}.\n"
+                "Constraints:\n"
+                "- Use 3-8 concise keywords\n"
+                "- Keep product or model names as-is (e.g., 铂智3X)\n"
+                "- Remove filler words\n"
+                f"User query: {query_text}\n"
+            )
+            response = self.call_llm(prompt, operation_name="schema_discovery_fts_rewrite")
+        except Exception as exc:
+            logger.debug(f"LLM rewrite failed: {exc}")
+            return query_text
+        if isinstance(response, dict):
+            rewritten = response.get("query", "")
+            if isinstance(rewritten, str) and rewritten.strip():
+                return rewritten.strip()
+        return query_text
+
     def _check_rerank_resources(
         self, model_path: str, min_cpu_count: int, min_memory_gb: float
     ) -> Dict[str, Any]:
@@ -1035,8 +1058,14 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     fts_table_type = (
                         getattr(task_context, "schema_linking_type", "table") if task_context else "table"
                     )
+                    fts_query = enhanced_query
+                    cfg = self.agent_config.schema_discovery_config if self.agent_config else None
+                    llm_rewrite_enabled = bool(getattr(cfg, "llm_fts_rewrite_enabled", False))
+                    min_chars = int(getattr(cfg, "llm_fts_rewrite_min_chars", 6))
+                    if llm_rewrite_enabled and len(fts_query or "") >= min_chars and _contains_chinese(fts_query):
+                        fts_query = self._rewrite_fts_query_with_llm(fts_query)
                     fts_results = rag.schema_store.search_fts(
-                        query_text=enhanced_query,
+                        query_text=fts_query,
                         catalog_name=fts_catalog or "",
                         database_name=fts_database or "",
                         schema_name=fts_schema or "",

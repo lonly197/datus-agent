@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from datus.configuration.agent_config_loader import load_agent_config
+from datus.models.base import LLMBaseModel
 from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata.store import SchemaStorage
 
@@ -41,6 +42,16 @@ def _parse_args() -> argparse.Namespace:
         "--debug-simplify",
         action="store_true",
         help="Print simplified query (Chinese bigrams) used for FTS fallback",
+    )
+    parser.add_argument(
+        "--llm-rewrite",
+        action="store_true",
+        help="Rewrite FTS queries with LLM (uses active model from agent.yml)",
+    )
+    parser.add_argument(
+        "--llm-model",
+        default="",
+        help="Override model name for LLM rewrite (defaults to active model)",
     )
     return parser.parse_args()
 
@@ -76,6 +87,36 @@ def _build_db_path(args: argparse.Namespace) -> str:
     return f"{agent_config.rag_base_path}/lancedb"
 
 
+def _rewrite_query_with_llm(
+    query: str, agent_config, model_name: str = ""
+) -> str:
+    if not query or not agent_config:
+        return query
+    try:
+        llm_model = LLMBaseModel.create_model(agent_config=agent_config, model_name=model_name or None)
+    except Exception:
+        return query
+
+    prompt = (
+        "You are a data analyst. Rewrite the user query into short Chinese keywords for schema search.\n"
+        "Return ONLY JSON: {\"query\": \"<keywords>\"}.\n"
+        "Constraints:\n"
+        "- Use 3-8 concise keywords\n"
+        "- Keep product or model names as-is (e.g., 铂智3X)\n"
+        "- Remove filler words\n"
+        f"User query: {query}\n"
+    )
+    try:
+        response = llm_model.generate_with_json_output(prompt)
+    except Exception:
+        return query
+    if isinstance(response, dict):
+        rewritten = response.get("query", "")
+        if isinstance(rewritten, str) and rewritten.strip():
+            return rewritten.strip()
+    return query
+
+
 def main() -> int:
     args = _parse_args()
     if args.show_examples:
@@ -84,6 +125,9 @@ def main() -> int:
             print(f"  - {query}")
         return 0
 
+    agent_config = load_agent_config(config=args.config)
+    if args.namespace:
+        agent_config.current_namespace = args.namespace
     db_path = _build_db_path(args)
     storage = SchemaStorage(db_path=db_path, embedding_model=get_db_embedding_model())
     storage._ensure_table_ready()
@@ -117,7 +161,16 @@ def main() -> int:
     print("FTS TEST QUERIES")
     print("=" * 80)
     for query in queries:
-        print(f"\nQUERY: {query}")
+        original_query = query
+        if args.llm_rewrite:
+            query = _rewrite_query_with_llm(query, agent_config, args.llm_model)
+            if query != original_query:
+                print(f"\nQUERY: {original_query}")
+                print(f"  llm_rewrite: {query}")
+            else:
+                print(f"\nQUERY: {query}")
+        else:
+            print(f"\nQUERY: {query}")
         if args.debug_simplify:
             simplified = storage._simplify_fts_query(query)
             if simplified and simplified != storage._sanitize_fts_query(query):

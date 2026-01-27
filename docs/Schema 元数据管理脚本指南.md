@@ -183,6 +183,15 @@ python scripts/check_search_text_fts.py \
   --debug-simplify
 ```
 
+**LLM 重写查询（可选）**:
+```bash
+python scripts/check_search_text_fts.py \
+  --config=conf/agent.yml \
+  --namespace=test \
+  --queries="线索统计 铂智3X 渠道,转化漏斗 试驾 订单实绩" \
+  --llm-rewrite
+```
+
 ---
 
 ## rebuild_schema_fts_index.py - FTS 索引重建

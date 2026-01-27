@@ -118,6 +118,10 @@ class SchemaDiscoveryConfig:
     hybrid_rerank_min_cpu_count: int = 4
     hybrid_rerank_min_memory_gb: float = 8.0
 
+    # LLM rewrite for FTS queries (optional)
+    llm_fts_rewrite_enabled: bool = False
+    llm_fts_rewrite_min_chars: int = 6
+
     def __post_init__(self):
         logger = get_logger(__name__)
 
