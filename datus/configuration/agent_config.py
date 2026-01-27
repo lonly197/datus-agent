@@ -102,11 +102,17 @@ class SchemaDiscoveryConfig:
     # Hybrid retrieval configuration (vector + FTS + optional rerank)
     hybrid_search_enabled: bool = True
     hybrid_use_fts: bool = True
-    hybrid_vector_weight: float = 0.6
-    hybrid_fts_weight: float = 0.3
-    hybrid_row_count_weight: float = 0.2
+    hybrid_vector_weight: float = 0.5
+    hybrid_fts_weight: float = 0.45
+    hybrid_row_count_weight: float = 0.05
     hybrid_tag_bonus: float = 0.1
     hybrid_comment_bonus: float = 0.05
+
+    # Prefix filtering (new)
+    table_prefix_whitelist: List[str] = field(default_factory=lambda: ["dws_", "dwd_", "dim_"])
+    table_prefix_blacklist: List[str] = field(default_factory=lambda: ["ods_"])
+    prefix_blacklist_penalty: float = 0.3  # multiply semantic score by (1 - penalty)
+    prefix_whitelist_bonus: float = 0.05   # additive bonus to semantic score / priority
 
     # Hybrid rerank (LanceDB rerank)
     hybrid_rerank_enabled: bool = False

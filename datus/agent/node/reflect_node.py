@@ -117,11 +117,21 @@ class ReflectNode(Node):
 
         # Per-strategy iteration limits
         STRATEGY_MAX_ITERATIONS = {
-            "schema_linking": 2,
+            "schema_linking": 3,  # prefer schema linking, allow up to 3 attempts
             "simple_regenerate": 3,
             "reasoning": 3,
             "doc_search": 1,
         }
+
+        # Prefer schema_linking as first recovery if not yet tried
+        if strategy.lower() != "schema_linking":
+            schema_linking_tries = strategy_counts.get("schema_linking", 0)
+            if schema_linking_tries < STRATEGY_MAX_ITERATIONS["schema_linking"]:
+                logger.info(
+                    "Overriding reflection strategy to SCHEMA_LINKING for prioritized schema recovery "
+                    f"(attempt {schema_linking_tries + 1}/{STRATEGY_MAX_ITERATIONS['schema_linking']})"
+                )
+                strategy = StrategyType.SCHEMA_LINKING
 
         # Check for per-strategy iteration limits
         strategy_counts = workflow.metadata.get("strategy_counts", {})

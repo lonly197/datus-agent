@@ -693,6 +693,30 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 }
             )
 
+        # Apply prefix-based whitelist/blacklist adjustments
+        cfg = self.agent_config.schema_discovery_config if self.agent_config else None
+        whitelist = getattr(cfg, "table_prefix_whitelist", []) if cfg else []
+        blacklist = getattr(cfg, "table_prefix_blacklist", []) if cfg else []
+        bl_penalty = getattr(cfg, "prefix_blacklist_penalty", 0.0) if cfg else 0.0
+        wl_bonus = getattr(cfg, "prefix_whitelist_bonus", 0.0) if cfg else 0.0
+
+        def _match_prefix(name: str, prefixes: List[str]) -> bool:
+            return any(name.startswith(p.lower()) for p in prefixes)
+
+        adjusted: List[Dict[str, Any]] = []
+        for item in details_list:
+            name_l = item["table_name"].lower()
+            if whitelist and _match_prefix(name_l, [p.lower() for p in whitelist]):
+                item["priority"] += 1
+                item["semantic_score"] += wl_bonus
+                item.setdefault("scores", {})["prefix_bonus"] = wl_bonus
+            if blacklist and _match_prefix(name_l, [p.lower() for p in blacklist]):
+                item["priority"] -= 1
+                item["semantic_score"] *= max(0.0, 1.0 - bl_penalty)
+                item.setdefault("scores", {})["prefix_penalty"] = bl_penalty
+            adjusted.append(item)
+        details_list = adjusted
+
         details_list.sort(
             key=lambda item: (
                 item["priority"],
