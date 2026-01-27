@@ -343,6 +343,7 @@ def init_sqlite_schema(
     llm_model: Optional[LLMBaseModel] = None,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
+    llm_enum_extraction: bool = False,
 ):
     database_name = getattr(db_config, "database", "")
     sql_connector = db_manager.get_conn(agent_config.current_namespace, database_name)
@@ -413,6 +414,7 @@ def init_duckdb_schema(
     llm_model: Optional[LLMBaseModel] = None,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
+    llm_enum_extraction: bool = False,
 ):
     # means schema_name here
     database_name = database_name or getattr(db_config, "database", "")
@@ -473,6 +475,7 @@ def init_duckdb_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
 
@@ -489,6 +492,7 @@ def init_mysql_schema(
     llm_model: Optional[LLMBaseModel] = None,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
+    llm_enum_extraction: bool = False,
 ):
     database_name = database_name or getattr(db_config, "database", "")
 
@@ -527,6 +531,7 @@ def init_mysql_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
     if table_type in ("full", "view"):
@@ -547,6 +552,7 @@ def init_mysql_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
 
@@ -564,6 +570,7 @@ def init_starrocks_schema(
     llm_model: Optional[LLMBaseModel] = None,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
+    llm_enum_extraction: bool = False,
 ):
     sql_connector = db_manager.get_conn(agent_config.current_namespace)
     catalog_name = catalog_name or getattr(db_config, "catalog", "") or sql_connector.catalog_name
@@ -602,6 +609,7 @@ def init_starrocks_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
     if table_type in ("full", "view"):
@@ -621,6 +629,7 @@ def init_starrocks_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
     if table_type in ("full", "view"):
         materialized_views = sql_connector.get_materialized_views_with_ddl(
@@ -641,6 +650,7 @@ def init_starrocks_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
 
@@ -657,6 +667,7 @@ def init_other_three_level_schema(
     llm_model: Optional[LLMBaseModel] = None,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
+    llm_enum_extraction: bool = False,
 ):
     db_type = db_config.type
     database_name = database_name or getattr(db_config, "database", "")
@@ -782,6 +793,7 @@ def init_other_three_level_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
     if (table_type == "mv" or table_type == "full") and hasattr(sql_connector, "get_materialized_views_with_ddl"):
         materialized_views = sql_connector.get_materialized_views_with_ddl(
@@ -811,6 +823,7 @@ def init_other_three_level_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
 
