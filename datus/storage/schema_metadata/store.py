@@ -203,15 +203,36 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             available_fields=available_fields,
         )
         where_clause = build_where(where)
-        try:
+
+        def _run_query(where_sql: str) -> pa.Table:
             query_builder = self.table.search(sanitized_query, query_type="fts")
-            query_builder = BaseEmbeddingStore._fill_query(query_builder, select_fields, where_clause)
+            query_builder = BaseEmbeddingStore._fill_query(query_builder, select_fields, where_sql)
             results = query_builder.limit(top_n).to_arrow()
             if self.vector_column_name in results.column_names:
                 results = results.drop([self.vector_column_name])
             return results
+
+        try:
+            return _run_query(where_clause)
         except Exception as exc:
-            logger.warning(f"FTS search failed: {exc}")
+            error_message = str(exc)
+            if 'Referenced column "table_type"' in error_message:
+                logger.warning(
+                    "FTS search failed on table_type filter; retrying without table_type constraint."
+                )
+                where_without_type = _build_where_clause(
+                    catalog_name=catalog_name,
+                    database_name=database_name,
+                    schema_name=schema_name,
+                    table_type="full",
+                    available_fields=available_fields,
+                )
+                try:
+                    return _run_query(build_where(where_without_type))
+                except Exception as retry_exc:
+                    logger.warning(f"FTS retry failed: {retry_exc}")
+            else:
+                logger.warning(f"FTS search failed: {exc}")
             return pa.table({})
 
 
