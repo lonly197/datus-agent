@@ -5,11 +5,26 @@
 """
 Business term mapping configuration.
 
-This file contains configurable mappings between business terminology
-(including Chinese terms) and database schema elements.
+This module now supports external, YAML-based business term dictionaries.
+Load order (first hit wins):
+1) Environment variable BUSINESS_TERM_CONFIG (file path)
+2) conf/business_terms.auto.yml (repo/local override)
+3) ~/.datus/conf/business_terms.auto.yml (per-user override)
 
-These mappings can be customized per deployment without modifying core code.
+The external file format is:
+term_to_table:
+  试驾: [dws_xxx, dwd_xxx.col]
+term_to_schema:
+  试驾: [is_valid_clue_td, test_drive_date]
+table_keywords:
+  线索宽表: dws_obtain_original_clue_2h_di
 """
+
+import os
+from pathlib import Path
+from typing import Dict, List
+
+import yaml
 
 # Schema Discovery: Business term to table name mappings
 BUSINESS_TERM_TO_TABLE_MAPPING = {
@@ -327,3 +342,53 @@ def detect_temporal_granularity(column_name: str, comment: str = "") -> str:
         if any(kw in col_lower for kw in keywords):
             return granularity
     return "unknown"
+
+
+# ---------- External config loading ----------
+
+def _load_yaml_config(path: Path) -> Dict[str, Dict[str, List[str]]]:
+    if not path or not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            "term_to_table": data.get("term_to_table", {}) or {},
+            "term_to_schema": data.get("term_to_schema", {}) or {},
+            "table_keywords": data.get("table_keywords", {}) or {},
+        }
+    except Exception:
+        return {}
+
+
+def _merge_external_config(cfg: Dict[str, Dict[str, List[str]]]) -> None:
+    if not cfg:
+        return
+    BUSINESS_TERM_TO_TABLE_MAPPING.update(cfg.get("term_to_table", {}))
+    BUSINESS_TERM_TO_SCHEMA_MAPPING.update(cfg.get("term_to_schema", {}))
+    TABLE_KEYWORD_PATTERNS.update(cfg.get("table_keywords", {}))
+
+
+def _load_external_business_terms() -> None:
+    """
+    Load external business term dictionary based on priority.
+    """
+    candidates = []
+    env_path = os.getenv("BUSINESS_TERM_CONFIG")
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+
+    candidates.append(Path("conf/business_terms.auto.yml"))
+    candidates.append(Path.home() / ".datus" / "conf" / "business_terms.auto.yml")
+
+    for p in candidates:
+        cfg = _load_yaml_config(p)
+        if cfg:
+            _merge_external_config(cfg)
+            break
+
+
+# Load external config at import time
+_load_external_business_terms()
