@@ -17,6 +17,7 @@
 | [live_bootstrap.py](#live_bootstrappy---实时引导) | 从数据库引导 | 增量更新 |
 | [local_init.py](#local_initpy---schema-导入) | 直接导入 Schema | 快速导入 |
 | [check_search_text_fts.py](#check_search_text_ftspy---fts-检查) | search_text 覆盖率 + FTS 召回 | 验证中文检索优化 |
+| [rebuild_schema_fts_index.py](#rebuild_schema_fts_indexpy---fts-索引重建) | 重建 Schema FTS 索引 | FTS 故障排查 |
 
 ---
 
@@ -175,6 +176,19 @@ python scripts/check_search_text_fts.py \
 
 ---
 
+## rebuild_schema_fts_index.py - FTS 索引重建
+
+**功能**: 重建 `schema_metadata` 的 FTS 索引，用于修复 FTS 查询失败或索引字段变更的场景。
+
+**示例**:
+```bash
+python scripts/rebuild_schema_fts_index.py \
+  --config=conf/agent.yml \
+  --namespace=test
+```
+
+---
+
 ## 完整操作流程
 
 ### 流程 1: 完整迁移
@@ -209,6 +223,11 @@ python scripts/diagnose_schema_ddl.py \
 
 # 5. FTS 检查
 python scripts/check_search_text_fts.py \
+  --config=conf/agent.yml \
+  --namespace=test
+
+# 6. FTS 索引重建（必要时）
+python scripts/rebuild_schema_fts_index.py \
   --config=conf/agent.yml \
   --namespace=test
 ```

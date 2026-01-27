@@ -141,6 +141,7 @@ class BaseMetadataStorage(BaseEmbeddingStore):
                 "database_name",
                 "schema_name",
                 "table_name",
+                "table_type",
                 self.vector_source_name,
                 "search_text",
                 "table_comment",
