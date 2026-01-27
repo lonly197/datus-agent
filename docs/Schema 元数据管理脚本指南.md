@@ -174,6 +174,15 @@ python scripts/check_search_text_fts.py \
   --queries="线索统计 铂智3X 渠道,转化漏斗 试驾 订单实绩,有效线索到店"
 ```
 
+**调试中文短语拆分**:
+```bash
+python scripts/check_search_text_fts.py \
+  --config=conf/agent.yml \
+  --namespace=test \
+  --queries="有效线索到店,铂智3X线索转化漏斗（按月份）" \
+  --debug-simplify
+```
+
 ---
 
 ## rebuild_schema_fts_index.py - FTS 索引重建

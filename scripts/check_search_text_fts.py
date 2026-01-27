@@ -37,6 +37,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--queries", default="", help="Comma-separated queries for FTS test")
     parser.add_argument("--queries-file", default="", help="Path to a JSON or txt file with queries")
     parser.add_argument("--show-examples", action="store_true", help="Print example queries and exit")
+    parser.add_argument(
+        "--debug-simplify",
+        action="store_true",
+        help="Print simplified query (Chinese bigrams) used for FTS fallback",
+    )
     return parser.parse_args()
 
 
@@ -113,6 +118,10 @@ def main() -> int:
     print("=" * 80)
     for query in queries:
         print(f"\nQUERY: {query}")
+        if args.debug_simplify:
+            simplified = storage._simplify_fts_query(query)
+            if simplified and simplified != storage._sanitize_fts_query(query):
+                print(f"  simplified_query: {simplified}")
         try:
             results = storage.search_fts(
                 query_text=query,

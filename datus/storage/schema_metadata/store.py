@@ -199,41 +199,60 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             catalog_name=catalog_name,
             database_name=database_name,
             schema_name=schema_name,
-            table_type=table_type,
+            table_type="full",
             available_fields=available_fields,
         )
         where_clause = build_where(where)
 
-        def _run_query(where_sql: str) -> pa.Table:
-            query_builder = self.table.search(sanitized_query, query_type="fts")
+        def _run_query(query: str, where_sql: str) -> pa.Table:
+            query_builder = self.table.search(query, query_type="fts")
             query_builder = BaseEmbeddingStore._fill_query(query_builder, select_fields, where_sql)
-            results = query_builder.limit(top_n).to_arrow()
+            results = query_builder.limit(max(top_n * 5, top_n)).to_arrow()
             if self.vector_column_name in results.column_names:
                 results = results.drop([self.vector_column_name])
             return results
 
+        def _post_filter(results: pa.Table) -> pa.Table:
+            if not results or results.num_rows == 0:
+                return results
+            if table_type and table_type != "full" and "table_type" in results.column_names:
+                filtered = results.filter(results.column("table_type") == table_type)
+                return filtered.slice(0, top_n)
+            return results.slice(0, top_n)
+
         try:
-            return _run_query(where_clause)
+            results = _run_query(sanitized_query, where_clause)
+            if results.num_rows == 0:
+                simplified = self._simplify_fts_query(query_text)
+                if simplified and simplified != sanitized_query:
+                    results = _run_query(simplified, where_clause)
+            return _post_filter(results)
         except Exception as exc:
-            error_message = str(exc)
-            if 'Referenced column "table_type"' in error_message:
-                logger.warning(
-                    "FTS search failed on table_type filter; retrying without table_type constraint."
-                )
-                where_without_type = _build_where_clause(
-                    catalog_name=catalog_name,
-                    database_name=database_name,
-                    schema_name=schema_name,
-                    table_type="full",
-                    available_fields=available_fields,
-                )
-                try:
-                    return _run_query(build_where(where_without_type))
-                except Exception as retry_exc:
-                    logger.warning(f"FTS retry failed: {retry_exc}")
-            else:
-                logger.warning(f"FTS search failed: {exc}")
+            logger.warning(f"FTS search failed: {exc}")
             return pa.table({})
+
+    @staticmethod
+    def _simplify_fts_query(query_text: str) -> str:
+        if not query_text:
+            return ""
+        sanitized = SchemaStorage._sanitize_fts_query(query_text)
+        if not sanitized:
+            return ""
+        has_chinese = any("\u4e00" <= ch <= "\u9fff" for ch in sanitized)
+        if not has_chinese:
+            return sanitized
+        compact = "".join(ch for ch in sanitized if "\u4e00" <= ch <= "\u9fff")
+        if len(compact) <= 2:
+            return sanitized
+        bigrams = []
+        for i in range(len(compact) - 1):
+            token = compact[i : i + 2]
+            if token and token not in bigrams:
+                bigrams.append(token)
+        tokens = bigrams[:4]
+        if not tokens:
+            return sanitized
+        return " ".join(tokens)
 
 
 class SchemaStorage(BaseMetadataStorage):
