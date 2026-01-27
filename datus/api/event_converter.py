@@ -111,11 +111,73 @@ class DeepResearchEventConverter:
         self.active_todo_item_id: Optional[str] = None
         # Maps action_id to todo_id for tracking which TodoItem each action belongs to
         self.todo_item_action_map: Dict[str, str] = {}
+        # Cached plan todos for emitting full PlanUpdateEvent payloads
+        self._todo_state: Dict[str, TodoItem] = {}
+        self._todo_order: List[str] = []
+
+    def _normalize_node_type(self, node_type: Optional[str]) -> str:
+        """Normalize action/node type for virtual step matching.
+
+        - Strips common prefixes added by execution wrappers (tool_, llm_, workflow_, execution_)
+        - Strips common suffixes used for result/error markers (_result, _error, _failed, _success)
+        """
+        if not node_type:
+            return ""
+
+        normalized = str(node_type)
+
+        # Remove known prefixes
+        for prefix in ("tool_", "llm_", "workflow_", "execution_"):
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix):]
+                break
+
+        # Remove known suffixes
+        for suffix in ("_result", "_error", "_failed", "_success"):
+            if normalized.endswith(suffix):
+                normalized = normalized[: -len(suffix)]
+                break
+
+        return normalized
+
+    def _normalize_tool_name(self, action_type: str) -> str:
+        """Normalize tool name for ToolCallEvent/toolCallResultEvent."""
+        normalized = self._normalize_node_type(action_type)
+        if normalized.startswith("preflight_"):
+            normalized = normalized.replace("preflight_", "", 1)
+        return normalized
+
+    def _normalize_todo_status(self, status: Optional[str]) -> str:
+        """Normalize TodoStatus strings across legacy and frontend enums."""
+        if not status:
+            return "pending"
+        normalized = str(status).lower()
+        if normalized == "failed":
+            return "error"
+        return normalized
+
+    def _update_todo_state(self, todos: List[TodoItem], replace_order: bool = False) -> None:
+        """Update cached todo state for full PlanUpdateEvent emission."""
+        if replace_order:
+            self._todo_order = [todo.id for todo in todos]
+        for todo in todos:
+            if todo.id not in self._todo_order:
+                self._todo_order.append(todo.id)
+            self._todo_state[todo.id] = todo
+
+    def _get_todo_state_list(self) -> List[TodoItem]:
+        """Return todos in cached order when available."""
+        if not self._todo_state:
+            return []
+        if not self._todo_order:
+            return list(self._todo_state.values())
+        return [self._todo_state[todo_id] for todo_id in self._todo_order if todo_id in self._todo_state]
 
     def _get_virtual_step_id(self, node_type: str) -> Optional[str]:
         """Map node type to virtual step ID."""
+        normalized_type = self._normalize_node_type(node_type)
         for step in self.VIRTUAL_STEPS:
-            if node_type in step["node_types"]:
+            if normalized_type in step["node_types"]:
                 return str(step["id"])
         return None
 
@@ -1492,9 +1554,10 @@ class DeepResearchEventConverter:
             return action.input.get("node_type")
 
         # Case 2: Direct action_type - check if it's a valid virtual step node_type
+        normalized_type = self._normalize_node_type(action.action_type)
         for step in self.VIRTUAL_STEPS:
-            if action.action_type in step["node_types"]:
-                return action.action_type
+            if normalized_type in step["node_types"]:
+                return normalized_type
 
         # Case 3: Not a recognized node type
         return None
@@ -1531,6 +1594,43 @@ class DeepResearchEventConverter:
         # Extract todo_id if present (for plan-related events)
         # Note: _get_unified_plan_id() will handle fallback logic properly
         todo_id = self._extract_todo_id_from_action(action)
+
+        # 0. Handle explicit plan updates early (avoid role-based short-circuiting)
+        if action.action_type == "plan_update" and action.output:
+            todos = []
+            if isinstance(action.output, dict):
+                # Handle both "todos" (legacy) and "todo_list" (new) formats
+                todo_data_source = None
+                if "todo_list" in action.output and isinstance(action.output["todo_list"], dict):
+                    todo_data_source = action.output["todo_list"].get("items", [])
+                elif "todos" in action.output and isinstance(action.output["todos"], list):
+                    todo_data_source = action.output["todos"]
+
+                if todo_data_source:
+                    for todo_data in todo_data_source:
+                        if isinstance(todo_data, dict):
+                            todo_id = todo_data.get("id")
+                            if not todo_id:
+                                self.logger.warning("Skipping plan_update todo without id: %s", todo_data)
+                                continue
+                            todos.append(
+                                TodoItem(
+                                    id=str(todo_id),
+                                    content=todo_data.get("content", ""),
+                                    status=TodoStatus(self._normalize_todo_status(todo_data.get("status", "pending"))),
+                                )
+                            )
+
+            if todos:
+                # Update cached todo state for full list emission
+                self._update_todo_state(todos, replace_order=True)
+                todos = self._get_todo_state_list() or todos
+
+            # For plan_update events from workflow nodes, use virtual_plan_id to maintain association
+            # For plan_update events from tools, use event_id to maintain unique plan identification
+            plan_event_id = self.virtual_plan_id if action.role == ActionRole.WORKFLOW else event_id
+            events.append(PlanUpdateEvent(id=plan_event_id, planId=None, timestamp=timestamp, todos=todos))
+            return events
 
         # 1. Handle chat/assistant messages
         if action.role == ActionRole.ASSISTANT:
@@ -1941,6 +2041,7 @@ class DeepResearchEventConverter:
             self.tool_call_map[action.action_id] = tool_call_id
 
             is_plan_tool = action.action_type in ["todo_write", "todo_update"]
+            normalized_tool_name = self._normalize_tool_name(action.action_type)
             plan_data = {}
             if action.output:
                 plan_data = self._extract_plan_from_output(action.output)
@@ -1990,9 +2091,11 @@ class DeepResearchEventConverter:
             # If this is a plan tool and we found plan data, emit PlanUpdateEvent first
             if is_plan_tool and plan_data:
                 todos = []
+                replace_order = False
                 if "todo_list" in plan_data:
                     tlist = plan_data["todo_list"]
                     if isinstance(tlist, dict) and "items" in tlist:
+                        replace_order = True
                         for todo_data in tlist["items"]:
                             if isinstance(todo_data, dict):
                                 todo_id = todo_data.get("id")
@@ -2003,7 +2106,7 @@ class DeepResearchEventConverter:
                                     TodoItem(
                                         id=str(todo_id),
                                         content=todo_data.get("content", ""),
-                                        status=TodoStatus(todo_data.get("status", "pending")),
+                                        status=TodoStatus(self._normalize_todo_status(todo_data.get("status", "pending"))),
                                     )
                                 )
                 elif "updated_item" in plan_data:
@@ -2017,11 +2120,15 @@ class DeepResearchEventConverter:
                                 TodoItem(
                                     id=str(todo_id),
                                     content=ui.get("content", ""),
-                                    status=TodoStatus(ui.get("status", "pending")),
+                                    status=TodoStatus(self._normalize_todo_status(ui.get("status", "pending"))),
                                 )
                             )
 
                 if todos:
+                    # Update cached todo state to emit full plan when possible
+                    self._update_todo_state(todos, replace_order=replace_order)
+                    todo_payload = self._get_todo_state_list() or todos
+
                     # For plan tools, emit tool events AND plan update event
                     events.append(
                         ToolCallEvent(
@@ -2029,7 +2136,7 @@ class DeepResearchEventConverter:
                             planId=tool_plan_id,
                             timestamp=timestamp,
                             toolCallId=tool_call_id,
-                            toolName=action.action_type,
+                            toolName=normalized_tool_name,
                             input=normalized_input or (action.input if isinstance(action.input, dict) else {}),
                         )
                     )
@@ -2055,7 +2162,7 @@ class DeepResearchEventConverter:
 
                     events.append(
                         PlanUpdateEvent(
-                            id=f"{event_id}_plan", planId=plan_update_plan_id, timestamp=timestamp, todos=todos
+                            id=f"{event_id}_plan", planId=plan_update_plan_id, timestamp=timestamp, todos=todo_payload
                         )
                     )
             else:
@@ -2066,7 +2173,7 @@ class DeepResearchEventConverter:
                         planId=tool_plan_id,
                         timestamp=timestamp,
                         toolCallId=tool_call_id,
-                        toolName=action.action_type,
+                        toolName=normalized_tool_name,
                         input=normalized_input or (action.input if isinstance(action.input, dict) else {}),
                     )
                 )
@@ -2081,37 +2188,6 @@ class DeepResearchEventConverter:
                             error=action.status == ActionStatus.FAILED,
                         )
                     )
-
-        # 3. Handle plan updates
-        elif action.action_type == "plan_update" and action.output:
-            todos = []
-            if isinstance(action.output, dict):
-                # Handle both "todos" (legacy) and "todo_list" (new) formats
-                todo_data_source = None
-                if "todo_list" in action.output and isinstance(action.output["todo_list"], dict):
-                    todo_data_source = action.output["todo_list"].get("items", [])
-                elif "todos" in action.output and isinstance(action.output["todos"], list):
-                    todo_data_source = action.output["todos"]
-
-                if todo_data_source:
-                    for todo_data in todo_data_source:
-                        if isinstance(todo_data, dict):
-                            todo_id = todo_data.get("id")
-                            if not todo_id:
-                                self.logger.warning("Skipping plan_update todo without id: %s", todo_data)
-                                continue
-                            todos.append(
-                                TodoItem(
-                                    id=str(todo_id),
-                                    content=todo_data.get("content", ""),
-                                    status=TodoStatus(todo_data.get("status", "pending")),
-                                )
-                            )
-
-            # For plan_update events from workflow nodes, use virtual_plan_id to maintain association
-            # For plan_update events from tools, use event_id to maintain unique plan identification
-            plan_event_id = self.virtual_plan_id if action.role == ActionRole.WORKFLOW else event_id
-            events.append(PlanUpdateEvent(id=plan_event_id, planId=None, timestamp=timestamp, todos=todos))
 
         # 5. Handle workflow completion (修复 CompleteEvent 处理)
         elif action.action_type == "workflow_completion" and action.status == ActionStatus.SUCCESS:

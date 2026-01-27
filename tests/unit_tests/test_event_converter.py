@@ -201,6 +201,40 @@ def test_preflight_tool_binding():
     assert tool_call2.planId == "step_exec", f"planId should be 'step_exec', got {tool_call2.planId}"
 
 
+def test_tool_prefixed_preflight_events_bind_to_virtual_steps():
+    """tool_* prefixed preflight actions should still map to virtual step IDs."""
+    converter = DeepResearchEventConverter()
+    converter.virtual_plan_emitted = True
+
+    # Start event from execution_event_manager style action_type
+    action = ActionHistory(
+        action_id="pref_tool_call",
+        role=ActionRole.TOOL,
+        action_type="tool_preflight_describe_table",
+        status=ActionStatus.SUCCESS,
+        input={"table_name": "users"},
+        output={"columns": [{"name": "id"}]},
+    )
+    events = converter.convert_action_to_event(action, 1)
+    call_event = next((e for e in events if e.event == "tool_call"), None)
+    assert call_event is not None, "Should emit ToolCallEvent for tool_* action"
+    assert call_event.planId == "step_schema", f"planId should bind to step_schema, got {call_event.planId}"
+
+    # Result-style action_type with suffix should also normalize correctly
+    result_action = ActionHistory(
+        action_id="pref_tool_result",
+        role=ActionRole.TOOL,
+        action_type="tool_preflight_describe_table_result",
+        status=ActionStatus.SUCCESS,
+        input={"table_name": "users"},
+        output={"columns": [{"name": "id"}]},
+    )
+    result_events = converter.convert_action_to_event(result_action, 2)
+    result_event = next((e for e in result_events if e.event == "tool_call_result"), None)
+    assert result_event is not None, "Should emit ToolCallResultEvent for *_result action"
+    assert result_event.planId == "step_schema", f"planId should bind to step_schema, got {result_event.planId}"
+
+
 def test_output_node_binding_to_step_output():
     """Verify output and output_generation nodes bind to step_output virtual step."""
     converter = DeepResearchEventConverter()

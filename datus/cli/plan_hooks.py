@@ -953,7 +953,7 @@ class ExecutionMonitor:
         todos = self.current_execution["todos"]
         total_todos = len(todos)
         completed_todos = sum(1 for t in todos if t["status"] == "completed")
-        failed_todos = sum(1 for t in todos if t["status"] == "failed")
+        failed_todos = sum(1 for t in todos if t["status"] in ("failed", "error"))
 
         total_tools = sum(len(t.get("tools_used", [])) for t in todos)
         total_execution_time = sum(t.get("duration", 0) for t in todos)

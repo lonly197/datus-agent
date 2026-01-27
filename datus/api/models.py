@@ -150,7 +150,9 @@ class TodoStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
-    FAILED = "failed"
+    ERROR = "error"
+    SKIPPED = "skipped"
+    FAILED = "failed"  # Backward compatibility for legacy emitters
 
 
 class TodoItem(BaseModel):

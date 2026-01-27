@@ -25,7 +25,9 @@ class TodoStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"  # 添加此状态
     COMPLETED = "completed"
-    FAILED = "failed"
+    ERROR = "error"
+    SKIPPED = "skipped"
+    FAILED = "failed"  # Backward compatibility for legacy status values
 
 
 class TodoItem(BaseModel):
@@ -313,11 +315,12 @@ class PlanTool:
         1. todo_update(todo_id, "pending") - Mark as about to be executed
         2. [execute task]
         3. todo_update(todo_id, "completed") - Mark as successfully executed
-           OR todo_update(todo_id, "failed") - Mark as failed
+           OR todo_update(todo_id, "error") - Mark as failed
+           OR todo_update(todo_id, "failed") - Legacy failure status (maps to error)
 
         Args:
             todo_id: The ID of the todo item to update
-            status: New status - must be 'pending', 'completed', or 'failed'
+            status: New status - must be 'pending', 'in_progress', 'completed', 'error', or 'skipped'
 
         Returns:
             FuncToolResult: Success/error status
@@ -330,10 +333,17 @@ class PlanTool:
         """Internal method to update todo item status and optionally save execution result"""
         _ = execution_output, error_message  # Mark as used for future extensibility
         try:
-            status_enum = TodoStatus(status.lower())
+            normalized_status = status.lower()
+            if normalized_status == "failed":
+                normalized_status = "error"
+            status_enum = TodoStatus(normalized_status)
         except ValueError:
             return FuncToolResult(
-                success=0, error=f"Invalid status '{status}'. Must be 'completed', 'pending', or 'failed'"
+                success=0,
+                error=(
+                    f"Invalid status '{status}'. Must be 'pending', 'in_progress', "
+                    "'completed', 'error', or 'skipped'"
+                ),
             )
 
         todo_list = self.storage.get_todo_list()
