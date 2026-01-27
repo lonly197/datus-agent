@@ -1,7 +1,7 @@
 # Datus Storage 模块介绍
 
-> **文档版本**: v2.1
-> **更新日期**: 2026-01-23
+> **文档版本**: v2.2
+> **更新日期**: 2026-01-27
 > **相关模块**: `datus/storage/`
 > **代码仓库**: [Datus Agent](https://github.com/Datus-ai/Datus-agent)
 
@@ -60,7 +60,7 @@ Datus Storage 模块是一个基于 **LanceDB 向量数据库** 的多层知识�
 | `definition` | string | DDL 定义 (含中文注释增强) |
 | `table_comment` | string | 表注释 |
 | `column_comments` | string | 列注释 JSON |
-| `column_enums` | string | 列枚举值 JSON |
+| `column_enums` | string | 列枚举值 JSON [{"value": "0", "label": "录入"}, {"value": "1", "label": "生产"}] |
 | `business_tags` | list[string] | 业务标签 |
 | `row_count` | int64 | 行数统计 |
 | `sample_statistics` | string | 列统计 JSON |
@@ -375,11 +375,48 @@ def _enhance_definition_with_comments(
 |------|--------|------|
 | `table_comment` | HIGH | 从 DDL COMMENT 提取 |
 | `column_comments` | HIGH | 列注释 JSON |
+| `column_enums` | HIGH | 列枚举值 JSON |
 | `business_tags` | HIGH | 业务领域标签 |
 | `row_count` | MEDIUM | 表行数 |
 | `sample_statistics` | MEDIUM | 列统计信息 |
 | `relationship_metadata` | MEDIUM | 外键和关联路径 |
 | `metadata_version` | - | 元数据版本 (0=旧版, 1=增强) |
+
+### 枚举值提取机制
+
+**双重提取策略**:
+1. **正则表达式解析**（默认）：快速解析标准格式枚举
+   - 支持格式：`状态（0:选项1,1:选项2）`、`type: A/B/C`
+   - 支持中英文括号和分隔符
+
+2. **LLM 增强解析**（可选）：处理复杂注释
+   ```bash
+   --llm-enum-extraction
+   ```
+   - 启用后，正则解析置信度 < 0.6 时自动触发 LLM
+   - 适用于嵌套枚举、混合格式等复杂场景
+
+**示例枚举值**:
+```json
+// column_enums 字段存储格式
+{
+  "order_status": [
+    {"value": "0", "label": "录入"},
+    {"value": "1", "label": "生产"},
+    {"value": "2", "label": "配车"},
+    {"value": "3", "label": "销售"}
+  ],
+  "customer_type": [
+    {"value": "1", "label": "长期订单"},
+    {"value": "2", "label": "无效订单"},
+    {"value": "3", "label": "自动取消"}
+  ]
+}
+```
+
+**相关模块**:
+- `datus/storage/schema_metadata/llm_enhanced_extract.py` - LLM 增强提取模块
+- `datus/utils/sql_utils.py` - 正则表达式枚举解析
 
 ---
 
@@ -749,6 +786,14 @@ class SubjectTreeStore:
 ---
 
 ## 版本更新记录
+
+### v2.2 (2026-01-27)
+- 新增 `llm_enhanced_extract.py` 模块 - LLM 增强枚举值和业务元数据提取
+- 新增 `--llm-enum-extraction` 参数支持
+- 优化枚举值正则表达式，支持中文括号内无尾部分隔符格式
+- 双重提取策略：正则 + LLM 增强
+- 新增 `EnhancedEnumExtractor` 类
+- 新增 `_extract_enums()` 辅助函数
 
 ### v2.1 (2026-01-23)
 - 新增 `column_enums` 字段到 SchemaStorage (列枚举值)

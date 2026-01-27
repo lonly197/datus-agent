@@ -3,6 +3,7 @@ from datus.utils.json_utils import llm_result2json
 from datus.utils.sql_utils import (
     _first_statement,
     ddl_has_missing_commas,
+    extract_enum_values_from_comment,
     extract_table_names,
     extract_enhanced_metadata_from_ddl,
     fix_missing_commas_in_ddl,
@@ -398,6 +399,18 @@ def test_json_utils():
 """
         )
     )
+
+
+def test_extract_enum_values_from_comment_basic():
+    comment = "长期订单类型（1:长期订单,2:无效订单,3:自动取消）"
+    enums = extract_enum_values_from_comment(comment)
+    assert enums == [("1", "长期订单"), ("2", "无效订单"), ("3", "自动取消")]
+
+
+def test_extract_enum_values_from_comment_dedup_codes():
+    comment = "销售区分（4:事故车、4:销售店员购车？、5:试乘试驾车）"
+    enums = extract_enum_values_from_comment(comment)
+    assert enums == [("4", "事故车"), ("5", "试乘试驾车")]
 
 
 def test_fix_missing_commas_in_ddl():

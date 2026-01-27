@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import json
 import os
 import re
 import time
@@ -69,6 +70,7 @@ class BaseMetadataStorage(BaseEmbeddingStore):
                     pa.field("table_name", pa.string()),
                     pa.field("table_type", pa.string()),
                     pa.field(vector_source_name, pa.string()),
+                    pa.field("search_text", pa.string()),
                     pa.field("vector", pa.list_(pa.float32(), list_size=embedding_model.dim_size)),
                     # Enhanced fields (v1) - Business Semantics (HIGH PRIORITY)
                     pa.field("table_comment", pa.string()),  # Extracted from DDL COMMENT
@@ -140,6 +142,7 @@ class BaseMetadataStorage(BaseEmbeddingStore):
                 "schema_name",
                 "table_name",
                 self.vector_source_name,
+                "search_text",
                 "table_comment",
                 "column_comments",
             ]
@@ -281,11 +284,76 @@ class SchemaStorage(BaseMetadataStorage):
 
         return "\n".join(enhanced_parts)
 
+    @staticmethod
+    def _safe_json_dict(value: Any) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if not value or not isinstance(value, str):
+            return {}
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _safe_json_list(value: Any) -> List[Any]:
+        if isinstance(value, list):
+            return value
+        if not value or not isinstance(value, str):
+            return []
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return []
+        return parsed if isinstance(parsed, list) else []
+
+    def _build_search_text(self, item: Dict[str, Any]) -> str:
+        parts: List[str] = []
+        seen: Set[str] = set()
+
+        def _add(value: Optional[str]) -> None:
+            if not value or not isinstance(value, str):
+                return
+            cleaned = value.strip()
+            if not cleaned or cleaned in seen:
+                return
+            seen.add(cleaned)
+            parts.append(cleaned)
+
+        _add(item.get("table_name"))
+        _add(item.get("table_comment"))
+        _add(item.get("database_name"))
+        _add(item.get("schema_name"))
+
+        business_tags = item.get("business_tags") or []
+        if isinstance(business_tags, list):
+            for tag in business_tags:
+                _add(tag if isinstance(tag, str) else "")
+
+        column_comments = self._safe_json_dict(item.get("column_comments"))
+        for col_name, col_comment in column_comments.items():
+            _add(col_name)
+            _add(col_comment if isinstance(col_comment, str) else "")
+
+        column_enums = self._safe_json_dict(item.get("column_enums"))
+        for col_name, enum_values in column_enums.items():
+            _add(col_name)
+            for enum_item in self._safe_json_list(enum_values):
+                if not isinstance(enum_item, dict):
+                    continue
+                _add(str(enum_item.get("value", "")))
+                _add(str(enum_item.get("label", "")))
+
+        return " ".join(parts)
+
     def store_batch(self, data: List[Dict[str, Any]]):
         """Sanitize DDL definitions before batch storage."""
         if not data:
             return
 
+        self._ensure_table_ready()
+        available_fields = set(self.table.schema.names)
         cleaned: List[Dict[str, Any]] = []
         for item in data:
             definition = item.get("definition")
@@ -297,6 +365,10 @@ class SchemaStorage(BaseMetadataStorage):
                 if truncated_before and is_likely_truncated_ddl(sanitized):
                     logger.warning("DDL still appears truncated after sanitation; storing best-effort definition.")
                 item = {**item, "definition": sanitized}
+            if "search_text" in available_fields:
+                search_text = item.get("search_text", "")
+                if not isinstance(search_text, str) or not search_text.strip():
+                    item = {**item, "search_text": self._build_search_text(item)}
             cleaned.append(item)
 
         super().store_batch(cleaned)

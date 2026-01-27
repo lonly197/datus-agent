@@ -28,6 +28,60 @@ from datus.utils.sql_utils import (
 )
 
 from .init_utils import exists_table_value
+from .llm_enhanced_extract import EnhancedEnumExtractor
+
+# LLM-enhanced enum extraction helper
+_enum_extractor: Optional[EnhancedEnumExtractor] = None
+
+
+def _get_enum_extractor(llm_model: Optional[LLMBaseModel], llm_enum_extraction: bool) -> Optional[EnhancedEnumExtractor]:
+    """Get or create the enhanced enum extractor."""
+    global _enum_extractor
+    if llm_enum_extraction and llm_model:
+        if _enum_extractor is None or _enum_extractor.llm_model != llm_model:
+            _enum_extractor = EnhancedEnumExtractor(
+                llm_model=llm_model,
+                use_regex_first=True,
+                regex_confidence_threshold=0.6,
+            )
+        return _enum_extractor
+    return None
+
+
+def _extract_enums(
+    comment: str,
+    column_name: str = "",
+    llm_extractor: Optional[EnhancedEnumExtractor] = None,
+) -> List[Dict[str, str]]:
+    """
+    Extract enum values from a comment, optionally using LLM enhancement.
+
+    Args:
+        comment: The comment text to parse
+        column_name: Optional column name for context
+        llm_extractor: Optional LLM-enhanced extractor
+
+    Returns:
+        List of {"value": code, "label": label} dicts
+    """
+    if not comment:
+        return []
+
+    if llm_extractor:
+        enums, is_enum, confidence = llm_extractor.extract(comment, column_name)
+        if enums:
+            logger.debug(
+                f"LLM enum extraction for {column_name}: {len(enums)} enums, "
+                f"confidence: {confidence:.2f}"
+            )
+            return [{"value": e["code"], "label": e["label"]} for e in enums]
+
+    # Fallback to regex
+    pairs = extract_enum_values_from_comment(comment)
+    if pairs:
+        return [{"value": code, "label": label} for code, label in pairs]
+
+    return []
 
 logger = get_logger(__name__)
 
@@ -135,6 +189,7 @@ def init_local_schema(
     llm_model: Optional[LLMBaseModel] = None,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
+    llm_enum_extraction: bool = False,
 ):
     """Initialize local schema from the configured database."""
     logger.info(f"Initializing local schema for namespace: {agent_config.current_namespace}")
@@ -158,6 +213,7 @@ def init_local_schema(
                 llm_model=llm_model,
                 extract_statistics=extract_statistics,
                 extract_relationships=extract_relationships,
+                llm_enum_extraction=llm_enum_extraction,
             )
         elif db_configs.type == DBType.DUCKDB:
             init_duckdb_schema(
@@ -188,6 +244,7 @@ def init_local_schema(
                 llm_model=llm_model,
                 extract_statistics=extract_statistics,
                 extract_relationships=extract_relationships,
+                llm_enum_extraction=llm_enum_extraction,
             )
         elif db_configs.type == DBType.STARROCKS:
             init_starrocks_schema(
@@ -219,6 +276,7 @@ def init_local_schema(
                 llm_model=llm_model,
                 extract_statistics=extract_statistics,
                 extract_relationships=extract_relationships,
+                llm_enum_extraction=llm_enum_extraction,
             )
 
     else:
@@ -247,6 +305,7 @@ def init_local_schema(
                     llm_model=llm_model,
                     extract_statistics=extract_statistics,
                     extract_relationships=extract_relationships,
+                    llm_enum_extraction=llm_enum_extraction,
                 )
             elif db_config.type == DBType.DUCKDB:
                 init_duckdb_schema(
@@ -263,6 +322,7 @@ def init_local_schema(
                     llm_model=llm_model,
                     extract_statistics=extract_statistics,
                     extract_relationships=extract_relationships,
+                    llm_enum_extraction=llm_enum_extraction,
                 )
             else:
                 logger.warning(f"Unsupported database type {db_config.type} for multi-database configuration")
@@ -315,6 +375,7 @@ def init_sqlite_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -334,6 +395,7 @@ def init_sqlite_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
 
@@ -391,6 +453,7 @@ def init_duckdb_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -688,6 +751,7 @@ def init_other_three_level_schema(
             llm_model=llm_model,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
     if (table_type == "view" or table_type == "full") and hasattr(sql_connector, "get_views_with_ddl"):
@@ -765,6 +829,7 @@ def store_tables(
     llm_model: Optional[LLMBaseModel] = None,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
+    llm_enum_extraction: bool = False,  # New: LLM-enhanced enum extraction
 ):
     """
     Store tables to the table_lineage_store.
@@ -844,12 +909,11 @@ def store_tables(
                 if not column_names and column_comments:
                     column_names = list(column_comments.keys())
                 column_enums: Dict[str, List[Dict[str, str]]] = {}
+                llm_extractor = _get_enum_extractor(llm_model, llm_enum_extraction)
                 for col_name, col_comment in column_comments.items():
-                    enum_pairs = extract_enum_values_from_comment(col_comment)
-                    if enum_pairs:
-                        column_enums[col_name] = [
-                            {"value": code, "label": label} for code, label in enum_pairs
-                        ]
+                    enum_values = _extract_enums(col_comment, col_name, llm_extractor)
+                    if enum_values:
+                        column_enums[col_name] = enum_values
                 business_tags = infer_business_tags(table.get("table_name", ""), column_names)
                 relationship_metadata: Dict[str, Any] = {}
                 if extract_relationships:
@@ -918,10 +982,11 @@ def store_tables(
             }
             column_names = [col.get("name", "") for col in regex_metadata.get("columns", []) if col.get("name")]
             column_enums: Dict[str, List[Dict[str, str]]] = {}
+            llm_extractor = _get_enum_extractor(llm_model, llm_enum_extraction)
             for col_name, col_comment in column_comments.items():
-                enum_pairs = extract_enum_values_from_comment(col_comment)
-                if enum_pairs:
-                    column_enums[col_name] = [{"value": code, "label": label} for code, label in enum_pairs]
+                enum_values = _extract_enums(col_comment, col_name, llm_extractor)
+                if enum_values:
+                    column_enums[col_name] = enum_values
             business_tags = infer_business_tags(table.get("table_name", ""), column_names)
             relationship_metadata: Dict[str, Any] = {}
             if extract_relationships and column_names and table_name_map:
@@ -987,12 +1052,11 @@ def store_tables(
                     if col.get("comment")
                 }
                 column_enums: Dict[str, List[Dict[str, str]]] = {}
+                llm_extractor = _get_enum_extractor(llm_model, llm_enum_extraction)
                 for col_name, col_comment in column_comments.items():
-                    enum_pairs = extract_enum_values_from_comment(col_comment)
-                    if enum_pairs:
-                        column_enums[col_name] = [
-                            {"value": code, "label": label} for code, label in enum_pairs
-                        ]
+                    enum_values = _extract_enums(col_comment, col_name, llm_extractor)
+                    if enum_values:
+                        column_enums[col_name] = enum_values
                 column_names = [col["name"] for col in parsed_metadata.get("columns", [])]
                 business_tags = infer_business_tags(table.get("table_name", ""), column_names)
                 foreign_keys = parsed_metadata.get("foreign_keys", [])
@@ -1207,6 +1271,7 @@ def main():
     parser.add_argument("--table-type", default="full", choices=["table", "view", "mv", "full"], help="Type of tables to import")
     parser.add_argument("--build-mode", default="overwrite", choices=["overwrite", "append"], help="Build mode: overwrite or append")
     parser.add_argument("--prune-missing", action="store_true", help="Delete tables not present in source when build-mode=append")
+    parser.add_argument("--llm-enum-extraction", action="store_true", help="Use LLM to enhance enum value extraction from comments")
 
     args = parser.parse_args()
 
@@ -1266,6 +1331,7 @@ def main():
             prune_missing=args.prune_missing,
             init_catalog_name=args.catalog,
             init_database_name=args.database or "",
+            llm_enum_extraction=args.llm_enum_extraction,
         )
 
         # Verify import was successful

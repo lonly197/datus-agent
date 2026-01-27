@@ -167,6 +167,16 @@ fix_sql_user_1.0.j2
 | `classify_sql_item_1.0.j2` | SQL 项目分类提示 | 1.0 |
 | `gen_sql_summary_system_1.0.j2` | SQL 摘要生成系统提示 | 1.0 |
 
+**LLM 增强提取类**:
+| 模板文件 | 功能 | 版本 |
+|---------|------|------|
+| `enum_extract_system_1.0.j2` | 枚举值提取系统提示 | 1.0 |
+| `enum_extract_user_1.0.j2` | 枚举值提取用户提示 | 1.0 |
+| `metadata_extract_system_1.0.j2` | 业务元数据提取系统提示 | 1.0 |
+| `metadata_extract_user_1.0.j2` | 业务元数据提取用户提示 | 1.0 |
+| `design_req_extract_system_1.0.j2` | 设计要件解析系统提示 | 1.0 |
+| `design_req_extract_user_1.0.j2` | 设计要件解析用户提示 | 1.0 |
+
 ---
 
 ## 提示工程设计模式
@@ -243,6 +253,50 @@ def create_selection_prompt(
 ) -> str:
     # 截断过长内容避免提示溢出
     # 返回单一用户提示
+```
+
+### 5. LLM 增强枚举提取提示模式
+
+```python
+def extract_enums_with_llm(
+    comment: str,
+    llm_model: Any,
+    prompt_template: str = DEFAULT_ENUM_EXTRACT_PROMPT,
+    cache_ttl: int = 3600,
+) -> Tuple[List[Dict[str, str]], bool, float]:
+    """使用 LLM 从注释中提取枚举值"""
+    # LLM 解析复杂注释格式
+    # 返回: (枚举列表, 是否枚举, 置信度)
+```
+
+**提示模板示例**:
+```jinja2
+# enum_extract_user_1.0.j2
+分析以下数据库注释，提取所有枚举值对：
+
+Comment: {{ comment }}
+
+任务：
+1. 识别枚举格式如 "（0:选项1,1:选项2）"
+2. 提取 code-label 对
+3. 返回 JSON 结果
+
+输出格式：
+{"enums": [{"code": "0", "label": "录入"}], "is_enum": true, "confidence": 0.9}
+```
+
+### 6. 业务元数据提取提示模式
+
+```python
+def extract_business_metadata_with_llm(
+    comment: str,
+    column_name: str,
+    table_name: str,
+    llm_model: Any,
+) -> Dict[str, Any]:
+    """使用 LLM 提取完整的业务元数据"""
+    # 提取字段类型、业务含义、关联概念
+    # 返回: {field_type, is_key_field, business_meaning, ...}
 ```
 
 ---
@@ -337,6 +391,12 @@ prompt_manager.copy_to("gen_sql_user", "my_custom_sql", "1.0")
 ---
 
 ## 版本更新记录
+
+### v2.1 (2026-01-27)
+- 新增 LLM 增强提取类模板（enum_extract, metadata_extract, design_req_extract）
+- 新增 LLM 增强枚举提取提示模式（第5节）
+- 新增业务元数据提取提示模式（第6节）
+- 新增 `EnhancedEnumExtractor` 类相关文档
 
 ### v2.0 (2026-01-23)
 - 完整重写，基于最新代码架构

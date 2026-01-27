@@ -1,321 +1,162 @@
 # Schema 元数据管理脚本指南
 
-> **文档版本**: v1.0
-> **更新日期**: 2026-01-26
+> **文档版本**: v1.2
+> **更新日期**: 2026-01-27
 
-> 本指南介绍 `scripts/` 目录下所有 Schema 管理脚本的用法。如需程序化使用，请参考 `docs/Schema 元数据管理 - 程序化使用.md`。
+> 本指南介绍用于 Schema 元数据管理的脚本。如需查看所有脚本（包括模型下载、开发测试等），请参考 [脚本清单](../scripts/脚本清单.md)。
 
-## 脚本概览
+## 快速索引
 
-| 脚本 | 类型 | 说明 | 应用场景 |
-|------|------|------|----------|
-| `check_storage_path.py` | Python | 检查存储路径配置 | 验证配置正确性 |
-| `backup_storage.sh` | Bash | 备份存储目录 | 迁移前数据保护 |
-| `migrate_v0_to_v1.py` | Python | v0 到 v1 Schema 迁移 | 升级元数据结构 |
-| `diagnose_schema_ddl.py` | Python | 抽样诊断存储 DDL 与数据库 DDL 差异 | 排查 DDL 缺逗号/截断/解析失败 |
-| `rebuild_schema.sh` | Bash | 重建 Schema（清空+导入） | 完全刷新元数据 |
-| `live_bootstrap.py` | Python | 实时数据库引导 | 从生产库拉取元数据 |
-| `check_migration_report.py` | Python | 验证迁移报告 | 检查迁移覆盖率 |
+| 脚本 | 功能 | 推荐场景 |
+|------|------|----------|
+| [migrate_v0_to_v1.py](#migrate_v0_to_v1py---schema-迁移) | v0→v1 Schema 迁移 | 升级元数据结构 |
+| [diagnose_schema_ddl.py](#diagnose_schema_ddlpy---ddl-诊断) | 抽样诊断 DDL | 排查解析问题 |
+| [check_migration_report.py](#check_migration_reportpy---迁移报告) | 验证迁移质量 | 检查填充率 |
+| [rebuild_schema.sh](#rebuild_schemash---重建-schema) | 清空+重新导入 | 完全刷新 |
+| [backup_storage.sh](#backup_storagesh---备份) | 备份存储目录 | 迁移前保护 |
+| [live_bootstrap.py](#live_bootstrappy---实时引导) | 从数据库引导 | 增量更新 |
+| [local_init.py](#local_initpy---schema-导入) | 直接导入 Schema | 快速导入 |
 
 ---
 
-## 1. check_storage_path.py - 检查存储路径
+## migrate_v0_to_v1.py - Schema 迁移
 
-### 脚本说明
-验证 `agent.yml` 配置的存储路径是否正确。
+**功能**: 将 Schema 元数据从 v0 版本升级到 v1 增强版本。
 
-### 使用方式
+**核心参数**:
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--config` | 配置文件路径 | 必填 |
+| `--namespace` | 命名空间 | - |
+| `--extract-statistics` | 收集统计信息 | false |
+| `--extract-relationships` | 提取关系 | true |
+| `--import-schemas` | 迁移后导入 Schema | false |
+| `--llm-enum-extraction` | LLM 增强枚举提取 | false |
+| `--clear` | 导入前清除数据 | false |
+| `--force` | 强制重新迁移 | false |
+
+**推荐命令**:
 ```bash
-python scripts/check_storage_path.py
-```
-
-### 输出示例
-```
-Storage path: /path/to/lancedb/storage
+python scripts/migrate_v0_to_v1.py \
+  --config=conf/agent.yml \
+  --namespace=test \
+  --extract-statistics=true \
+  --extract-relationships=true \
+  --import-schemas \
+  --llm-enum-extraction \
+  --clear \
+  --force
 ```
 
 ---
 
-## 2. backup_storage.sh - 备份存储目录
+## diagnose_schema_ddl.py - DDL 诊断
 
-### 脚本说明
-创建存储目录的带时间戳备份。
+**功能**: 检查存储的 DDL 是否存在缺逗号/截断等问题。
 
-### 使用方式
+**参数**:
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--config` | 配置文件路径 | conf/agent.yml |
+| `--namespace` | 命名空间 | 自动选择 |
+| `--limit` | 抽样数量 | 5 |
+| `--random` | 随机抽样 | false |
+| `--compare-db` | 与数据库 DDL 对比 | false |
+
+**示例**:
+```bash
+python scripts/diagnose_schema_ddl.py \
+  --config=conf/agent.yml \
+  --namespace=test \
+  --limit=10 \
+  --random \
+  --compare-db
+```
+
+---
+
+## check_migration_report.py - 迁移报告
+
+**功能**: 检查迁移覆盖率、字段填充率。
+
+**输出指标**:
+- v1 记录比例
+- `table_comment` / `column_comments` / `column_enums` / `business_tags` 填充率
+- `relationship_metadata` 覆盖率
+- `row_count` / `sample_statistics` 覆盖率
+
+**示例**:
+```bash
+python scripts/check_migration_report.py \
+  --config=conf/agent.yml \
+  --namespace=test
+```
+
+---
+
+## rebuild_schema.sh - 重建 Schema
+
+**功能**: 清空现有数据后重新导入。
+
+**示例**:
+```bash
+# 标准重建
+bash scripts/rebuild_schema.sh --namespace=my_database
+
+# 清除后重建
+bash scripts/rebuild_schema.sh --namespace=my_database --clear
+```
+
+---
+
+## backup_storage.sh - 备份
+
+**功能**: 创建带时间戳的备份。
+
 ```bash
 bash scripts/backup_storage.sh
 ```
 
-### 输出示例
-```
-检测到存储路径: /path/to/lancedb/storage
-备份完成: /path/to/lancedb/storage.backup_v0_20260126_104800
-```
-
 ---
 
-## 3. migrate_v0_to_v1.py - v0 到 v1 Schema 迁移
+## live_bootstrap.py - 实时引导
 
-### 脚本说明
-将 LanceDB 中的 Schema 元数据从 v0 版本升级到 v1 增强版本。
+**功能**: 从数据库直接拉取 Schema 元数据。
 
-### 使用方式
-```bash
-python scripts/migrate_v0_to_v1.py --config=conf/agent.yml [选项]
-```
+**支持方言**: `duckdb`, `sqlite`, `mysql`, `starrocks`, `snowflake`
 
-### 参数说明
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--config` | 配置文件路径 | 必填 |
-| `--namespace` | 命名空间（可选，多命名空间时会提示） | - |
-| `--extract-statistics` | 收集行/列统计信息 | false |
-| `--extract-relationships` | 提取 FK/JOIN 关系 | true |
-| `--import-schemas` | 迁移后从 DB 导入 Schema | false |
-| `--import-only` | 仅导入，跳过迁移 | false |
-| `--clear` | 导入前清除现有数据 | false |
-| `--force` | 强制重新迁移 | false |
-| `--backup-path` | 备份 JSON 路径（来自 cleanup 脚本） | - |
-| `--skip-backup` | 跳过备份创建 | false |
-| `--llm-fallback` | 启用 LLM 作为 DDL 解析回退 | false |
-| `--llm-model` | LLM 模型名称（默认使用 agent.yml 中的 agent.target 配置） | - |
-| `--db-path` | 覆盖存储路径 | - |
-
-带值布尔参数（如 `--extract-statistics`、`--extract-relationships`）接受：`true/false`、`yes/no`、`1/0`。
-
-### 应用场景
-
-**完整迁移（统计信息 + 关系）**
-```bash
-python scripts/migrate_v0_to_v1.py \
-  --config=conf/agent.yml \
-  --extract-statistics=true \
-  --extract-relationships=true \
-  --import-schemas \
-  --force
-```
-
-**快速迁移（跳过统计信息）**
-```bash
-python scripts/migrate_v0_to_v1.py \
-  --config=conf/agent.yml \
-  --extract-statistics=false \
-  --extract-relationships=true
-```
-
-**仅提取关系（最快）**
-```bash
-python scripts/migrate_v0_to_v1.py \
-  --config=conf/agent.yml \
-  --extract-statistics=false
-```
-
-**LLM 回退解析 DDL（使用配置中的默认模型）**
-```bash
-python scripts/migrate_v0_to_v1.py \
-  --config=conf/agent.yml \
-  --extract-relationships=true \
-  --llm-fallback
-```
-
-**LLM 回退解析 DDL（指定模型）**
-```bash
-python scripts/migrate_v0_to_v1.py \
-  --config=conf/agent.yml \
-  --extract-relationships=true \
-  --llm-fallback \
-  --llm-model=deepseek-chat
-```
-
----
-
-## 4. rebuild_schema.sh - 重建 Schema
-
-### 脚本说明
-清空现有 Schema 数据后重新从数据库导入。元数据完全刷新。
-
-### 使用方式
-```bash
-bash scripts/rebuild_schema.sh --namespace=<name> [选项]
-```
-
-### 参数说明
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--namespace` | 命名空间名称 | 必填 |
-| `--config` | 配置文件路径 | conf/agent.yml |
-| `--clear` | 清除现有数据 | false |
-
-### 应用场景
-
-**标准重建**
-```bash
-bash scripts/rebuild_schema.sh --namespace=my_database
-```
-
-**带清除数据重建**
-```bash
-bash scripts/rebuild_schema.sh --namespace=my_database --clear
-```
-
-**指定配置文件**
-```bash
-bash scripts/rebuild_schema.sh --namespace=my_database --config=custom/agent.yml
-```
-
----
-
-## 5. diagnose_schema_ddl.py - DDL 抽样诊断
-
-### 脚本说明
-抽样检查 LanceDB 中存储的 DDL 是否存在缺逗号/截断等问题，并可与数据库原始 DDL 对比。
-
-### 使用方式
-```bash
-python scripts/diagnose_schema_ddl.py --config=conf/agent.yml --namespace=<name> --database=<db>
-```
-
-### 参数说明
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--config` | 配置文件路径 | conf/agent.yml |
-| `--namespace` | 命名空间名称 | 空（自动使用第一个 namespace） |
-| `--catalog` | Catalog 过滤 | 空 |
-| `--database` | Database 过滤 | 空 |
-| `--schema` | Schema 过滤 | 空 |
-| `--limit` | 抽样表数量 | 5 |
-| `--random` | 随机抽样 | false |
-| `--compare-db` | 拉取数据库 DDL 对比 | false |
-| `--output` | 输出 JSON 文件路径 | 空（仅打印） |
-
-### 应用场景
-
-**基础抽样诊断**
-```bash
-python scripts/diagnose_schema_ddl.py --config=conf/agent.yml --namespace=my_database --database=test
-```
-
-**随机抽样 + 数据库 DDL 对比**
-```bash
-python scripts/diagnose_schema_ddl.py \
-  --config=conf/agent.yml \
-  --namespace=my_database \
-  --database=test \
-  --limit=10 \
-  --random \
-  --compare-db \
-  --output=/tmp/ddl_sample.json
-```
-
----
-
-## 6. live_bootstrap.py - 实时数据库引导
-
-### 脚本说明
-从实时数据库直接拉取 Schema 元数据，支持增量更新。
-
-### 使用方式
-```bash
-python scripts/live_bootstrap.py --config=conf/agent.yml [选项]
-```
-
-### 参数说明
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--config` | 配置文件路径 | 必填 |
-| `--namespace` | 命名空间（可选，多命名空间时会提示） | - |
-| `--catalog` | Catalog 名称过滤 | 空（不过滤） |
-| `--database` | 数据库名称过滤 | 空（不过滤） |
-| `--schema` | Schema 名称过滤 | 空（不过滤） |
-| `--dialect` | SQL 方言 | duckdb |
-| `--extract-statistics` | 收集统计信息 | false |
-| `--extract-relationships` | 提取关系 | true |
-| `--batch-size` | 批处理大小 | 100 |
-| `--incremental` | 增量更新模式 | false |
-
-### 支持的方言
-`duckdb`、`sqlite`、`mysql`、`starrocks`、`snowflake` 等
-
-### 应用场景
-
-**标准引导**
+**示例**:
 ```bash
 python scripts/live_bootstrap.py \
   --config=conf/agent.yml \
   --database=my_db \
-  --schema=public \
-  --dialect=duckdb \
+  --dialect=starrocks \
   --extract-statistics=true \
-  --extract-relationships=true
-```
-
-**快速引导（无统计）**
-```bash
-python scripts/live_bootstrap.py \
-  --config=conf/agent.yml \
-  --database=my_db \
-  --schema=public \
-  --dialect=duckdb
+  --incremental
 ```
 
 ---
 
-## 6. check_migration_report.py - 验证迁移报告
+## local_init.py - Schema 导入（模块）
 
-### 脚本说明
-检查迁移覆盖率、字段填充率，生成质量报告。
+**功能**: 直接从数据库导入 Schema。
 
-### 使用方式
+**使用方式**:
 ```bash
-python scripts/check_migration_report.py --config=conf/agent.yml [选项]
-```
-
-### 参数说明
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--config` | 配置文件路径 | 必填 |
-| `--namespace` | 命名空间名称（可选，省略时使用 base path） | - |
-| `--db-path` | 覆盖存储路径 | - |
-| `--top-tags` | 显示的标签数量 | 10 |
-
-### 报告内容
-- v1 记录比例
-- `table_comment` 填充率
-- `column_comments` 填充率
-- `column_enums` 填充率
-- `business_tags` 填充率
-- `relationship_metadata` 覆盖率及来源分析
-- `row_count` 覆盖率
-- `sample_statistics` 覆盖率
-
-### 应用场景
-
-**标准报告**
-```bash
-python scripts/check_migration_report.py \
+python -m datus.storage.schema_metadata.local_init \
   --config=conf/agent.yml \
-  --namespace=my_database
-```
-
-**自定义存储路径**
-```bash
-python scripts/check_migration_report.py \
-  --config=conf/agent.yml \
-  --namespace=my_database \
-  --db-path=/custom/path/to/lancedb \
-  --top-tags=20
+  --namespace=test \
+  --llm-enum-extraction
 ```
 
 ---
 
-## 常见操作流程
+## 完整操作流程
 
-### 完整迁移流程
+### 流程 1: 完整迁移
+
 ```bash
 # 1. 备份
 bash scripts/backup_storage.sh
@@ -323,26 +164,33 @@ bash scripts/backup_storage.sh
 # 2. 执行迁移
 python scripts/migrate_v0_to_v1.py \
   --config=conf/agent.yml \
+  --namespace=test \
   --extract-statistics=true \
   --extract-relationships=true \
   --import-schemas \
+  --llm-enum-extraction \
+  --clear \
   --force
 
 # 3. 验证报告
 python scripts/check_migration_report.py \
   --config=conf/agent.yml \
-  --namespace=my_database
+  --namespace=test
+
+# 4. 抽样诊断
+python scripts/diagnose_schema_ddl.py \
+  --config=conf/agent.yml \
+  --namespace=test \
+  --limit=10 \
+  --random \
+  --compare-db
 ```
 
-### 完全重建流程
+### 流程 2: 快速重建
+
 ```bash
-# 1. 备份
 bash scripts/backup_storage.sh
-
-# 2. 重建（清空+导入）
 bash scripts/rebuild_schema.sh --namespace=my_database --clear
-
-# 3. 验证报告
 python scripts/check_migration_report.py \
   --config=conf/agent.yml \
   --namespace=my_database
@@ -352,22 +200,29 @@ python scripts/check_migration_report.py \
 
 ## 故障排除
 
-### 缺少依赖
-```bash
-pip install sqlglot
-```
+| 问题 | 解决方案 |
+|------|----------|
+| LLM 回退失败 | 禁用 `--llm-fallback` |
+| 权限错误 | 检查数据库用户权限 |
+| 回滚恢复 | `bash scripts/backup_storage.sh` 后手动恢复 |
 
-### LLM 回退失败
-禁用 LLM 回退，使用纯规则解析：
-```bash
-python scripts/migrate_v0_to_v1.py \
-  --config=conf/agent.yml \
-  --extract-relationships=true
-```
+---
 
-### 回滚（从备份恢复）
-```bash
-bash scripts/backup_storage.sh  # 先创建新备份
-rm -rf /path/to/lancedb/storage
-mv /path/to/lancedb/storage.backup_v0_* /path/to/lancedb/storage
-```
+## 相关文档
+
+- [脚本清单](../scripts/脚本清单.md) - 所有脚本完整说明
+- [Schema 元数据管理 - 程序化使用](Schema%20元数据管理%20-%20程序化使用.md) - API 使用方式
+
+---
+
+## 版本记录
+
+### v1.2 (2026-01-27)
+- 精简文档，聚焦 Schema 元数据管理
+- 新增指向完整脚本清单的引用
+
+### v1.1 (2026-01-27)
+- 添加 `--llm-enum-extraction` 参数说明
+
+### v1.0 (2026-01-26)
+- 初始版本
