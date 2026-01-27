@@ -1,178 +1,59 @@
-# CLAUDE.md
+## Overview
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+**Datus** is an open-source data engineering agent that builds evolvable context for your data system.
 
-# Datus Agent - AI-Powered SQL Data Engineering Agent
+- **Datus-CLI**: AI-powered CLI for data engineers
+- **Datus-Chat**: Web chatbot with feedback for analysts
+- **Datus-API**: APIs for stable data services
 
-## Project Overview
+### Recent Updates
 
-**Datus** is an open-source data engineering agent that builds evolvable context for your data system. It provides three main interfaces:
+Text2SQL pipeline hardening with:
+- Evidence-Driven Generation (preflight orchestration)
+- Robust Error Handling
+- Intelligent Caching (QueryCache integration)
+- Configuration Validation
+- Enhanced Observability
 
-- **Datus-CLI**: An AI-powered command-line interface for data engineers—think "Claude Code for data engineers." Write SQL, build subagents, and construct context interactively.
-- **Datus-Chat**: A web chatbot providing multi-turn conversations with built-in feedback mechanisms for data analysts.
-- **Datus-API**: APIs for other agents or applications that need stable, accurate data services.
+---
 
-### Recent Text2SQL Pipeline Hardening
+## Development Setup
 
-The project has recently undergone comprehensive system hardening for Text2SQL workflows with fixes including:
-- Evidence-Driven Generation with preflight orchestration
-- Robust Error Handling with standardized error results
-- Intelligent Caching with QueryCache integration
-- Configuration Validation with runtime validation
-- Enhanced Observability with structured logging
-
-## Development Environment Setup
-
-### Installation Commands
+### Installation
 
 ```bash
 # Development mode (recommended)
 make setup-dev
-# or
 uv pip install -e ".[dev]"
 
-# Install build tools only
-make dev-install
-
-# Build and install from source
-make build
-make install-dist
+# Build from source
+make build && make install-dist
 
 # Install from PyPI
 pip install datus-agent
 ```
 
-### Build & Release Commands
-
-```bash
-# Package management
-make build          # Build the package
-make clean          # Clean build artifacts
-make check          # Check package before upload
-make test           # Test the installation
-
-# Publishing
-make upload-test    # Upload to Test PyPI
-make upload         # Upload to PyPI
-make publish        # Full publish workflow (clean + build + check + upload)
-
-# Quick commands
-make quick-build    # Clean + build
-make quick-test     # Build + test
-make quick-publish  # Clean + build + check + upload
-
-# Show all available commands
-make help
-```
-
-### Testing Commands
-
-```bash
-# Run all tests
-pytest tests/
-
-# Run with verbose output (configured in pytest.ini)
-pytest -s -vv --tb=short --showlocals
-
-# Run acceptance tests
-pytest -m acceptance
-
-# Run specific test file
-pytest tests/test_schema_discovery_node.py
-
-# Run with coverage
-pytest --cov=datus tests/
-
-# Run unit tests only
-pytest tests/unit_tests/
-```
-
-### Code Quality Commands
-
-```bash
-# Format code (Black + isort)
-black datus/ tests/ --line-length=120
-isort datus/ tests/ --profile=black
-
-# Lint code
-flake8 datus/ tests/ --max-line-length=120
-
-# Run all formatters
-./formatter.sh
-
-# Install pre-commit hooks
-pre-commit install
-```
-
-## High-Level Architecture
-
-### Core Components
-
-```
-datus/
-├── agent/              # Core agent logic and workflow orchestration
-│   ├── node/           # Individual workflow nodes (25+ node types)
-│   │   ├── intent_analysis_node.py      # Two-stage intent processing
-│   │   ├── intent_clarification_node.py # Business intent clarification
-│   │   ├── schema_discovery_node.py     # Schema retrieval and linking
-│   │   ├── generate_sql_node.py         # SQL generation
-│   │   ├── execute_sql_node.py          # SQL execution
-│   │   ├── preflight_orchestrator.py   # Preflight tool orchestration
-│   │   └── ... (20+ more nodes)
-│   ├── workflow.py      # Workflow definition and management
-│   ├── plan.py          # Execution plan generation
-│   └── agent.py         # Main agent orchestration
-├── api/                # FastAPI REST API server
-├── cli/                # Command-line interface (Textual/TUI)
-├── configuration/      # Configuration management
-├── schemas/            # Data models and schemas
-├── storage/            # Data storage (LanceDB, Tantivy)
-├── utils/              # Utility functions
-├── prompts/            # LLM prompt templates
-└── models/             # ML models and embeddings
-```
-
-### Key Architectural Patterns
-
-1. **Node-Based Workflows**: Each workflow is composed of discrete nodes that process data sequentially
-2. **Two-Stage Intent Processing**: Fast heuristic detection + LLM-based clarification
-3. **Schema-First Approach**: Schema discovery and validation before SQL generation
-4. **Preflight Orchestration**: Evidence-driven generation with mandatory preflight tools
-5. **Streaming Architecture**: Async/await with SSE for real-time updates
-
-### Database Connectors
-
-Database connectors are in separate packages (see https://github.com/Datus-ai/Datus-adapters):
-- Snowflake, StarRocks, MySQL, DuckDB, SQLite support
-- Custom connectors via adapter pattern
-
-## Code Organization & Best Practices
-
 ### Project Structure
 
 ```
-/Users/lonlyhuang/workspace/git/Datus-agent/
+/project/
 ├── datus/              # Core Python package
 ├── tests/              # Test suite (pytest)
 ├── conf/               # Configuration templates
 ├── sample_data/        # Demo datasets
-├── build_scripts/      # Build automation
 ├── docs/               # Documentation
 └── .github/workflows/  # CI/CD pipelines
 ```
 
 ### Coding Standards
 
-- **Python Version**: Requires Python >= 3.11 (tested on 3.12)
-- **Line Length**: 120 characters (Black formatter)
+- **Python**: >= 3.11 (tested on 3.12)
+- **Line Length**: 120 characters (Black)
 - **Indentation**: 4 spaces
-- **Naming**: snake_case (functions), PascalCase (classes), UPPER_CASE (constants)
-- **File Size**: Keep files under 500 lines
-- **Testing**: Test-first approach with deterministic tests
+- **Naming**: snake_case (funcs), PascalCase (classes), UPPER_CASE (constants)
+- **File Size**: Keep under 500 lines
 
 ### Type Safety Pattern
-
-When using types that may cause circular imports:
 
 ```python
 from typing import TYPE_CHECKING
@@ -186,142 +67,127 @@ except ImportError:
     ActionHistory = Any  # Runtime fallback
 ```
 
-### Node Factory Registration
+---
 
-When adding new node types, complete all 5 steps:
+## Architecture
 
-1. Define node type in `datus/configuration/node_type.py`
-2. Implement node class in `datus/agent/node/new_node.py`
-3. Export in `datus/agent/node/__init__.py`
-4. Import in `datus/agent/node/node.py` factory
-5. Add handler case in `Node.new_instance()`
+### Core Components
 
-## SPARC Development Methodology
-
-This project uses SPARC (Specification, Pseudocode, Architecture, Refinement, Completion) with Claude-Flow orchestration.
-
-### SPARC Commands
-
-```bash
-# List available modes
-npx claude-flow sparc modes
-
-# Execute specific mode
-npx claude-flow sparc run <mode> "<task>"
-
-# Run complete TDD workflow
-npx claude-flow sparc tdd "<feature>"
-
-# Batch parallel execution
-npx claude-flow sparc batch <modes> "<task>"
-
-# Full pipeline processing
-npx claude-flow sparc pipeline "<task>"
+```
+datus/
+├── agent/       # Workflow orchestration, 25+ node types
+├── api/         # FastAPI REST server
+├── cli/         # Command-line interface
+├── configuration/ # Config management
+├── schemas/     # Data models
+├── storage/     # LanceDB, Tantivy
+├── utils/       # Utilities
+├── prompts/     # LLM templates
+└── models/      # ML embeddings
 ```
 
-### Workflow Phases
+### Key Patterns
 
-1. **Specification** - Requirements analysis
-2. **Pseudocode** - Algorithm design
-3. **Architecture** - System design
-4. **Refinement** - TDD implementation
-5. **Completion** - Integration
+1. **Node-Based Workflows**: Discrete nodes process data sequentially
+2. **Two-Stage Intent Processing**: Heuristic detection + LLM clarification
+3. **Schema-First Approach**: Discovery before SQL generation
+4. **Preflight Orchestration**: Mandatory preflight tools
+5. **Streaming Architecture**: Async/await with SSE
 
-## 🚨 CRITICAL: Concurrent Execution & File Management
+### Database Connectors
 
-### Absolute Rules
+See [Datus-adapters](https://github.com/Datus-ai/Datus-adapters):
+- Snowflake, StarRocks, MySQL, DuckDB, SQLite
 
-1. **ALL operations MUST be concurrent/parallel in a single message**
-2. **NEVER save working files, text/mds and tests to the root folder**
-3. **ALWAYS organize files in appropriate subdirectories**
-4. **USE CLAUDE CODE'S TASK TOOL** for spawning agents concurrently
+---
 
-### Golden Rule: "1 MESSAGE = ALL RELATED OPERATIONS"
+## SPARC Methodology
 
-**MANDATORY PATTERNS:**
-- **TodoWrite**: ALWAYS batch ALL todos in ONE call (5-10+ todos minimum)
-- **Task tool (Claude Code)**: ALWAYS spawn ALL agents in ONE message with full instructions
-- **File operations**: ALWAYS batch ALL reads/writes/edits in ONE message
-- **Bash commands**: ALWAYS batch ALL terminal operations in ONE message
+Uses SPARC (Specification, Pseudocode, Architecture, Refinement, Completion) with Claude-Flow.
 
-### Claude Code vs MCP Tools
+| Command | Description |
+|---------|-------------|
+| `npx claude-flow sparc modes` | List available modes |
+| `npx claude-flow sparc run <mode> "<task>"` | Execute specific mode |
+| `npx claude-flow sparc tdd "<task>"` | TDD workflow |
+| `npx claude-flow sparc batch <modes> "<task>"` | Batch parallel |
+| `npx claude-flow sparc pipeline "<task>"` | Full pipeline |
 
-**Claude Code Handles ALL EXECUTION:**
-- Task tool for spawning and running agents
-- File operations (Read, Write, Edit, MultiEdit, Glob, Grep)
-- Code generation and programming
-- Bash commands and system operations
-- Implementation work
-- Project navigation and analysis
-- TodoWrite and task management
-- Git operations
+**Phases**: Specification → Pseudocode → Architecture → Refinement → Completion
 
-**MCP Tools ONLY COORDINATE:**
-- Swarm initialization
-- Agent type definitions
-- Task orchestration
-- Memory management
-- Neural features
+---
 
-**KEY**: MCP coordinates strategy, Claude Code's Task tool executes with real agents.
+## Workflows
 
-## 🚀 Available Agents (54 Total)
-
-### Core Development
-`coder`, `reviewer`, `tester`, `planner`, `researcher`
-
-### Specialized Development
-`backend-dev`, `mobile-dev`, `ml-developer`, `cicd-engineer`, `api-docs`, `system-architect`, `code-analyzer`, `base-template-generator`
-
-### SPARC Methodology
-`sparc-coord`, `sparc-coder`, `specification`, `pseudocode`, `architecture`, `refinement`
-
-### Testing & Validation
-`tdd-london-swarm`, `production-validator`
-
-## Text2SQL Workflow Architecture
-
-### Two-Stage Intent Processing
-
-1. **IntentAnalysisNode** (`datus/agent/node/intent_analysis_node.py`):
-   - Fast heuristic-based task type detection
-   - Sets `workflow.metadata["detected_intent"]`
-   - Skips when execution_mode is pre-specified
-
-2. **IntentClarificationNode** (`datus/agent/node/intent_clarification_node.py`):
-   - LLM-based business intent clarification
-   - Corrects typos, clarifies ambiguities
-   - Sets `workflow.metadata["clarified_task"]`
-   - Cached with 1-hour TTL
-
-### Workflow Execution Flow
+### Text2SQL Flow
 
 ```yaml
 text2sql:
-  - intent_analysis       # Step 1: Fast heuristic detection
-  - intent_clarification  # Step 2: LLM-based clarification
-  - schema_discovery      # Step 3: Schema retrieval
-  - schema_validation     # Step 4: Schema validation
-  - generate_sql          # Step 5: SQL generation
-  - execute_sql          # Step 6: SQL execution
-  - result_validation    # Step 7: Result validation
-  - reflect              # Step 8: Reflection/retry
-  - output               # Step 9: Output generation
+  - intent_analysis       # Fast heuristic detection
+  - intent_clarification  # LLM-based clarification
+  - schema_discovery      # Schema retrieval
+  - schema_validation     # Schema validation
+  - generate_sql          # SQL generation
+  - execute_sql          # SQL execution
+  - result_validation    # Result validation
+  - reflect              # Reflection/retry
+  - output               # Output generation
 ```
 
-### Preflight Orchestration
+### Preflight Tools (Mandatory)
 
-Evidence-driven generation with 4 mandatory tools:
 - `search_table` - Find relevant tables
 - `describe_table` - Get table schemas
 - `search_reference_sql` - Find similar queries
 - `parse_temporal_expressions` - Parse time expressions
 
-## Key Implementation Patterns
+---
+
+## Critical Rules
+
+### Concurrent Execution
+
+1. **ALL operations MUST be concurrent/parallel** in a single message
+2. **NEVER save files to root folder** - organize in subdirectories
+3. **USE CLAUDE CODE'S TASK TOOL** for spawning agents
+
+**Mandatory Patterns:**
+- **TodoWrite**: Batch ALL todos in ONE call (5-10+ minimum)
+- **Task tool**: Spawn ALL agents in ONE message
+- **File operations**: Batch ALL reads/writes/edits
+- **Bash**: Batch ALL terminal operations
+
+### Claude Code vs MCP Tools
+
+| Handles | Claude Code | MCP Tools |
+|---------|-------------|-----------|
+| Execution | Task tool, file ops, code, bash | Swarm init |
+| Strategy | Implementation work | Agent definitions |
+| Navigation | Project analysis | Memory, neural |
+
+**Key**: MCP coordinates strategy, Claude Code executes.
+
+---
+
+## Agents (54 Total)
+
+### Core Development
+`coder`, `reviewer`, `tester`, `planner`, `researcher`
+
+### Specialized
+`backend-dev`, `mobile-dev`, `ml-developer`, `cicd-engineer`, `api-docs`, `system-architect`, `code-analyzer`, `base-template-generator`
+
+### SPARC
+`sparc-coord`, `sparc-coder`, `specification`, `pseudocode`, `architecture`, `refinement`
+
+### Testing
+`tdd-london-swarm`, `production-validator`
+
+---
+
+## Implementation Patterns
 
 ### LLM JSON Parsing
-
-Use standardized `llm_result2json()` utility:
 
 ```python
 from datus.utils.json_utils import llm_result2json
@@ -333,27 +199,21 @@ if result is None:
 
 **DO NOT** use manual string replacement for markdown/JSON cleaning.
 
-### Workflow Termination Pattern
+### Workflow Termination
 
-Ensure output node always executes:
-
-- **PROCEED_TO_OUTPUT** - Recovery exhausted, generate final report
-- **TERMINATE_WITH_ERROR** - Hard failure, no recovery possible
+- **PROCEED_TO_OUTPUT**: Recovery exhausted, generate report
+- **TERMINATE_WITH_ERROR**: Hard failure
 - Output node acts as "finally" block - always executes
 
-### FastAPI Streaming & Task Cancellation
+### Streaming & Task Cancellation
 
 For SSE with `asyncio.create_task()`:
 
 1. DELETE endpoint sets `running_task.meta["cancelled"] = True`
-2. Generator checks `running_task.meta.get("cancelled")` during execution
+2. Generator checks `running_task.meta.get("cancelled")`
 3. When detected, raises `asyncio.CancelledError`
 
-Problem: Task and generator are independent execution units. Solution: Cooperative cancellation via meta flag.
-
 ### Bounds & Validation
-
-Always add max iteration limits and validate dictionary lookups:
 
 ```python
 max_search_range = min(len(self.workflow.node_order), current_idx + 100)
@@ -361,11 +221,11 @@ for i in range(current_idx, max_search_range):
     node_id = self.workflow.node_order[i]
     node = self.workflow.nodes.get(node_id)
     if not node:
-        logger.warning(f"Node {node_id} in node_order but not in nodes dict, skipping")
+        logger.warning(f"Node {node_id} not in nodes dict, skipping")
         continue
 ```
 
-Validate `split()` results when parsing LLM responses:
+### Markdown Code Block Parsing
 
 ```python
 if "```json" in response_text:
@@ -376,49 +236,54 @@ if "```json" in response_text:
         logger.warning("Malformed markdown code block")
 ```
 
-## Schema Discovery & DDL Retrieval
+---
 
-### StarRocks Connector Fixes
+## Schema & DDL
 
-Fix SQL syntax errors by removing duplicate database name:
+### StarRocks Fixes
+
 - `SHOW TABLES FROM {db}` → `USE {db}` + `SHOW TABLES`
 - `SHOW CREATE TABLE {db}.{table}` → `SHOW CREATE TABLE {table}`
 
-### Schema Storage API
+### Storage API
 
-- `get_schema()` - Single table schema
-- `search_similar()` - Semantic search
-- `search_all()` - All schemas
-- `get_table_schemas()` - Multiple tables
-- `update_table_schema()` - Metadata repair
+| Method | Function |
+|--------|----------|
+| `get_schema()` | Single table schema |
+| `search_similar()` | Semantic search |
+| `search_all()` | All schemas |
+| `get_table_schemas()` | Multiple tables |
+| `update_table_schema()` | Metadata repair |
 
-When SchemaStorage is empty, implement DDL fallback to retrieve schemas from database connector.
+When SchemaStorage is empty, implement DDL fallback.
+
+---
 
 ## Configuration
 
-### Key Configuration Files
+### Key Files
 
-- `agent.yml` - Main runtime configuration
-- `conf/*.yml.*` - Configuration templates
-- `pyproject.toml` - Python package configuration
-- `pytest.ini` - Test configuration
+- `agent.yml` - Main runtime config
+- `conf/*.yml.*` - Templates
+- `pyproject.toml` - Package config
+- `pytest.ini` - Test config
 
-### Important Settings
+### Settings
 
 ```yaml
 # SQL Query Timeout (default: 60s)
 default_query_timeout_seconds: 60
 
-# Plan Executor Configuration
+# Plan Executor
 plan_executor:
   keyword_tool_map: {custom mappings}
   enable_fallback: true
 
-# Models Configuration
+# Models
 models:
   providers: [OpenAI, Anthropic, Google]
 
-# Database Connections
+# Databases
 databases:
   - snowflake: {...}
   - starrocks: {...}
@@ -428,242 +293,221 @@ databases:
 ### Environment Setup
 
 ```bash
-# Set up config files
 cp conf/agent.yml.template conf/agent.yml
-
-# Set environment variables
 export DATUS_CONFIG=/path/to/agent.yml
 export OPENAI_API_KEY=your_key
 ```
 
-## Docker Support
+---
 
-### Build Process
+## Docker
+
+### Build
 
 ```bash
-# Download required model (required before build)
+# Download model (required before build)
 ./download_model.sh
 # or
-HF_HUB_ENABLE_HF_TRANSFER=1 hf download --resume-download qdrant/all-MiniLM-L6-v2-onnx --local-dir docker/huggingface/fastembed/qdrant--all-MiniLM-L6-v2-onnx --local-dir-use-symlinks False
+HF_HUB_ENABLE_HF_TRANSFER=1 hf download --resume-download \
+  qdrant/all-MiniLM-L6-v2-onnx \
+  --local-dir docker/huggingface/fastembed/qdrant--all-MiniLM-L6-v2-onnx \
+  --local-dir-use-symlinks False
 
-# Build image
+# Build & run
 docker build -t datus-agent:latest .
-
-# Run container
-docker run -p 8080:8080 -v /path/to/agent.yml:/root/.datus/conf/agent.yml datus-agent:latest
+docker run -p 8080:8080 \
+  -v /path/to/agent.yml:/root/.datus/conf/agent.yml \
+  datus-agent:latest
 ```
 
-Model files are not included in Git repository - must be downloaded locally before building.
+**Note**: Model files not in repo - download locally before building.
 
-## Testing Guidelines
+---
 
-### Test Organization
+## Testing & Quality
 
+### Test Execution
+
+```bash
+pytest tests/                       # All tests
+pytest -s -vv --tb=short            # Verbose output
+pytest -m acceptance                # Acceptance tests
+pytest --cov=datus tests/           # With coverage
+pytest tests/unit_tests/            # Unit only
+pytest tests/test_schema_discovery_node.py  # Specific file
 ```
-tests/
-├── unit_tests/          # Unit tests
-├── integration/         # Integration tests
-├── api/                # API tests
-├── conftest.py         # Pytest fixtures
-└── test_*.py          # Test files
+
+### Code Quality
+
+```bash
+black datus/ tests/ --line-length=120
+isort datus/ tests/ --profile=black
+flake8 datus/ tests/ --max-line-length=120
+./formatter.sh    # Run all formatters
+pre-commit install
 ```
-
-### Test Configuration
-
-Configured in `pytest.ini`:
-- Verbose output with `-s -vv`
-- Test discovery in `tests/` directory
-- Logging enabled at INFO level
-- Acceptance tests marked with `@pytest.mark.acceptance`
 
 ### Best Practices
 
 - Name tests `test_*.py`
 - Keep tests deterministic
 - Use small, focused fixtures
-- Test both success and error paths
+- Test success and error paths
 - Mock external dependencies
 
-## Git Workflow & CI/CD
+### Test Organization
+
+```
+tests/
+├── unit_tests/    # Unit tests
+├── integration/   # Integration tests
+├── api/           # API tests
+├── conftest.py    # Pytest fixtures
+└── test_*.py      # Test files
+```
+
+---
+
+## Git & CI/CD
 
 ### Commit Messages
 
-Use conventional commits:
-- `feat(scope): add new feature`
-- `fix(scope): bug fix`
-- `docs(scope): documentation`
-- `test(scope): add tests`
+```
+feat(scope): add new feature
+fix(scope): bug fix
+docs(scope): documentation
+test(scope): add tests
+```
 
 ### GitHub Actions
 
-CI/CD workflows in `.github/workflows/`:
-- `run-ut.yml` - Unit tests on self-hosted runner
-- `run-integration.yml` - Integration tests
-- `code-quality.yml` - Code quality checks
-- `python-format-check.yml` - Format validation
+| Workflow | Purpose |
+|----------|---------|
+| `run-ut.yml` | Unit tests |
+| `run-integration.yml` | Integration tests |
+| `code-quality.yml` | Code quality checks |
+| `python-format-check.yml` | Format validation |
 
 ### Pre-commit Hooks
 
-Configured in `.pre-commit-config.yaml`:
-- Black (formatter)
-- Flake8 (linter)
-- isort (import sorter)
+```bash
+pre-commit install
+```
 
-Install with: `pre-commit install`
+Configured: Black, Flake8, isort
 
-## Common Development Tasks
+---
+
+## Build & Release
+
+```bash
+# Package management
+make build          # Build package
+make clean          # Clean artifacts
+make check          # Pre-upload check
+make test           # Test installation
+
+# Publishing
+make upload-test    # Test PyPI
+make upload         # PyPI
+make publish        # Full workflow
+
+# Quick commands
+make quick-build    # Clean + build
+make quick-test     # Build + test
+make quick-publish  # Clean + build + check + upload
+make help           # Show all commands
+```
+
+---
+
+## Common Tasks
 
 ### Adding a New Node Type
 
-1. Create node class in `datus/agent/node/new_node.py`
-2. Add type constant to `datus/configuration/node_type.py`
-3. Register in node factory (`datus/agent/node/node.py`)
-4. Add workflow definition in `datus/agent/workflow.yml`
-5. Write unit tests in `tests/`
+1. Define type in `datus/configuration/node_type.py`
+2. Implement in `datus/agent/node/new_node.py`
+3. Export in `datus/agent/node/__init__.py`
+4. Import in `datus/agent/node/node.py` factory
+5. Add handler in `Node.new_instance()`
 
-### Running Specific Tests
-
-```bash
-# Test schema discovery
-pytest tests/test_schema_discovery_node.py -v
-
-# Test intent analysis
-pytest tests/test_intent_analysis_node.py -v
-
-# Test error handling
-pytest tests/test_error_handling.py -v
-
-# Run all unit tests
-pytest tests/unit_tests/ -v
-
-# Run with coverage
-pytest --cov=datus --cov-report=html tests/
-```
-
-### Debugging Workflows
+### Debugging
 
 ```bash
-# Enable debug logging
 export DATUS_LOG_LEVEL=DEBUG
-
-# Run with verbose pytest
 pytest tests/test_workflow.py -s -vv --tb=long
-
-# Check SSE compliance
 pytest tests/test_sse_compliance.py -v
 ```
 
-## Performance & Monitoring
-
-### Query Caching
-
-- QueryCache integration for improved performance
-- 1-hour TTL for LLM intent clarification
-- Fallback mechanisms for cache failures
-
-### Monitoring
-
-- Structured logging with `structlog`
-- Performance metrics collection
-- Health checks for preflight tools
-- Workflow execution observability
-
-### Optimization
-
-- Lazy loading of embeddings
-- Async/await throughout
-- Streaming responses for long operations
-- Connection pooling for databases
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Build fails**: Run `make clean && make build`
-2. **Tests timeout**: Check `default_query_timeout_seconds` in config
-3. **Schema discovery fails**: Verify database connector is installed
-4. **LLM errors**: Check API keys in environment variables
-
-### Debug Commands
+### Diagnostic Commands
 
 ```bash
-# Check configuration
-datus-agent --config-check
-
-# Test database connection
-datus-agent --test-db-connection
-
-# Validate workflow
-datus-agent --validate-workflow
-
-# Check version
-datus-agent --version
+datus-agent --config-check          # Check configuration
+datus-agent --test-db-connection    # Test DB connection
+datus-agent --validate-workflow     # Validate workflow
+datus-agent --version               # Check version
 ```
+
+---
+
+## Performance & Monitoring
+
+- **Query Caching**: QueryCache with 1-hour TTL for intent clarification
+- **Monitoring**: Structured logging, performance metrics, workflow observability
+- **Optimization**: Lazy embeddings, async/await, streaming, connection pooling
+
+---
 
 ## Documentation Standards
 
-### Document Validation Before Changes
+### Before Modifying Docs
 
-When modifying documentation, always verify against source code:
+1. **API Docs**: Verify against `datus/api/models.py` and `service.py`
+2. **Templates**: Use `ls datus/prompts/prompt_templates/*.j2`
+3. **Tools**: Verify in actual implementation, not docs
 
-1. **API Documentation**: Check `datus/api/models.py` and `datus/api/service.py` for exact request/response formats
-2. **Template Lists**: Use `ls datus/prompts/prompt_templates/*.j2` to get current templates
-3. **Tool Parameters**: Verify in the actual tool class implementation, not documentation
+### Common Discrepancies to Catch
 
-**Common discrepancies to catch:**
-- JSON return format mismatches (e.g., `check_table_conflicts` missing `target_table` field in docs)
-- Non-existent API endpoints (e.g., `/metrics` endpoint doesn't exist)
-- Incorrect parameter names (e.g., `tool_timeout_seconds` is not a valid API parameter)
-- Hardcoded version numbers that don't match actual files
+- JSON format mismatches
+- Non-existent API endpoints
+- Incorrect parameter names
+- Hardcoded version numbers
 
-### When to Delete vs Update Documentation
+### When to Delete vs Update
 
-**Delete documentation when:**
-- Document describes features that no longer exist in code
-- Document has >3 critical errors that would mislead users
-- Document is fully duplicated in another file (e.g., `curl_examples.md` vs `workflow/api.md`)
-- Document describes an API endpoint that doesn't exist
+| Delete When | Update When |
+|-------------|-------------|
+| Feature no longer exists | Minor fixes needed |
+| >3 critical errors | Content is unique |
+| Fully duplicated | Template list expansion |
 
-**Update documentation when:**
-- Minor errors can be fixed with small edits
-- Content is unique and valuable
-- Template lists need expansion (not correction)
+### Review Checklist
 
-### Document Version Headers
+- [ ] API endpoint exists in `service.py`
+- [ ] Parameters match `models.py`
+- [ ] Template lists match actual files
+- [ ] Remove hardcoded versions (use `*.j2`)
+- [ ] cURL examples have correct `--config` path
+- [ ] Check for duplication
 
-Add version headers to new documentation files:
+### Version Headers
 
 ```markdown
 > **文档版本**: v1.0
 > **更新日期**: YYYY-MM-DD
 ```
 
-### Documentation Review Checklist
+---
 
-Before submitting documentation changes:
+## Node Registration
 
-- [ ] Verify API endpoint exists in `service.py`
-- [ ] Check request parameters match `models.py` definitions
-- [ ] Confirm template lists match actual files in `prompt_templates/`
-- [ ] Remove hardcoded version numbers (use `*.j2` pattern instead)
-- [ ] Verify cURL examples use correct `--config` path format
-- [ ] Check for duplication with existing docs
+When adding new node types, complete all 5 steps:
 
-## Resources
-
-### Documentation
-- [Official Website](https://datus.ai)
-- [Documentation](https://docs.datus.ai/)
-- [Quickstart Guide](https://docs.datus.ai/getting_started/Quickstart/)
-- [Release Notes](https://docs.datus.ai/release_notes/)
-
-### Community
-- [Slack](https://join.slack.com/t/datus-ai/shared_invite/zt-3g6h4fsdg-iOl5uNoz6A4GOc4xKKWUYg)
-- [GitHub Issues](https://github.com/datus-ai/datus-agent/issues)
-
-### Related Projects
-- [Datus Adapters](https://github.com/Datus-ai/Datus-adapters) - Database connectors
-- [Claude Flow](https://github.com/ruvnet/claude-flow) - SPARC orchestration
+1. Define node type in `datus/configuration/node_type.py`
+2. Implement node class in `datus/agent/node/new_node.py`
+3. Export in `datus/agent/node/__init__.py`
+4. Import in `datus/agent/node/node.py` factory
+5. Add handler case in `Node.new_instance()`
 
 ---
 
