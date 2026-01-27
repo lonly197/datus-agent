@@ -16,6 +16,7 @@
 | [backup_storage.sh](#backup_storagesh---备份) | 备份存储目录 | 迁移前保护 |
 | [live_bootstrap.py](#live_bootstrappy---实时引导) | 从数据库引导 | 增量更新 |
 | [local_init.py](#local_initpy---schema-导入) | 直接导入 Schema | 快速导入 |
+| [check_search_text_fts.py](#check_search_text_ftspy---fts-检查) | search_text 覆盖率 + FTS 召回 | 验证中文检索优化 |
 
 ---
 
@@ -153,6 +154,27 @@ python -m datus.storage.schema_metadata.local_init \
 
 ---
 
+## check_search_text_fts.py - FTS 检查
+
+**功能**: 检查 `search_text` 覆盖率并执行 FTS 查询，验证中文检索是否起效。
+
+**示例**:
+```bash
+python scripts/check_search_text_fts.py \
+  --config=conf/agent.yml \
+  --namespace=test
+```
+
+**自定义查询**:
+```bash
+python scripts/check_search_text_fts.py \
+  --config=conf/agent.yml \
+  --namespace=test \
+  --queries="线索统计 铂智3X 渠道,转化漏斗 试驾 订单实绩,有效线索到店"
+```
+
+---
+
 ## 完整操作流程
 
 ### 流程 1: 完整迁移
@@ -184,6 +206,11 @@ python scripts/diagnose_schema_ddl.py \
   --limit=10 \
   --random \
   --compare-db
+
+# 5. FTS 检查
+python scripts/check_search_text_fts.py \
+  --config=conf/agent.yml \
+  --namespace=test
 ```
 
 ### 流程 2: 快速重建
