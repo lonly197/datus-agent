@@ -12,7 +12,8 @@ This node performs comprehensive SQL validation before execution:
 - Execution permissions validation (optional)
 """
 
-from typing import Any, AsyncGenerator, Dict, List, Optional
+import json
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
@@ -27,6 +28,7 @@ from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import validate_and_suggest_sql_fixes
 from datus.agent.workflow_status import WorkflowTerminationStatus
 from datus.utils.env import get_env_int
+from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl
 
 logger = get_logger(__name__)
 
@@ -383,10 +385,89 @@ class SQLValidateNode(Node):
             result["tables_exist"] = False
             result["errors"].append(f"Referenced tables not found in schema: {', '.join(missing_tables)}")
 
-        # Column validation (more expensive, do basic check)
-        # TODO: Add column-level validation if needed
+        # Column validation (basic but real: compare against DDL/column_comments)
+        column_lookup = self._build_column_lookup(table_schemas, dialect)
+        column_refs = self._extract_column_references(sql_query, dialect)
+
+        missing_columns: List[str] = []
+        for table_ref, col in column_refs:
+            col_l = col.lower()
+            if table_ref:
+                table_l = table_ref.lower()
+                if table_l in column_lookup and col_l not in column_lookup[table_l]:
+                    missing_columns.append(f"{table_ref}.{col}")
+            else:
+                # Unqualified column: ensure it exists in any referenced table
+                if not any(col_l in cols for cols in column_lookup.values()):
+                    missing_columns.append(col)
+
+        if missing_columns:
+            result["columns_exist"] = False
+            result["errors"].append(f"Referenced columns not found in schema: {', '.join(sorted(set(missing_columns)))}")
 
         return result
+
+    def _build_column_lookup(self, table_schemas: List[TableSchema], dialect: str) -> Dict[str, Set[str]]:
+        """
+        Build a mapping of table_name -> set(column_names) using column_comments first,
+        falling back to DDL parsing.
+        """
+        lookup: Dict[str, Set[str]] = {}
+        for schema in table_schemas:
+            table_key = (schema.table_name or "").lower()
+            columns: Set[str] = set()
+
+            # 1) Column comments JSON if available
+            col_comments = getattr(schema, "column_comments", None)
+            if col_comments:
+                try:
+                    parsed = json.loads(col_comments)
+                    if isinstance(parsed, dict):
+                        columns.update([c.lower() for c in parsed.keys()])
+                    elif isinstance(parsed, list):
+                        columns.update([str(item.get("name", "")).lower() for item in parsed if item.get("name")])
+                except Exception:
+                    logger.debug("Failed to parse column_comments JSON for table %s", table_key)
+
+            # 2) Parse DDL if still empty
+            if (not columns) and getattr(schema, "definition", None):
+                try:
+                    metadata = extract_enhanced_metadata_from_ddl(schema.definition, dialect=dialect, warn_on_invalid=False)
+                    for col in metadata.get("columns", []):
+                        name = col.get("name")
+                        if name:
+                            columns.add(str(name).lower())
+                except Exception as exc:
+                    logger.debug("DDL parse failed for table %s: %s", table_key, exc)
+
+            if columns:
+                lookup[table_key] = columns
+        return lookup
+
+    def _extract_column_references(self, sql_query: str, dialect: str) -> List[Tuple[Optional[str], str]]:
+        """
+        Extract (table, column) pairs referenced in the SQL using sqlglot.
+
+        Unqualified columns will have table=None.
+        """
+        try:
+            import sqlglot
+            from sqlglot import exp
+        except Exception:
+            return []
+
+        try:
+            ast = sqlglot.parse_one(sql_query, read=dialect or "mysql")
+        except Exception:
+            return []
+
+        refs: List[Tuple[Optional[str], str]] = []
+        for col in ast.find_all(exp.Column):
+            table = col.table
+            name = col.name
+            if name:
+                refs.append((table, name))
+        return refs
 
     def _check_dangerous_operations(self, sql_query: str) -> Dict[str, Any]:
         """

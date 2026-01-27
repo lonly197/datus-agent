@@ -101,18 +101,41 @@ class SchemaValidationNode(Node, LLMMixin):
                 yield await self._handle_no_schemas_failure(task)
                 return
 
-            # Step 2-4: Validate schemas and check coverage
-            validation_result = await self._validate_schema_coverage(task, context)
+        # Step 2-4: Validate schemas and check coverage
+        validation_result = await self._validate_schema_coverage(task, context)
 
-            # Set result based on validation
-            self.result = BaseResult(
-                success=validation_result["is_sufficient"],
-                error=None if validation_result["is_sufficient"] else "Schema validation failed: Insufficient coverage",
-                data=validation_result,
-            )
+        # Set result based on validation
+        hard_block = not validation_result["is_sufficient"] and (
+            validation_result["coverage_score"] < 0.2
+            or len(validation_result.get("critical_terms_uncovered", [])) > 0
+        )
+        self.last_action_status = (
+            ActionStatus.SUCCESS
+            if validation_result["is_sufficient"]
+            else (ActionStatus.FAILED if hard_block else ActionStatus.SOFT_FAILED)
+        )
 
-            # Emit validation result
-            yield self._create_validation_action(validation_result, task)
+        self.result = BaseResult(
+            success=validation_result["is_sufficient"],
+            error=None
+            if validation_result["is_sufficient"]
+            else "Schema validation failed: Insufficient coverage",
+            data=validation_result,
+        )
+
+        # Persist validation snapshot for downstream nodes / reflection
+        if self.workflow is not None:
+            if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
+                self.workflow.metadata = {}
+            self.workflow.metadata["schema_validation"] = validation_result
+            if hard_block:
+                from datus.agent.workflow_status import WorkflowTerminationStatus
+
+                self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
+                self.workflow.metadata["termination_reason"] = "schema_insufficient_coverage"
+
+        # Emit validation result
+        yield self._create_validation_action(validation_result, task, hard_block)
 
             logger.info(
                 f"Schema validation completed: is_sufficient={validation_result['is_sufficient']}, "
@@ -423,7 +446,9 @@ class SchemaValidationNode(Node, LLMMixin):
         # Enable workflow reflection for recovery
         validation_result["allow_reflection"] = True
 
-    def _create_validation_action(self, validation_result: Dict[str, Any], task) -> ActionHistory:
+    def _create_validation_action(
+        self, validation_result: Dict[str, Any], task, hard_block: bool = False
+    ) -> ActionHistory:
         """Create appropriate action based on validation result."""
         table_count = validation_result["table_count"]
         coverage_score = validation_result["coverage_score"]
@@ -455,7 +480,11 @@ class SchemaValidationNode(Node, LLMMixin):
             return ActionHistory(
                 action_id=f"{self.id}_validation",
                 role=ActionRole.TOOL,
-                messages=f"Schema validation failed: Insufficient schema coverage (score: {coverage_score:.2f})",
+                messages=(
+                    "Schema validation hard-blocked: insufficient coverage"
+                    if hard_block
+                    else f"Schema validation failed: Insufficient schema coverage (score: {coverage_score:.2f})"
+                ),
                 action_type="schema_validation",
                 input={
                     "task": task.task[:50] if task else "",
@@ -467,7 +496,7 @@ class SchemaValidationNode(Node, LLMMixin):
                     "coverage_threshold": validation_result.get("coverage_threshold"),
                     "query_context": query_context,
                 },
-                status=ActionStatus.SOFT_FAILED,  # Allow reflection
+                status=ActionStatus.FAILED if hard_block else ActionStatus.SOFT_FAILED,
                 output=validation_result,
             )
 

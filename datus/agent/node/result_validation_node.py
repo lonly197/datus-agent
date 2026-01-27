@@ -26,6 +26,7 @@ from datus.schemas.node_models import SQLContext
 from datus.utils.env import get_env_int
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
+from datus.agent.workflow_status import WorkflowTerminationStatus
 
 logger = get_logger(__name__)
 
@@ -160,6 +161,12 @@ class ResultValidationNode(Node):
 
                 self.result = BaseResult(success=True, data=validation_result)
             else:
+                self.last_action_status = ActionStatus.SOFT_FAILED
+                if self.workflow:
+                    if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
+                        self.workflow.metadata = {}
+                    self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
+                    self.workflow.metadata["termination_reason"] = validation_result.get("reason", "result_invalid")
                 yield ActionHistory(
                     action_id=f"{self.id}_validation",
                     role=ActionRole.TOOL,
