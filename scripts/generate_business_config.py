@@ -202,7 +202,7 @@ class BusinessConfigGenerator:
                     unique_columns.append(col)
             df.columns = unique_columns
             
-            logger.debug(f"[Excel读取] 展平后的列名: {df.columns.tolist()[:20]}...")  # 只显示前20个
+            logger.info(f"[Excel读取] 展平后的列名(前30): {df.columns.tolist()[:30]}")
             
             # 转换为字典列表，跳过空行
             records = []
@@ -269,12 +269,17 @@ class BusinessConfigGenerator:
                 "_stats": stats,
             }
 
+        # 调试：打印第一条记录的所有字段
+        if records:
+            logger.info(f"[Excel解析] 第一条记录的列: {list(records[0].keys())[:20]}...")
+            logger.info(f"[Excel解析] 第一条记录样本: {{'物理表名': {records[0].get('物理表名', 'N/A')}, '字段名': {records[0].get('字段名', 'N/A')}, '分析对象': {records[0].get('分析对象（中文）', 'N/A')}}})")
+        
         for row in records:
             stats["total_rows"] += 1
 
-            # 提取关键字段
-            table_name = self._clean_string(row.get("物理表名", ""))
-            column_name = self._clean_string(row.get("字段名", ""))
+            # 提取关键字段（启用调试）
+            table_name = self._extract_field(row, ["物理表名", "table_name", "表名"], debug=(stats['total_rows']==1))
+            column_name = self._extract_field(row, ["字段名", "column_name", "列名", "column"], debug=(stats['total_rows']==1))
             attr_def = self._clean_string(row.get("属性业务定义", ""))
             attr_cn = self._clean_string(row.get("属性（中文）", ""))
             obj_name = self._clean_string(row.get("分析对象（中文）", ""))
@@ -821,7 +826,7 @@ class BusinessConfigGenerator:
             }},
         }
 
-    def _extract_field(self, row: Dict, possible_names: List[str]) -> str:
+    def _extract_field(self, row: Dict, possible_names: List[str], debug: bool = False) -> str:
         """从行中提取字段值，尝试多个可能的列名"""
         for name in possible_names:
             # 尝试精确匹配
@@ -831,6 +836,10 @@ class BusinessConfigGenerator:
             for key in row.keys():
                 if key and key.lower() == name.lower():
                     return self._clean_string(row[key])
+        
+        # 调试：打印失败的匹配
+        if debug:
+            logger.debug(f"[字段提取] 未找到匹配: {possible_names}, 可用列: {list(row.keys())[:10]}...")
         return ""
 
     def _is_valid_table_name(self, name: str, verbose: bool = False) -> bool:
