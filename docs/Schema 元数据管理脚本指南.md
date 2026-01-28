@@ -1,7 +1,7 @@
 # Schema 元数据管理脚本指南
 
-> **文档版本**: v1.2
-> **更新日期**: 2026-01-27
+> **文档版本**: v1.6
+> **更新日期**: 2026-01-28
 
 > 本指南介绍用于 Schema 元数据管理的脚本。如需查看所有脚本（包括模型下载、开发测试等），请参考 [脚本清单](../scripts/脚本清单.md)。
 
@@ -324,13 +324,15 @@ python scripts/verify_schema_enrichment.py \
 
 ## generate_business_config.py - 业务术语配置生成
 
-**功能**: 从数据架构Excel和指标清单Excel生成业务术语配置，导入指标到ext_knowledge表。
+**功能**: 从数据架构Excel和指标清单Excel生成业务术语配置，导入指标到ext_knowledge表。支持表优先级过滤、文本清洗和LLM增强。
 
 **核心特性**:
+- **表优先级过滤**: 优先使用 DIM/DWD/DWS，可选包含 ADS，排除 ODS
+- **智能文本清洗**: 自动去除 emoji、序号标记、特殊符号
 - **多策略表名匹配**: 精确匹配、模糊匹配、LLM增强匹配
 - **业务术语提取**: 从分类字段和指标名称自动提取业务术语
+- **LLM 改写**: 将人类可读的指标定义改写为检索友好的术语
 - **指标目录生成**: 生成271个指标的配置文件
-- **自动schema不匹配检测**: 自动检测并重建表结构
 
 **核心参数**:
 
@@ -339,19 +341,40 @@ python scripts/verify_schema_enrichment.py \
 | `--config` | 配置文件路径 | 必填 |
 | `--namespace` | 命名空间 | 必填 |
 | `--arch-xlsx` | 数据架构设计Excel路径 | - |
-| `--metrics-xlsx` | 指标清单Excel路径 | 必填 |
+| `--metrics-xlsx` | 指标清单Excel路径 | - |
+| `--max-table-priority` | 最大表优先级（DIM/DWD/DWS/ADS/ODS） | ADS |
+| `--disable-text-cleaning` | 禁用文本清洗 | false |
+| `--use-llm` | 启用 LLM 增强 | false |
+| `--rewrite-with-llm` | LLM 改写指标定义（需配合 `--use-llm`） | false |
 | `--import-to-lancedb` | 导入指标到ext_knowledge表 | false |
 | `--verbose` | 详细输出 | false |
 
 **使用示例**:
 
 ```bash
+# 基础生成（默认过滤ODS表）
 python scripts/generate_business_config.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test \
   --metrics-xlsx=/path/to/打铁指标清单v2.4.xlsx \
   --import-to-lancedb \
   --verbose
+
+# 仅包含 DWD/DWS/DIM 层
+python scripts/generate_business_config.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --metrics-xlsx=/path/to/打铁指标清单v2.4.xlsx \
+  --max-table-priority=DWS
+
+# LLM 改写指标定义
+python scripts/generate_business_config.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --metrics-xlsx=/path/to/打铁指标清单v2.4.xlsx \
+  --use-llm \
+  --rewrite-with-llm
 ```
 
 ---
@@ -375,15 +398,31 @@ python scripts/migrate_v0_to_v1.py \
   --clear \
   --force
 
-# 3. 【新增】生成业务术语配置并导入指标到ext_knowledge
+# 3. 【新增】生成业务术语配置（过滤ODS表，清洗文本）
+python scripts/generate_business_config.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --metrics-xlsx=/path/to/打铁指标清单v2.4.xlsx \
+  --max-table-priority=ADS \
+  --verbose
+
+# 4. 【可选】导入指标到ext_knowledge表
 python scripts/generate_business_config.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test \
   --metrics-xlsx=/path/to/打铁指标清单v2.4.xlsx \
-  --import-to-lancedb \
-  --verbose
+  --import-to-lancedb
 
-# 4. 【新增】从设计文档增强 Schema 元数据（DWD/DWS/DIM 层）
+# 5. 【可选】LLM 改写指标定义（获得更好的检索效果）
+python scripts/generate_business_config.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --metrics-xlsx=/path/to/打铁指标清单v2.4.xlsx \
+  --use-llm \
+  --rewrite-with-llm
+
+# 6. 【新增】从设计文档增强 Schema 元数据（DWD/DWS/DIM 层）
 python scripts/enrich_schema_from_design.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test \
@@ -391,7 +430,7 @@ python scripts/enrich_schema_from_design.py \
   --layers=dwd,dws,dim \
   --apply
 
-# 5. 【可选】使用 LLM 增强模式（智能匹配和注释生成）
+# 7. 【可选】使用 LLM 增强模式（智能匹配和注释生成）
 python scripts/enrich_schema_from_design.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test \
@@ -400,17 +439,17 @@ python scripts/enrich_schema_from_design.py \
   --apply \
   --use-llm
 
-# 6. 【新增】验证增强效果
+# 8. 【新增】验证增强效果
 python scripts/verify_schema_enrichment.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test
 
-# 7. 验证报告
+# 9. 验证报告
 python scripts/check_migration_report.py \
   --config=conf/agent.yml \
   --namespace=test
 
-# 8. 抽样诊断
+# 10. 抽样诊断
 python scripts/diagnose_schema_ddl.py \
   --config=conf/agent.yml \
   --namespace=test \
@@ -418,12 +457,12 @@ python scripts/diagnose_schema_ddl.py \
   --random \
   --compare-db
 
-# 9. FTS 检查
+# 11. FTS 检查
 python scripts/check_search_text_fts.py \
   --config=conf/agent.yml \
   --namespace=test
 
-# 10. FTS 索引重建（必要时）
+# 12. FTS 索引重建（必要时）
 python scripts/rebuild_schema_fts_index.py \
   --config=conf/agent.yml \
   --namespace=test
@@ -448,6 +487,8 @@ python scripts/check_migration_report.py \
 | LLM 回退失败 | 禁用 `--use-llm` 参数 |
 | 匹配率为 0% | 检查 `--layers` 参数是否与设计文档层一致 |
 | 只加载了少量表 | 确认 Excel 中 `逻辑实体（英文）` 列包含物理表名 |
+| ODS 表过多影响质量 | 使用 `--max-table-priority=DWS` 过滤 |
+| 术语包含乱码/emoji | 文本清洗自动处理，或禁用 `--disable-text-cleaning` |
 | 权限错误 | 检查数据库用户权限 |
 | 回滚恢复 | `bash scripts/backup_storage.sh` 后手动恢复 |
 
@@ -461,6 +502,13 @@ python scripts/check_migration_report.py \
 ---
 
 ## 版本记录
+
+### v1.6 (2026-01-28)
+- 重构 `generate_business_config.py` 脚本说明
+  - 新增表优先级过滤功能（`--max-table-priority`）
+  - 新增智能文本清洗功能（`--disable-text-cleaning`）
+  - 新增 LLM 改写指标定义功能（`--rewrite-with-llm`）
+  - 更新配置加载规则说明
 
 ### v1.5 (2026-01-28)
 - 新增 `generate_business_config.py` 脚本说明
