@@ -1,8 +1,8 @@
 # Datus Agent Workflow 模块介绍
 
-> **文档版本**: v2.0
-> **更新日期**: 2026-01-23
-> **相关模块**: `datus/agent/`, `datus/configuration/node_type.py`
+> **文档版本**: v2.1
+> **更新日期**: 2026-01-28
+> **相关模块**: `datus/agent/`, `datus/agent/runner/`
 > **代码仓库**: [Datus Agent](https://github.com/Datus-ai/Datus-agent)
 
 ---
@@ -45,30 +45,49 @@ class Workflow:
 
 ### 2. WorkflowRunner 类
 
-**位置**: `datus/agent/workflow_runner.py`
+**位置**: `datus/agent/runner/`
 
-封装工作流生命周期管理，支持独立执行。
+封装工作流生命周期管理，支持独立执行。采用模块化设计，拆分为以下子模块：
+
+| 文件 | 职责 |
+|------|------|
+| `workflow_executor.py` | 同步/流式执行核心引擎 |
+| `workflow_lifecycle.py` | 初始化、恢复、ActionHistory 管理 |
+| `workflow_navigator.py` | 节点跳转逻辑（reflect/output） |
+| `workflow_termination.py` | 终止处理、错误报告、输出保证 |
 
 **核心属性**:
 ```python
-class WorkflowRunner:
+class WorkflowExecutor:
     workflow: Optional[Workflow]   # 工作流实例
     workflow_ready: bool           # 就绪状态
     run_id: str                    # 执行 ID (格式: YYYYMMDD_HHMMSS)
     initial_metadata: Dict         # 初始元数据
+    _completed_nodes_count: int    # 已完成节点计数（性能优化）
 ```
 
-**终止状态**:
+**核心方法**:
+| 方法 | 功能 |
+|------|------|
+| `run(sql_task, check_storage)` | 同步执行工作流 |
+| `run_stream(...)` | 流式执行工作流（AsyncGenerator） |
+
+### 3. WorkflowTerminationStatus 枚举
+
+**位置**: `datus/agent/workflow_status.py`
+
+工作流终止状态定义：
+
 ```python
 class WorkflowTerminationStatus:
-    CONTINUE = "continue"          # 继续执行
+    CONTINUE = "continue"              # 继续执行
     SKIP_TO_REFLECT = "skip_to_reflect"  # 跳转到反思节点
-    PROCEED_TO_OUTPUT = "proceed_to_output"  # 继续到输出节点
+    PROCEED_TO_OUTPUT = "proceed_to_output"  # 继续到输出节点（生成报告）
     TERMINATE_WITH_ERROR = "terminate_with_error"  # 终止并报错
     TERMINATE_SUCCESS = "terminate_success"  # 成功终止
 ```
 
-### 3. Agent 类
+### 4. Agent 类
 
 **位置**: `datus/agent/agent.py`
 
@@ -80,7 +99,7 @@ class Agent:
     def __init__(self, args, agent_config, db_manager=None)
     def _initialize_model(self) -> LLMBaseModel  # 初始化 LLM
     def _check_storage_modules(self)              # 检查存储模块
-    def create_workflow_runner(...) -> WorkflowRunner  # 创建工作流运行器
+    def create_workflow_runner(...) -> WorkflowExecutor  # 创建工作流运行器
 ```
 
 ---
@@ -381,6 +400,14 @@ if not check_reflect_node_reachable(workflow, current_idx):
 ---
 
 ## 版本更新记录
+
+### v2.1 (2026-01-28)
+- WorkflowRunner 重构为 `datus/agent/runner/` 子模块
+- 新增 `workflow_executor.py`：同步/流式执行核心引擎
+- 新增 `workflow_lifecycle.py`：初始化、恢复、ActionHistory 管理
+- 新增 `workflow_navigator.py`：节点跳转逻辑
+- 新增 `workflow_termination.py`：终止处理、错误报告
+- 原 `workflow_runner.py` 保留为向后兼容入口
 
 ### v2.0 (2026-01-23)
 - 完整重写，基于最新代码架构
