@@ -30,6 +30,7 @@
 /tests/semantic_models
 sql_processing_errors.log
 /conf/agent.yml
+/conf/auth_clients.yml
 /save
 uv.lock
 *.log
