@@ -180,6 +180,7 @@ class WorkflowExecutor:
             elif termination_status == WorkflowTerminationStatus.PROCEED_TO_OUTPUT:
                 # Reflect node or other critical node failed, jump to output for report generation
                 logger.info(f"Proceeding to output node for report generation after {current_node.description} failure")
+                from datus.agent.runner.workflow_navigator import WorkflowNavigator
                 navigator = WorkflowNavigator(self.workflow)
                 navigator.jump_to_output_node()
 
