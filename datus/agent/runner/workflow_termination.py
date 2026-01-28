@@ -14,10 +14,11 @@ from typing import Any, Dict, List, Optional
 
 from datus.agent.evaluate import setup_node_input
 from datus.agent.node import Node
+from datus.agent.runner.workflow_lifecycle import ActionHistoryManagerMixin
 from datus.agent.workflow import Workflow
 from datus.agent.workflow_status import WorkflowTerminationStatus
 from datus.configuration.node_type import NodeType
-from datus.schemas.action_history import ActionHistory
+from datus.schemas.action_history import ActionHistory, ActionStatus
 from datus.utils.error_handler import check_reflect_node_reachable
 from datus.utils.loggings import get_logger
 
@@ -54,8 +55,6 @@ class WorkflowTerminationManager:
         Returns:
             WorkflowTerminationStatus: Clear termination status for workflow execution
         """
-        from datus.schemas.action_history import ActionStatus
-
         # 1. Check ActionStatus first (SOFT_FAILED vs FAILED)
         if hasattr(current_node, "last_action_status"):
             last_status = current_node.last_action_status
@@ -213,8 +212,6 @@ class WorkflowTerminationManager:
         error: Optional[str] = None,
     ):
         """Update action status (helper method)."""
-        from datus.schemas.action_history import ActionStatus
-
         if success:
             action.status = ActionStatus.SUCCESS
             action.output = action.output or {}
@@ -237,8 +234,6 @@ class ErrorMarkdownBuilder:
         """Build markdown-formatted error message for ErrorEvent."""
         if not self.workflow or not self.workflow.metadata:
             return None
-
-        from datus.agent.runner.workflow_lifecycle import ActionHistoryManagerMixin
 
         helper = ActionHistoryManagerMixin()
         suggestions = helper.generate_failure_suggestions(self.workflow)

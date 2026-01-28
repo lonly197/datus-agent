@@ -2,24 +2,35 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from typing import Dict, Optional, Type, get_type_hints
+from typing import TYPE_CHECKING, Dict, Optional, Type, get_type_hints
 
 from pydantic import BaseModel, create_model
 
-from datus.schemas.chat_agentic_node_models import ChatNodeInput
-from datus.schemas.compare_node_models import CompareInput
-from datus.schemas.date_parser_node_models import DateParserInput
-from datus.schemas.doc_search_node_models import DocSearchInput
-from datus.schemas.fix_node_models import FixInput
-from datus.schemas.gen_sql_agentic_node_models import GenSQLNodeInput
-from datus.schemas.node_models import BaseInput, ExecuteSQLInput, GenerateSQLInput, OutputInput, ReflectionInput, SQLValidateInput
-from datus.schemas.parallel_node_models import ParallelInput, SelectionInput
-from datus.schemas.reason_sql_node_models import ReasoningInput
-from datus.schemas.schema_linking_node_models import SchemaLinkingInput
-from datus.schemas.search_metrics_node_models import SearchMetricsInput
-from datus.schemas.semantic_agentic_node_models import SemanticNodeInput
-from datus.schemas.sql_summary_agentic_node_models import SqlSummaryNodeInput
-from datus.schemas.subworkflow_node_models import SubworkflowInput
+from datus.schemas.node_models import BaseInput
+
+# Type-checking imports to avoid circular dependencies
+# These are only used by type checkers, not at runtime
+if TYPE_CHECKING:
+    from datus.schemas.chat_agentic_node_models import ChatNodeInput
+    from datus.schemas.compare_node_models import CompareInput
+    from datus.schemas.date_parser_node_models import DateParserInput
+    from datus.schemas.doc_search_node_models import DocSearchInput
+    from datus.schemas.fix_node_models import FixInput
+    from datus.schemas.gen_sql_agentic_node_models import GenSQLNodeInput
+    from datus.schemas.node_models import (
+        ExecuteSQLInput,
+        GenerateSQLInput,
+        OutputInput,
+        ReflectionInput,
+        SQLValidateInput,
+    )
+    from datus.schemas.parallel_node_models import ParallelInput, SelectionInput
+    from datus.schemas.reason_sql_node_models import ReasoningInput
+    from datus.schemas.schema_linking_node_models import SchemaLinkingInput
+    from datus.schemas.search_metrics_node_models import SearchMetricsInput
+    from datus.schemas.semantic_agentic_node_models import SemanticNodeInput
+    from datus.schemas.sql_summary_agentic_node_models import SqlSummaryNodeInput
+    from datus.schemas.subworkflow_node_models import SubworkflowInput
 
 
 class NodeType:
@@ -146,9 +157,35 @@ class NodeType:
         This method is called once to initialize the registry with built-in
         node types. Custom node types can be added using register_input_class().
 
+        Imports are done locally to avoid circular dependencies with schema modules.
+        The registry is cached, so imports only happen once on first call.
+
         Returns:
             Dictionary mapping node type strings to input classes
         """
+        # Runtime imports to avoid circular dependencies
+        # TYPE_CHECKING imports above handle type checking without runtime overhead
+        from datus.schemas.chat_agentic_node_models import ChatNodeInput
+        from datus.schemas.compare_node_models import CompareInput
+        from datus.schemas.date_parser_node_models import DateParserInput
+        from datus.schemas.doc_search_node_models import DocSearchInput
+        from datus.schemas.fix_node_models import FixInput
+        from datus.schemas.gen_sql_agentic_node_models import GenSQLNodeInput
+        from datus.schemas.node_models import (
+            ExecuteSQLInput,
+            GenerateSQLInput,
+            OutputInput,
+            ReflectionInput,
+            SQLValidateInput,
+        )
+        from datus.schemas.parallel_node_models import ParallelInput, SelectionInput
+        from datus.schemas.reason_sql_node_models import ReasoningInput
+        from datus.schemas.schema_linking_node_models import SchemaLinkingInput
+        from datus.schemas.search_metrics_node_models import SearchMetricsInput
+        from datus.schemas.semantic_agentic_node_models import SemanticNodeInput
+        from datus.schemas.sql_summary_agentic_node_models import SqlSummaryNodeInput
+        from datus.schemas.subworkflow_node_models import SubworkflowInput
+
         return {
             cls.TYPE_SCHEMA_LINKING: SchemaLinkingInput,
             cls.TYPE_GENERATE_SQL: GenerateSQLInput,
