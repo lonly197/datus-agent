@@ -140,8 +140,33 @@ class SchemaEnricher:
         self._column_to_records: Dict[str, List[DesignDocRecord]] = defaultdict(list)
         self._entity_to_tables: Dict[str, List[str]] = defaultdict(list)
         
+        # LanceDB 中的实际表名集合（用于匹配）
+        self._lancedb_tables: Set[str] = set()
+        
         logger.info(f"Initialized SchemaEnricher for namespace: {namespace}")
         logger.info(f"Database path: {self.db_path}")
+
+    def _load_lancedb_tables(self):
+        """加载 LanceDB 中的所有表名"""
+        try:
+            self.schema_storage._ensure_table_ready()
+            all_data = self.schema_storage.table.to_pandas()
+            self._lancedb_tables = set(all_data['table_name'].str.lower().tolist())
+            logger.info(f"Loaded {len(self._lancedb_tables)} tables from LanceDB")
+            
+            # 显示样本
+            sample = list(self._lancedb_tables)[:10]
+            logger.info(f"Sample LanceDB tables: {sample}")
+            
+            # 统计表名前缀分布
+            prefix_counts = {}
+            for t in self._lancedb_tables:
+                prefix = t.split('_')[0] if '_' in t else 'other'
+                prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+            logger.info(f"Table prefix distribution: {dict(sorted(prefix_counts.items(), key=lambda x: -x[1])[:5])}")
+            
+        except Exception as e:
+            logger.error(f"Failed to load LanceDB tables: {e}")
 
     def load_design_document(self, xlsx_path: Path, sheet_name=None) -> int:
         """
@@ -165,64 +190,164 @@ class SchemaEnricher:
                 sheet_names = xl.sheet_names
                 if "Sheet1" in sheet_names:
                     sheet_name = "Sheet1"
+                    logger.info(f"Auto-selected sheet: 'Sheet1'")
                 else:
                     sheet_name = 0
+                    logger.info(f"Auto-selected first sheet: '{sheet_names[0]}'")
             
-            # 数据架构设计文档：第2行（索引1）是实际列名
+            # 数据架构设计文档结构：
+            # 第1行：分组标题（资产目录/业务属性/技术属性/管理属性）
+            # 第2行：实际列名（物理表名、字段名等）★ 使用这行
+            # 第3行：列说明/注释
+            logger.info(f"Reading Excel with header=1 (row 2 as column names)")
             df = pd.read_excel(xlsx_path, sheet_name=sheet_name, header=1)
-            logger.info(f"Loaded {len(df)} rows from design document")
             
             # 清理列名
-            df.columns = [str(c).strip().replace('\n', ' ') for c in df.columns]
-            logger.debug(f"Columns: {df.columns.tolist()}")
+            df.columns = [str(c).strip().replace('\n', ' ').replace('\r', '') for c in df.columns]
+            logger.info(f"Excel columns: {df.columns.tolist()[:10]}...")
+            
+            # 过滤掉表头说明行（物理表名为空或是说明文字的行）
+            df = self._filter_header_rows(df)
+            
+            logger.info(f"Loaded {len(df)} data rows from design document")
             
             valid_count = 0
+            invalid_table_names = []
+            
             for _, row in df.iterrows():
                 record = self._parse_row(row)
                 if record and record.table_name and record.column_name:
-                    self._table_to_records[record.table_name].append(record)
-                    col_key = f"{record.table_name}.{record.column_name}"
+                    # 标准化表名（小写）
+                    table_name_lower = record.table_name.lower()
+                    
+                    self._table_to_records[table_name_lower].append(record)
+                    col_key = f"{table_name_lower}.{record.column_name.lower()}"
                     self._column_to_records[col_key].append(record)
                     
                     # 建立逻辑实体到表的映射
                     if record.logic_entity_cn:
-                        if record.table_name not in self._entity_to_tables[record.logic_entity_cn]:
-                            self._entity_to_tables[record.logic_entity_cn].append(record.table_name)
+                        entity_lower = record.logic_entity_cn.lower()
+                        if table_name_lower not in self._entity_to_tables[entity_lower]:
+                            self._entity_to_tables[entity_lower].append(table_name_lower)
                     
                     valid_count += 1
+                elif record and record.table_name:
+                    # 记录无效表名用于调试
+                    invalid_table_names.append(record.table_name)
             
-            logger.info(f"Parsed {valid_count} valid records")
-            logger.info(f"Indexed {len(self._table_to_records)} tables")
+            # 去重并限制调试输出
+            invalid_table_names = list(dict.fromkeys(invalid_table_names))[:20]
+            
+            logger.info(f"Parsed {valid_count} valid records with both table and column names")
+            logger.info(f"Indexed {len(self._table_to_records)} unique tables")
             logger.info(f"Indexed {len(self._entity_to_tables)} logic entities")
             
-            # 显示样本
-            sample_tables = list(self._table_to_records.keys())[:5]
-            logger.info(f"Sample tables: {sample_tables}")
+            if invalid_table_names:
+                logger.warning(f"Sample invalid/skipped table names: {invalid_table_names[:10]}")
+            
+            # 显示样本表名
+            sample_tables = list(self._table_to_records.keys())[:10]
+            logger.info(f"Sample indexed tables: {sample_tables}")
+            
+            # 对比 LanceDB 表名
+            common_tables = set(self._table_to_records.keys()) & self._lancedb_tables
+            logger.info(f"Matched tables with LanceDB: {len(common_tables)}/{len(self._lancedb_tables)}")
+            if common_tables:
+                logger.info(f"Sample matched: {list(common_tables)[:5]}")
+            
+            # 显示未匹配的样本
+            unmatched_lancedb = list(self._lancedb_tables - set(self._table_to_records.keys()))[:10]
+            if unmatched_lancedb:
+                logger.warning(f"Sample unmatched LanceDB tables: {unmatched_lancedb}")
+            
+            unmatched_excel = list(set(self._table_to_records.keys()) - self._lancedb_tables)[:10]
+            if unmatched_excel:
+                logger.warning(f"Sample unmatched Excel tables: {unmatched_excel}")
             
             return valid_count
             
         except Exception as e:
             logger.error(f"Failed to load design document: {e}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
             return 0
+    
+    def _filter_header_rows(self, df: pd.DataFrame) -> pd.DataFrame:
+        """过滤掉表头说明行"""
+        original_len = len(df)
+        
+        # 条件1：过滤掉 #N/A 值
+        df = df.replace('#N/A', pd.NA).replace('N/A', pd.NA)
+        
+        # 条件2：过滤掉说明行（多种可能的说明文字）
+        header_keywords = [
+            '定义分析业务对象',
+            '定义逻辑实体',
+            '逻辑实体的业务含义',
+            '定义物理表名',
+            '定义属性',
+            '分析业务对象（中文）名称',
+            '分析业务对象（英文）名称',
+            '定义逻辑实体中文名',
+            '定义逻辑实体英文名',
+        ]
+        
+        # 检查所有列是否包含说明关键词
+        for col in df.columns:
+            for keyword in header_keywords:
+                df = df[~df[col].astype(str).str.contains(keyword, na=False, regex=False)]
+        
+        # 条件3：逻辑实体（英文）列必须是有效的表名格式
+        # 优先使用逻辑实体（英文）列，因为这是实际的物理表名
+        logic_entity_col = None
+        for possible in ["逻辑实体（英文）", "逻辑实体英文"]:
+            if possible in df.columns:
+                logic_entity_col = possible
+                break
+        
+        table_col = None
+        for possible in ["物理表名", "表名"]:
+            if possible in df.columns:
+                table_col = possible
+                break
+        
+        # 优先使用逻辑实体（英文）列
+        if logic_entity_col:
+            df = df[df[logic_entity_col].notna()]
+            df = df[df[logic_entity_col].astype(str).str.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', na=False)]
+            df = df[~df[logic_entity_col].astype(str).str.contains(r'^定义|^说明', regex=True, na=False)]
+        elif table_col:
+            df = df[df[table_col].notna()]
+            df = df[df[table_col].astype(str).str.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', na=False)]
+        
+        filtered_len = len(df)
+        logger.info(f"Filtered {original_len - filtered_len} header/invalid rows, {filtered_len} data rows remaining")
+        
+        return df
     
     def _parse_row(self, row: pd.Series) -> Optional[DesignDocRecord]:
         """解析单行数据为 DesignDocRecord"""
         try:
             record = DesignDocRecord()
             
-            # 辅助函数：安全获取字段值
+            # 辅助函数：安全获取字段值（尝试多种可能的列名）
             def get_field(possible_names: List[str]) -> str:
                 for name in possible_names:
+                    # 精确匹配
                     if name in row.index:
                         val = row[name]
                         if pd.notna(val):
                             return str(val).strip()
+                    # 模糊匹配（处理带换行符的列名）
+                    for col in row.index:
+                        if name in col and pd.notna(row[col]):
+                            return str(row[col]).strip()
                 return ""
             
             # 资产目录
             record.l1_theme = get_field(["L1-主题域分组", "L1主题域分组", "L1"])
             record.l2_theme = get_field(["L2-主题域", "L2主题域", "L2"])
-            record.l3_theme = get_field(["L3/L4-分析主题", "L3分析主题", "L3"])
+            record.l3_theme = get_field(["L3/L4-分析主题", "L3分析主题", "L3", "L3/L4"])
             
             # 业务属性
             record.analysis_obj_code = get_field(["分析对象编码"])
@@ -230,14 +355,25 @@ class SchemaEnricher:
             record.analysis_obj_en = get_field(["分析对象（英文）", "分析对象英文"])
             record.logic_entity_cn = get_field(["逻辑实体（中文）", "逻辑实体"])
             record.logic_entity_en = get_field(["逻辑实体（英文）", "逻辑实体英文"])
-            record.logic_entity_def = get_field(["逻辑实体业务含义", "逻辑实体含义"])
+            record.logic_entity_def = get_field(["逻辑实体业务含义", "逻辑实体含义", "逻辑实体说明"])
             record.attr_cn = get_field(["属性（中文）", "属性"])
             record.attr_en = get_field(["属性（英文）", "属性英文"])
-            record.attr_def = get_field(["*属性业务定义", "属性业务定义", "业务定义"])
+            record.attr_def = get_field(["*属性业务定义", "属性业务定义", "业务定义", "属性定义"])
             
             # 技术属性
-            record.table_name = get_field(["物理表名", "表名"])
-            record.column_name = get_field(["字段名", "列名"])
+            # 关键：逻辑实体（英文）列实际上是物理表名！
+            record.logic_entity_en = get_field(["逻辑实体（英文）", "逻辑实体英文"])
+            record.table_name = get_field(["物理表名", "table_name", "表名"])
+            record.column_name = get_field(["字段名", "column_name", "列名", "属性英文名"])
+            
+            # 优先使用逻辑实体（英文）作为表名（这才是实际的物理表名）
+            if record.logic_entity_en and not record.table_name:
+                record.table_name = record.logic_entity_en
+            elif record.logic_entity_en and record.table_name:
+                # 两者都有，优先使用逻辑实体（英文）
+                if record.logic_entity_en != record.table_name:
+                    logger.debug(f"Table name mismatch: logic_entity_en={record.logic_entity_en}, table_name={record.table_name}")
+                record.table_name = record.logic_entity_en
             
             # 管理属性
             record.data_owner = get_field(["数据Owner", "数据 Owner"])
@@ -247,14 +383,35 @@ class SchemaEnricher:
             # 清理表名和字段名
             if record.table_name:
                 record.table_name = record.table_name.strip().lower()
+                # 过滤掉说明行
+                if self._is_header_text(record.table_name):
+                    record.table_name = ""
+            
             if record.column_name:
                 record.column_name = record.column_name.strip().lower()
+                # 过滤掉说明行
+                if self._is_header_text(record.column_name):
+                    record.column_name = ""
             
             return record if record.table_name else None
             
         except Exception as e:
             logger.debug(f"Failed to parse row: {e}")
             return None
+    
+    def _is_header_text(self, text: str) -> bool:
+        """判断是否为表头说明文字"""
+        if not text:
+            return True
+        header_keywords = [
+            '定义物理表名', '定义逻辑实体', '定义属性', '定义字段',
+            '定义分析业务对象', '定义逻辑实体中文名', '定义逻辑实体英文名',
+            '逻辑实体的业务含义', '分析业务对象（中文）名称', '分析业务对象（英文）名称',
+            '物理表名', '逻辑实体', '属性业务定义',
+            'table_name', 'column_name', 'field_name',
+            '#N/A', 'N/A',
+        ]
+        return any(keyword in text for keyword in header_keywords) or len(text) < 2
     
     def enrich_table_metadata(self, table_name: str, existing_record: Dict) -> EnrichmentResult:
         """
@@ -272,11 +429,20 @@ class SchemaEnricher:
         # 获取原始注释
         result.original_comment = existing_record.get("table_comment", "") or ""
         
+        # 标准化表名进行匹配
+        table_name_lower = table_name.lower()
+        
         # 查找设计文档中的记录
-        design_records = self._table_to_records.get(table_name.lower(), [])
-        if not design_records:
+        design_records = self._table_to_records.get(table_name_lower, [])
+        
+        if design_records:
+            result.match_source = "exact"
+        else:
             # 尝试模糊匹配
-            design_records = self._fuzzy_match_table(table_name)
+            design_records = self._fuzzy_match_table(table_name_lower)
+            if design_records:
+                result.match_source = "fuzzy"
+                logger.debug(f"Fuzzy matched table '{table_name}' with {len(design_records)} records")
         
         if not design_records:
             return result
@@ -288,17 +454,22 @@ class SchemaEnricher:
         existing_col_comments = self._parse_json_column_comments(
             existing_record.get("column_comments", "{}"))
         result.enriched_columns = self._enrich_column_comments(
-            table_name, design_records, existing_col_comments)
+            table_name_lower, design_records, existing_col_comments)
         
         # 3. 增强业务标签
         existing_tags = existing_record.get("business_tags", []) or []
+        if isinstance(existing_tags, str):
+            try:
+                existing_tags = json.loads(existing_tags)
+            except:
+                existing_tags = []
         result.enriched_tags = self._enrich_business_tags(design_records, existing_tags)
         
         # 4. 推断枚举值
         existing_enums = self._parse_json_column_enums(
             existing_record.get("column_enums", "{}"))
         result.enriched_enums = self._infer_enum_values(
-            table_name, design_records, result.enriched_columns, existing_enums)
+            table_name_lower, design_records, result.enriched_columns, existing_enums)
         
         return result
     
@@ -307,7 +478,7 @@ class SchemaEnricher:
         matched_records = []
         
         # 提取表名关键词（去除前缀如 ods_, dwd_ 等）
-        clean_name = re.sub(r'^(ods|dwd|dws|dim|ads|tmp|stg)_', '', table_name.lower())
+        clean_name = re.sub(r'^(ods|dwd|dws|dim|ads|tmp|stg)_', '', table_name)
         clean_name = re.sub(r'_(di|df|tmp|temp|bak|\d+)$', '', clean_name)
         
         # 在逻辑实体中查找匹配
@@ -318,8 +489,37 @@ class SchemaEnricher:
                 # 获取该实体的所有记录
                 for t in tables:
                     matched_records.extend(self._table_to_records.get(t, []))
+                continue
+            
+            # 尝试计算关键词相似度
+            if self._calculate_similarity(clean_name, entity_clean) > 0.5:
+                for t in tables:
+                    matched_records.extend(self._table_to_records.get(t, []))
         
-        return matched_records
+        # 去重
+        seen = set()
+        unique_records = []
+        for r in matched_records:
+            key = (r.table_name, r.column_name)
+            if key not in seen:
+                seen.add(key)
+                unique_records.append(r)
+        
+        return unique_records
+    
+    def _calculate_similarity(self, s1: str, s2: str) -> float:
+        """计算两个字符串的相似度（简单版本）"""
+        # 提取关键词
+        keywords1 = set(re.findall(r'[a-z]+', s1.lower()))
+        keywords2 = set(re.findall(r'[a-z]+', s2.lower()))
+        
+        if not keywords1 or not keywords2:
+            return 0.0
+        
+        intersection = keywords1 & keywords2
+        union = keywords1 | keywords2
+        
+        return len(intersection) / len(union) if union else 0.0
     
     def _enrich_table_comment(self, records: List[DesignDocRecord], existing: str) -> str:
         """增强表注释"""
@@ -379,15 +579,15 @@ class SchemaEnricher:
         for record in records:
             # 从主题域提取标签
             if record.l1_theme:
-                tags.add(record.l1_theme.lower().replace("-", "_"))
+                tags.add(self._normalize_tag(record.l1_theme))
             if record.l2_theme:
-                tags.add(record.l2_theme.lower().replace("-", "_"))
+                tags.add(self._normalize_tag(record.l2_theme))
             if record.l3_theme:
-                tags.add(record.l3_theme.lower().replace("-", "_"))
+                tags.add(self._normalize_tag(record.l3_theme))
             
             # 从分析对象提取标签
             if record.analysis_obj_cn:
-                tags.add(record.analysis_obj_cn.lower())
+                tags.add(self._normalize_tag(record.analysis_obj_cn))
             
             # 从逻辑实体提取标签
             if record.logic_entity_cn:
@@ -396,6 +596,15 @@ class SchemaEnricher:
                 tags.update(keywords)
         
         return sorted(list(tags))
+    
+    def _normalize_tag(self, tag: str) -> str:
+        """标准化标签"""
+        tag = tag.lower().strip()
+        # 替换特殊字符
+        tag = re.sub(r'[\s\-]+', '_', tag)
+        # 去除多余下划线
+        tag = re.sub(r'_+', '_', tag)
+        return tag.strip('_')
     
     def _infer_enum_values(
         self,
@@ -527,6 +736,9 @@ class SchemaEnricher:
         enriched_count = 0
         changes_summary = []
         
+        # 统计匹配来源
+        match_stats = {"exact": 0, "fuzzy": 0, "none": 0}
+        
         for idx, row in all_records.iterrows():
             table_name = row.get("table_name", "")
             if not table_name:
@@ -538,31 +750,39 @@ class SchemaEnricher:
             # 执行增强
             result = self.enrich_table_metadata(table_name, existing_record)
             
+            # 统计匹配来源
+            if result.match_source == "exact":
+                match_stats["exact"] += 1
+            elif result.match_source == "fuzzy":
+                match_stats["fuzzy"] += 1
+            else:
+                match_stats["none"] += 1
+            
             if result.has_changes:
                 enriched_count += 1
                 changes_summary.append({
                     "table": table_name,
+                    "match_source": result.match_source,
                     "comment_changed": bool(result.enriched_comment and result.enriched_comment != result.original_comment),
                     "columns_enriched": len(result.enriched_columns),
                     "tags_added": len(result.enriched_tags),
                     "enums_inferred": len(result.enriched_enums),
                 })
                 
-                logger.info(f"[{idx+1}/{total}] {table_name}: "
+                logger.info(f"[{idx+1}/{total}] {table_name} ({result.match_source}): "
                           f"comment={bool(result.enriched_comment)}, "
                           f"columns={len(result.enriched_columns)}, "
-                          f"tags={len(result.enriched_tags)}, "
-                          f"enums={len(result.enriched_enums)}")
-                
-                if not dry_run:
-                    self._apply_enrichment(result)
+                          f"tags={len(result.enriched_tags)}")
             else:
                 logger.debug(f"[{idx+1}/{total}] {table_name}: no changes")
+        
+        logger.info(f"Match statistics: exact={match_stats['exact']}, fuzzy={match_stats['fuzzy']}, none={match_stats['none']}")
         
         stats = {
             "total_tables": total,
             "enriched_tables": enriched_count,
             "match_rate": f"{enriched_count/total*100:.1f}%" if total > 0 else "0%",
+            "match_stats": match_stats,
             "changes_detail": changes_summary[:20],  # 前20个详情
         }
         
@@ -647,6 +867,14 @@ class SchemaEnricher:
         report.append(f"Total tables processed: {stats['total_tables']}")
         report.append(f"Tables enriched: {stats['enriched_tables']}")
         report.append(f"Match rate: {stats['match_rate']}")
+        
+        if 'match_stats' in stats:
+            report.append("")
+            report.append("Match source breakdown:")
+            report.append(f"  Exact match: {stats['match_stats']['exact']} tables")
+            report.append(f"  Fuzzy match: {stats['match_stats']['fuzzy']} tables")
+            report.append(f"  No match: {stats['match_stats']['none']} tables")
+        
         report.append("")
         
         if stats['changes_detail']:
@@ -680,7 +908,8 @@ Examples:
       --config=/root/.datus/conf/agent.yml \\
       --namespace=test \\
       --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \\
-      --dry-run
+      --dry-run \\
+      --output=/tmp/enrichment_preview.txt
 
   # Apply enrichment
   python scripts/enrich_schema_from_design.py \\
@@ -726,6 +955,9 @@ Examples:
     
     # 初始化 enricher
     enricher = SchemaEnricher(agent_config, args.namespace)
+    
+    # 先加载 LanceDB 表名（用于匹配验证）
+    enricher._load_lancedb_tables()
     
     # 加载设计文档
     arch_path = Path(args.arch_xlsx)
