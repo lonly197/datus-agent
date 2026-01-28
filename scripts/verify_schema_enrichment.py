@@ -110,8 +110,16 @@ def calculate_metadata_score(record: Dict) -> Dict[str, Any]:
         if estimated_columns > 0:
             score["enum_coverage"] = len(enums) / estimated_columns
     
-    # 业务标签
-    business_tags = record.get("business_tags", []) or []
+    # 业务标签（安全处理 PyArrow/numpy 数组）
+    business_tags_raw = record.get("business_tags", [])
+    # 处理可能的 PyArrow Array 或 numpy array
+    if hasattr(business_tags_raw, 'tolist'):
+        business_tags = business_tags_raw.tolist()
+    elif business_tags_raw is None:
+        business_tags = []
+    else:
+        business_tags = list(business_tags_raw) if business_tags_raw else []
+    
     if business_tags:
         score["has_business_tags"] = True
         score["business_tags_count"] = len(business_tags)
