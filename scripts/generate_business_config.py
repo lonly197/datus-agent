@@ -59,6 +59,7 @@ from datus.models.base import LLMBaseModel
 from datus.storage.cache import get_storage_cache_instance
 from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata import SchemaStorage
+from datus.storage.ext_knowledge.store import ExtKnowledgeStore
 from datus.storage.schema_metadata.llm_enhanced_extract import (
     extract_business_metadata_with_llm,
     parse_design_requirement_with_llm,
@@ -674,6 +675,77 @@ class BusinessConfigGenerator:
         
         return unique_keywords[:10]  # 限制数量，避免噪音
 
+    def _extract_metric_terms(self, metric_name: str, min_length: int = 2) -> List[str]:
+        """
+        从指标名称中提取业务术语
+        
+        处理逻辑：
+        1. 去除常见指标后缀（数、量、率、占比、金额、次数等）
+        2. 提取核心业务概念（如"有效线索数"→"有效线索"）
+        3. 保留原始指标名称作为备选
+        
+        示例：
+        - "原始线索数" → ["原始线索", "线索"]
+        - "首触及时率" → ["首触及时", "首触"]
+        - "有效线索占比" → ["有效线索"]
+        - "线索目标（下发量目标）" → ["线索目标", "下发量目标", "线索", "下发量"]
+        """
+        if not metric_name:
+            return []
+        
+        terms = []
+        
+        # 清理指标名称（去除括号内容，保留主要部分）
+        clean_name = re.sub(r'[（(].*?[）)]', '', metric_name).strip()
+        
+        # 常见指标后缀（需要去除的）
+        metric_suffixes = [
+            '数量', '数', '量', '率', '占比', '比例', '金额', '次数', '天数', '时长',
+            '目标', '实绩', '合计', '汇总', '统计', '平均', '最大', '最小',
+            '及时', '完成', '达成', '转化', '变更', '新增', '活跃'
+        ]
+        
+        # 策略1: 逐层去除后缀，提取核心概念
+        current = clean_name
+        for suffix in metric_suffixes:
+            if current.endswith(suffix) and len(current) > len(suffix) + min_length:
+                core_term = current[:-len(suffix)]
+                if len(core_term) >= min_length and self._is_meaningful_term(core_term):
+                    terms.append(core_term)
+                # 继续处理剩余部分（如"有效线索数"→提取"线索"）
+                current = core_term
+        
+        # 策略2: 提取2-8字的中文业务词
+        for match in re.finditer(r"[\u4e00-\u9fa5]{%d,8}" % min_length, clean_name):
+            kw = match.group()
+            if self._is_meaningful_term(kw):
+                terms.append(kw)
+        
+        # 策略3: 特定业务术语识别（基于常见模式）
+        special_patterns = [
+            r'(首触)\w*',  # 首触及时率 → 首触
+            r'(有效\w+)',  # 有效线索 → 有效线索
+            r'(原始\w+)',  # 原始线索 → 原始线索
+            r'(人工\w+)',  # 人工战败 → 人工战败
+            r'(自然\w+)',  # 自然线索 → 自然线索
+            r'(战败\w*)',  # 战败线索 → 战败
+        ]
+        for pattern in special_patterns:
+            for match in re.finditer(pattern, clean_name):
+                term = match.group(1)
+                if len(term) >= min_length and term not in terms:
+                    terms.append(term)
+        
+        # 去重并保持顺序
+        seen = set()
+        unique_terms = []
+        for term in terms:
+            if term not in seen and len(term) >= min_length:
+                seen.add(term)
+                unique_terms.append(term)
+        
+        return unique_terms[:5]  # 限制数量
+
     def _load_table_comments_from_lancedb(self) -> Dict[str, str]:
         """
         从LanceDB加载所有表的table_comment信息
@@ -955,6 +1027,20 @@ class BusinessConfigGenerator:
                         # 同时加入table_keywords（用于表排序）
                         if len(kw) >= 4:  # 较长关键词更可靠
                             table_keywords[kw] = list(source_tables)[0]
+                
+                # === 核心输出3.5: 从指标名称提取业务术语 -> 表名 ===
+                # 指标名称包含关键业务概念（如"有效线索数"→"有效线索"、"首触及时率"→"首触"）
+                if metric_name:
+                    metric_terms = self._extract_metric_terms(metric_name, min_term_length)
+                    for term in metric_terms:
+                        for table_name in source_tables:
+                            term_to_table[term].add(table_name)
+                        if len(term) >= 2:
+                            table_keywords[term] = list(source_tables)[0]
+                        # 调试输出
+                        if stats.get('metric_terms_added', 0) < 5:
+                            logger.info(f"[指标术语] '{term}' -> {source_tables[0]} (来自指标: {metric_name})")
+                        stats["metric_terms_added"] = stats.get("metric_terms_added", 0) + 1
                 
                 # === 核心输出4: 从分类字段提取业务术语 -> 表名 ===
                 # 分类1、分类2包含关键业务术语（如"订单"、"试驾"、"线索"等）
@@ -1411,6 +1497,141 @@ class BusinessConfigGenerator:
                 "ddl_terms": ddl_stats["terms_added"],
             }},
         }
+
+    def generate_metrics_catalog_from_xlsx(
+        self,
+        xlsx_path: Path,
+        header_rows: int = 2,
+        sheet_name = None
+    ) -> List[Dict]:
+        """
+        从指标清单Excel生成指标目录（用于导入ext_knowledge）
+        
+        每条记录包含：
+        - subject_path: [业务活动, 指标层级]
+        - name: 指标编码
+        - terminology: 指标名称
+        - explanation: 业务定义+计算公式+维度+来源表
+        - metadata: 来源表、维度、指标层级等
+        
+        Args:
+            xlsx_path: 指标清单Excel文件路径
+            header_rows: 表头行数
+            sheet_name: 工作表名称或索引
+            
+        Returns:
+            List[Dict]: 指标目录条目列表
+        """
+        logger.info(f"Generating metrics catalog from: {xlsx_path}")
+        
+        metrics = []
+        records = self._read_excel_with_header(xlsx_path, header_rows, sheet_name)
+        
+        if not records:
+            logger.warning("[指标目录] 未读取到有效数据")
+            return metrics
+        
+        for row in records:
+            # 提取关键字段
+            metric_code = self._extract_field(row, ["指标编码", "指标编码 -固定值（勿改）"])
+            metric_name = self._extract_field(row, ["指标名称"])
+            biz_def = self._extract_field(row, ["业务定义及说明", "业务定义"])
+            calc_logic = self._extract_field(row, ["计算公式/业务逻辑", "计算公式", "业务逻辑"])
+            dimensions = self._extract_field(row, ["公共维度", "维度"])
+            source_model = self._extract_field(row, ["来源dws模型", "dws模型", "来源模型", "来源表"])
+            biz_activity = self._extract_field(row, ["业务活动"])
+            metric_level = self._extract_field(row, ["指标层级", "层级"])
+            category1 = self._extract_field(row, ["分类1", "分类一", "一级分类"])
+            category2 = self._extract_field(row, ["分类2", "分类二", "二级分类"])
+            
+            if not metric_code or not metric_name:
+                continue
+            
+            # 构建详细解释文本
+            explanation_parts = []
+            if biz_def:
+                explanation_parts.append(f"【业务定义】{biz_def}")
+            if calc_logic:
+                explanation_parts.append(f"【计算逻辑】{calc_logic}")
+            if dimensions:
+                explanation_parts.append(f"【分析维度】{dimensions}")
+            if source_model:
+                explanation_parts.append(f"【来源表】{source_model}")
+            if category1 or category2:
+                cats = [c for c in [category1, category2] if c]
+                explanation_parts.append(f"【业务分类】{' / '.join(cats)}")
+            
+            explanation = "\n".join(explanation_parts) if explanation_parts else biz_def or metric_name
+            
+            # 构建metadata
+            metadata = {
+                "source_table": source_model,
+                "dimensions": [d.strip() for d in dimensions.split('\n') if d.strip()] if dimensions else [],
+                "metric_level": metric_level,
+                "category1": category1,
+                "category2": category2,
+            }
+            
+            # 构建subject_path
+            subject_path = ["Metrics"]
+            if biz_activity:
+                subject_path.append(biz_activity)
+            if category1:
+                subject_path.append(category1)
+            
+            metric_entry = {
+                "subject_path": subject_path,
+                "name": metric_code,
+                "terminology": metric_name,
+                "explanation": explanation,
+                "metadata": metadata,
+            }
+            metrics.append(metric_entry)
+        
+        logger.info(f"[指标目录] 生成了 {len(metrics)} 个指标条目")
+        return metrics
+
+    def import_metrics_to_ext_knowledge(
+        self,
+        metrics_catalog: List[Dict],
+        clear_existing: bool = False
+    ) -> int:
+        """
+        将指标目录导入到 LanceDB 的 ext_knowledge 表
+        
+        Args:
+            metrics_catalog: 指标目录列表
+            clear_existing: 是否清空已有指标数据
+            
+        Returns:
+            int: 成功导入的条目数
+        """
+        if not metrics_catalog:
+            logger.warning("[ExtKnowledge] 没有指标数据需要导入")
+            return 0
+        
+        try:
+            # 初始化 ExtKnowledgeStore
+            ext_store = ExtKnowledgeStore(db_path=self.db_path)
+            
+            # 如果需要清空现有Metrics数据
+            if clear_existing:
+                logger.info("[ExtKnowledge] 清空现有Metrics分类数据...")
+                # 注意：这里假设ExtKnowledgeStore有删除功能，如果没有可以跳过
+                # ext_store.delete_by_subject_path(["Metrics"])
+            
+            # 批量导入
+            logger.info(f"[ExtKnowledge] 开始导入 {len(metrics_catalog)} 个指标...")
+            ext_store.batch_store_knowledge(metrics_catalog)
+            
+            logger.info(f"[ExtKnowledge] 成功导入 {len(metrics_catalog)} 个指标到 ext_knowledge 表")
+            return len(metrics_catalog)
+            
+        except Exception as e:
+            logger.error(f"[ExtKnowledge] 导入失败: {e}")
+            import traceback
+            logger.debug(f"[ExtKnowledge] 错误详情: {traceback.format_exc()}")
+            return 0
 
     def _extract_field(self, row: Dict, possible_names: List[str], debug: bool = False) -> str:
         """
@@ -1869,6 +2090,14 @@ Examples:
       --use-llm \\
       --include-confidence \\
       --output=conf/business_terms_debug.yml
+
+  # 导入指标到 ext_knowledge 表（用于Text2SQL语义检索）
+  python scripts/generate_business_config.py \\
+      --config=conf/agent.yml \\
+      --namespace=test \\
+      --metrics-xlsx=/path/to/指标清单v2.4.xlsx \\
+      --import-to-lancedb \\
+      --verbose
         """,
     )
 
@@ -1921,6 +2150,11 @@ Examples:
         action="count",
         default=0,
         help="Verbose output (-v for INFO, -vv for DEBUG)",
+    )
+    parser.add_argument(
+        "--import-to-lancedb",
+        action="store_true",
+        help="Import metrics catalog to ext_knowledge table in LanceDB",
     )
 
     args = parser.parse_args()
@@ -2030,6 +2264,20 @@ Examples:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     generator.save_to_yaml(business_terms, output_path, include_confidence=args.include_confidence)
+
+    # 导入指标到 ext_knowledge 表
+    if args.import_to_lancedb and args.metrics_xlsx:
+        logger.info("[主流程] 开始导入指标到 ext_knowledge 表...")
+        metrics_catalog = generator.generate_metrics_catalog_from_xlsx(
+            Path(args.metrics_xlsx), header_rows=2, sheet_name=args.metrics_sheet_name
+        )
+        if metrics_catalog:
+            imported_count = generator.import_metrics_to_ext_knowledge(metrics_catalog)
+            logger.info(f"[主流程] 指标导入完成: {imported_count} 个指标")
+        else:
+            logger.warning("[主流程] 没有生成指标目录，跳过导入")
+    elif args.import_to_lancedb and not args.metrics_xlsx:
+        logger.warning("[主流程] --import-to-lancedb 需要 --metrics-xlsx 参数")
 
     logger.info("Business configuration generation complete!")
 
