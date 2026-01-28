@@ -45,9 +45,20 @@ from datus.utils.sql_utils import (
     is_likely_truncated_ddl,
 )
 
+# Import enhanced Chinese query processing
+from datus.utils.chinese_query_utils import (
+    analyze_chinese_query,
+    contains_chinese,
+    extract_chinese_entities,
+    extract_chinese_keywords,
+    ChineseQueryAnalysis,
+    QueryComplexity,
+)
+
 logger = get_logger(__name__)
 
 
+# Backward-compatible wrapper
 def _contains_chinese(text: str) -> bool:
     """
     Detect if text contains Chinese characters.
@@ -889,6 +900,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         ✅ Enhanced: Concatenate table_comment with definition for embedding (improves precision).
         ✅ Enhanced: Filter by business_tags if query contains domain keywords.
         ✅ Enhanced: Use row_count to prioritize frequently accessed tables.
+        ✅ Enhanced v2.6: Chinese query processing with bilingual LLM rewrite and dynamic threshold.
 
         Args:
             task_text: User query text
@@ -903,7 +915,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             from datus.utils.device_utils import get_device
 
             if not self.agent_config:
-                return []
+                return [], {}
 
             tables: List[Dict[str, Any]] = []
             stats: Dict[str, Any] = {
@@ -918,37 +930,73 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             else:
                 base_similarity_threshold = 0.5  # Default threshold for backward compatibility
 
-            # ✅ Dynamic Similarity Threshold: Use lower threshold for Chinese queries
-            # Chinese queries often have lower semantic similarity with English table names
-            # due to cross-lingual embedding mismatch. Lower threshold improves recall.
-            if _contains_chinese(task_text):
-                # Get reduction factor from configuration (with backward compatibility)
-                if hasattr(self.agent_config, "schema_discovery_config"):
-                    reduction_factor = self.agent_config.schema_discovery_config.chinese_query_threshold_reduction
-                else:
-                    reduction_factor = 0.6  # Default: apply 40% reduction for Chinese queries
+            # ✅ Enhanced v2.6: Advanced Chinese query processing
+            chinese_analysis = None
+            similarity_threshold = base_similarity_threshold
+            adjusted_top_n = top_n
 
-                similarity_threshold = base_similarity_threshold * reduction_factor
-                logger.info(
-                    f"Chinese query detected, using reduced similarity threshold: "
-                    f"{similarity_threshold:.2f} (base: {base_similarity_threshold}, factor: {reduction_factor})"
-                )
-            else:
-                similarity_threshold = base_similarity_threshold
+            if _contains_chinese(task_text):
+                # Use enhanced Chinese query analysis
+                try:
+                    chinese_analysis = await analyze_chinese_query(
+                        query=task_text,
+                        agent_config=self.agent_config,
+                        base_threshold=base_similarity_threshold,
+                        base_top_n=top_n,
+                        use_llm_rewrite=True,
+                    )
+                    
+                    # Use dynamic threshold from analysis
+                    similarity_threshold = chinese_analysis.suggested_threshold
+                    adjusted_top_n = chinese_analysis.suggested_top_n
+                    
+                    logger.info(
+                        f"🌏 Chinese query analysis: "
+                        f"complexity={chinese_analysis.complexity.value}, "
+                        f"threshold={similarity_threshold:.2f}, "
+                        f"top_n={adjusted_top_n}, "
+                        f"keywords={chinese_analysis.keywords[:5]}"
+                    )
+                    
+                    # Log bilingual rewrite if available
+                    if chinese_analysis.translation:
+                        logger.info(f"🔄 Bilingual rewrite: {chinese_analysis.translation[:100]}...")
+                        
+                except Exception as e:
+                    logger.warning(f"Chinese query analysis failed, using fallback: {e}")
+                    # Fallback to simple threshold reduction
+                    if hasattr(self.agent_config, "schema_discovery_config"):
+                        reduction_factor = self.agent_config.schema_discovery_config.chinese_query_threshold_reduction
+                    else:
+                        reduction_factor = 0.6
+                    similarity_threshold = base_similarity_threshold * reduction_factor
+            
             stats["semantic_similarity_threshold"] = similarity_threshold
+            stats["semantic_top_n"] = adjusted_top_n
 
             # ✅ NEW: Detect query domain for business tag filtering
             query_tags = infer_business_tags(task_text, [])
 
-            # Build enhanced search text with domain hints
+            # Build enhanced search text with domain hints and Chinese processing
             enhanced_query = task_text
+            
+            # Add bilingual rewrite if available
+            if chinese_analysis and chinese_analysis.translation:
+                enhanced_query = f"{task_text} {chinese_analysis.translation}"
+            
+            # Add extracted Chinese keywords
+            if chinese_analysis and chinese_analysis.keywords:
+                keyword_hint = " ".join(chinese_analysis.keywords[:8])
+                enhanced_query = f"{enhanced_query} {keyword_hint}"
+            
+            # Add business domain tags
             if query_tags:
-                enhanced_query = f"{task_text} domain:{','.join(query_tags)}"
+                enhanced_query = f"{enhanced_query} domain:{','.join(query_tags)}"
 
             # 1. Use SchemaWithValueRAG for direct table semantic search
             rag = SchemaWithValueRAG(agent_config=self.agent_config)
-            # ✅ Enhanced: Use dynamic top_n from progressive matching
-            schema_results, _ = rag.search_similar(query_text=enhanced_query, top_n=top_n)
+            # ✅ Enhanced: Use adjusted top_n based on Chinese query analysis
+            schema_results, _ = rag.search_similar(query_text=enhanced_query, top_n=adjusted_top_n)
 
             candidate_map: Dict[str, Dict[str, Any]] = {}
             vector_total_hits = 0
@@ -1244,15 +1292,26 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     scored_tables.append((table_name, final_score))
 
                 scored_tables.sort(key=lambda x: x[1], reverse=True)
-                tables.extend([{"table_name": name, "score": score} for name, score in scored_tables[:top_n]])
-                stats["semantic_tables"] = len(scored_tables[:top_n])
+                tables.extend([{"table_name": name, "score": score} for name, score in scored_tables[:adjusted_top_n]])
+                stats["semantic_tables"] = len(scored_tables[:adjusted_top_n])
                 stats["semantic_total_hits"] = max(vector_total_hits, fts_total_hits, rerank_total_hits)
                 stats["semantic_vector_hits"] = vector_total_hits
                 stats["semantic_fts_hits"] = fts_total_hits
                 stats["semantic_rerank_hits"] = rerank_total_hits
+                
+                # ✅ Add Chinese analysis stats if available
+                if chinese_analysis:
+                    stats["chinese_analysis"] = {
+                        "complexity": chinese_analysis.complexity.value,
+                        "complexity_score": round(chinese_analysis.complexity_score, 2),
+                        "chinese_ratio": round(chinese_analysis.chinese_ratio, 2),
+                        "keywords": chinese_analysis.keywords[:8],
+                        "entities": chinese_analysis.entities[:5],
+                        "has_translation": bool(chinese_analysis.translation),
+                    }
 
                 logger.info(
-                    f"Hybrid semantic search produced {len(scored_tables[:top_n])} tables "
+                    f"Hybrid semantic search produced {len(scored_tables[:adjusted_top_n])} tables "
                     f"(vector={vector_total_hits}, fts={fts_total_hits}, tags={query_tags})"
                 )
             elif vector_total_hits:

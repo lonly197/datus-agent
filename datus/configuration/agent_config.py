@@ -94,10 +94,18 @@ class SchemaDiscoveryConfig:
     fallback_table_limit: int = 50
     max_candidate_tables: int = 12
 
-    # Chinese query processing (v2.5.1)
+    # Chinese query processing (v2.6 - Enhanced)
     # Dynamic similarity threshold adjustment for Chinese queries
     chinese_query_threshold_reduction: float = 0.6  # Apply 40% reduction (0.6 multiplier) for Chinese queries
     enable_chinese_detection: bool = True  # Enable automatic Chinese text detection
+    
+    # Enhanced Chinese query processing (v2.6)
+    enable_chinese_llm_rewrite: bool = True  # Use LLM for bilingual query enhancement
+    chinese_dynamic_threshold: bool = True   # Enable complexity-based dynamic threshold
+    chinese_min_threshold: float = 0.15      # Minimum similarity threshold for Chinese queries
+    chinese_max_threshold: float = 0.55      # Maximum similarity threshold for Chinese queries
+    chinese_simple_query_threshold: float = 0.20   # Threshold for simple Chinese queries
+    chinese_complex_query_threshold: float = 0.35  # Threshold for complex Chinese queries
 
     # Hybrid retrieval configuration (vector + FTS + optional rerank)
     hybrid_search_enabled: bool = True

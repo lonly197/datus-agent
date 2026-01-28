@@ -25,6 +25,7 @@ from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import extract_enum_values_from_comment, is_likely_truncated_ddl, sanitize_ddl_for_storage
 
 # Import base storage and utilities
+from datus.storage.embedding_models import EmbeddingModel
 from datus.storage.schema_metadata.store_modules.base_storage import BaseMetadataStorage
 from datus.storage.schema_metadata.store_modules.utils import _build_where_clause, _safe_json_dict, _safe_json_list
 
