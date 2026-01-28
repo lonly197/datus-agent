@@ -188,20 +188,36 @@ class BusinessConfigGenerator:
                     return str(col[0]).strip()
                 return str(col).strip()
             
-            df.columns = [flatten_col(col) for col in df.columns]
-            logger.debug(f"[Excel读取] 展平后的列名: {df.columns.tolist()}")
+            # 展平列名并处理重复
+            flat_columns = [flatten_col(col) for col in df.columns]
+            # 如果有重复列名，添加序号区分
+            seen = {}
+            unique_columns = []
+            for col in flat_columns:
+                if col in seen:
+                    seen[col] += 1
+                    unique_columns.append(f"{col}_{seen[col]}")
+                else:
+                    seen[col] = 0
+                    unique_columns.append(col)
+            df.columns = unique_columns
+            
+            logger.debug(f"[Excel读取] 展平后的列名: {df.columns.tolist()[:20]}...")  # 只显示前20个
             
             # 转换为字典列表，跳过空行
             records = []
             for idx, row in df.iterrows():
                 # 检查关键字段是否都为空
-                if row.isna().all() or all(str(v).strip() == '' for v in row.values if pd.notna(v)):
+                if row.isna().all():
                     continue
                     
                 record = {}
                 for col in df.columns:
                     val = row[col]
-                    # 处理NaN和空值
+                    # 处理NaN和空值（val可能是单个值或Series）
+                    if isinstance(val, pd.Series):
+                        # 如果是Series，取第一个非空值
+                        val = val.dropna().iloc[0] if not val.dropna().empty else ""
                     if pd.isna(val):
                         record[col] = ""
                     else:
