@@ -424,6 +424,14 @@ class WorkflowExecutor:
                                 logger.info("Skipping to reflect node due to termination request")
                                 continue
 
+                        # If reflect node failed and we jumped to output, skip evaluation and continue
+                        if current_node.type == "reflect" and current_node.status == "failed":
+                            # Check if we're now at output node (jump_to_output_node was called)
+                            next_node = self.workflow.get_current_node()
+                            if next_node and next_node.type == "output":
+                                logger.info("Reflect node failed, proceeding directly to output node")
+                                continue
+
                     except Exception as e:
                         # Regular exception (CancelledError will propagate naturally)
                         action_helper.update_action_status(node_start_action, success=False, error=str(e))

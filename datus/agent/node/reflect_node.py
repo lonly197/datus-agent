@@ -28,6 +28,12 @@ class ReflectNode(Node):
             if "keywords" in result.details:
                 workflow.context.doc_search_keywords = result.details["keywords"]
 
+            # Check if input is None - this can happen if setup_input was not called properly
+            if self.input is None:
+                error_msg = "Reflection input is not initialized, skipping context update"
+                logger.warning(error_msg)
+                return {"success": False, "message": error_msg}
+
             last_record = workflow.context.sql_contexts[-1]
             if last_record.sql_query == self.input.sql_context[-1].sql_query:
                 strategy = result.strategy
