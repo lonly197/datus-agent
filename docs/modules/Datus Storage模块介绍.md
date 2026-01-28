@@ -1,7 +1,7 @@
 # Datus Storage 模块介绍
 
-> **文档版本**: v2.2
-> **更新日期**: 2026-01-27
+> **文档版本**: v2.3
+> **更新日期**: 2026-01-28
 > **相关模块**: `datus/storage/`
 > **代码仓库**: [Datus Agent](https://github.com/Datus-ai/Datus-agent)
 
@@ -246,6 +246,34 @@ get_matched_children_id(path, descendant=True)  # 支持通配符的节点匹配
 ```
 
 **路径示例**: `['Finance', 'Revenue', 'Q1']`
+
+### 8. ExtKnowledgeStore - 外部知识存储
+
+**用途**: 存储外部业务知识（如指标定义、业务术语），支持语义检索
+
+**核心字段**:
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `name` | string | 知识条目编码/ID |
+| `terminology` | string | 业务术语/指标名称 |
+| `explanation` | string | 详细解释（业务定义、计算逻辑、分析维度等） |
+| `subject_node_id` | int64 | 主题树节点ID |
+| `vector` | list[float32] | 向量嵌入 |
+| `created_at` | int64 | 创建时间 |
+
+**核心方法**:
+```python
+# 语义搜索知识条目
+search_knowledge(query_text, subject_path, top_n)
+
+# 存储单条知识
+store_knowledge(subject_path, name, terminology, explanation)
+
+# 批量存储知识条目
+batch_store_knowledge(entries)
+```
+
+**使用场景**: Text2SQL场景下检索指标定义，注入到Prompt中辅助SQL生成
 
 ---
 
@@ -541,6 +569,40 @@ schema_discovery:
 ```
 建议：审查场景更强调表/列精确度，开启 rerank 并降低触发门槛。
 
+### 6. 外部知识检索
+
+ExtKnowledgeStore 支持基于语义相似度的外部业务知识检索，用于 Text2SQL 场景下的指标定义查询和知识增强。
+
+**检索流程**:
+```
+用户查询 → 语义向量化 → 向量相似度搜索 → 主题树过滤 → 返回知识条目
+```
+
+**核心特性**:
+- **语义搜索**: 基于业务术语和解释的语义匹配，而非关键词匹配
+- **主题树过滤**: 支持按主题路径进行层次化过滤，缩小检索范围
+- **Prompt 集成**: 检索结果直接注入到 Text2SQL Prompt 中，辅助 SQL 生成
+
+**使用示例**:
+```python
+# 搜索特定主题下的业务指标定义
+knowledge_items = ext_knowledge_store.search_knowledge(
+    query_text="销售额计算逻辑",
+    subject_path=["Finance", "Revenue"],
+    top_n=5
+)
+
+# 结果注入 Prompt
+for item in knowledge_items:
+    prompt += f"\n- {item['terminology']}: {item['explanation']}"
+```
+
+**与 Text2SQL 工作流集成**:
+1. 用户输入自然语言查询
+2. 系统从 ExtKnowledgeStore 检索相关指标定义
+3. 检索到的知识作为上下文注入到 SQL 生成 Prompt
+4. LLM 基于增强的上下文生成更准确的 SQL
+
 ---
 
 ## 初始化命令
@@ -783,9 +845,20 @@ class SubjectTreeStore:
 6. **缓存优化**: LRU 缓存提升性能
 7. **新增字段**: `metadata_version`, `last_updated`, `relationship_metadata`
 
+### v2 → v2.3 新增特性
+
+8. **外部知识存储**: 新增 ExtKnowledgeStore 支持业务术语和指标定义的语义检索
+9. **外部知识增强**: Text2SQL 工作流集成外部知识检索，提升 SQL 生成准确性
+10. **指标导入能力**: 支持批量导入外部指标定义（271+ 指标支持）
+
 ---
 
 ## 版本更新记录
+
+### v2.3 (2026-01-28)
+- 新增 ExtKnowledgeStore 文档
+- 新增外部知识增强配置说明
+- 新增指标导入能力文档（支持 271 个指标）
 
 ### v2.2 (2026-01-27)
 - 新增 `llm_enhanced_extract.py` 模块 - LLM 增强枚举值和业务元数据提取

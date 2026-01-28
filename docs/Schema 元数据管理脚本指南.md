@@ -11,6 +11,7 @@
 |------|------|----------|
 | [migrate_v0_to_v1.py](#migrate_v0_to_v1py---schema-迁移) | v0→v1 Schema 迁移 | 升级元数据结构 |
 | [enrich_schema_from_design.py](#enrich_schema_from_designpy---schema-增强) | 从设计文档增强元数据 | 补齐业务注释/标签 |
+| [generate_business_config.py](#generate_business_configpy---业务术语配置生成) | 生成业务术语配置和导入指标 | 业务术语/指标导入 |
 | [verify_schema_enrichment.py](#verify_schema_enrichmentpy---增强验证) | 验证增强效果 | 对比增强前后质量 |
 | [diagnose_schema_ddl.py](#diagnose_schema_ddlpy---ddl-诊断) | 抽样诊断 DDL | 排查解析问题 |
 | [check_migration_report.py](#check_migration_reportpy---迁移报告) | 验证迁移质量 | 检查填充率 |
@@ -321,6 +322,40 @@ python scripts/verify_schema_enrichment.py \
 
 ---
 
+## generate_business_config.py - 业务术语配置生成
+
+**功能**: 从数据架构Excel和指标清单Excel生成业务术语配置，导入指标到ext_knowledge表。
+
+**核心特性**:
+- **多策略表名匹配**: 精确匹配、模糊匹配、LLM增强匹配
+- **业务术语提取**: 从分类字段和指标名称自动提取业务术语
+- **指标目录生成**: 生成271个指标的配置文件
+- **自动schema不匹配检测**: 自动检测并重建表结构
+
+**核心参数**:
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--config` | 配置文件路径 | 必填 |
+| `--namespace` | 命名空间 | 必填 |
+| `--arch-xlsx` | 数据架构设计Excel路径 | - |
+| `--metrics-xlsx` | 指标清单Excel路径 | 必填 |
+| `--import-to-lancedb` | 导入指标到ext_knowledge表 | false |
+| `--verbose` | 详细输出 | false |
+
+**使用示例**:
+
+```bash
+python scripts/generate_business_config.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --metrics-xlsx=/path/to/打铁指标清单v2.4.xlsx \
+  --import-to-lancedb \
+  --verbose
+```
+
+---
+
 ## 完整操作流程
 
 ### 流程 1: 完整迁移（含设计文档增强）
@@ -340,7 +375,15 @@ python scripts/migrate_v0_to_v1.py \
   --clear \
   --force
 
-# 3. 【新增】从设计文档增强 Schema 元数据（DWD/DWS/DIM 层）
+# 3. 【新增】生成业务术语配置并导入指标到ext_knowledge
+python scripts/generate_business_config.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --metrics-xlsx=/path/to/打铁指标清单v2.4.xlsx \
+  --import-to-lancedb \
+  --verbose
+
+# 4. 【新增】从设计文档增强 Schema 元数据（DWD/DWS/DIM 层）
 python scripts/enrich_schema_from_design.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test \
@@ -348,7 +391,7 @@ python scripts/enrich_schema_from_design.py \
   --layers=dwd,dws,dim \
   --apply
 
-# 4. 【可选】使用 LLM 增强模式（智能匹配和注释生成）
+# 5. 【可选】使用 LLM 增强模式（智能匹配和注释生成）
 python scripts/enrich_schema_from_design.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test \
@@ -357,17 +400,17 @@ python scripts/enrich_schema_from_design.py \
   --apply \
   --use-llm
 
-# 5. 【新增】验证增强效果
+# 6. 【新增】验证增强效果
 python scripts/verify_schema_enrichment.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test
 
-# 5. 验证报告
+# 7. 验证报告
 python scripts/check_migration_report.py \
   --config=conf/agent.yml \
   --namespace=test
 
-# 6. 抽样诊断
+# 8. 抽样诊断
 python scripts/diagnose_schema_ddl.py \
   --config=conf/agent.yml \
   --namespace=test \
@@ -375,12 +418,12 @@ python scripts/diagnose_schema_ddl.py \
   --random \
   --compare-db
 
-# 7. FTS 检查
+# 9. FTS 检查
 python scripts/check_search_text_fts.py \
   --config=conf/agent.yml \
   --namespace=test
 
-# 8. FTS 索引重建（必要时）
+# 10. FTS 索引重建（必要时）
 python scripts/rebuild_schema_fts_index.py \
   --config=conf/agent.yml \
   --namespace=test
@@ -418,6 +461,12 @@ python scripts/check_migration_report.py \
 ---
 
 ## 版本记录
+
+### v1.5 (2026-01-28)
+- 新增 `generate_business_config.py` 脚本说明
+  - 支持从数据架构和指标清单生成业务术语配置
+  - 支持导入指标到ext_knowledge表
+  - 支持多策略表名匹配（精确/模糊/LLM增强）
 
 ### v1.4 (2026-01-28)
 - 更新 `enrich_schema_from_design.py` 脚本说明

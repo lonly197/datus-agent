@@ -1,12 +1,19 @@
 # Datus Text2SQL 任务处理流程介绍
 
-> **文档版本**: v2.11
-> **更新日期**: 2026-01-26
+> **文档版本**: v2.12
+> **更新日期**: 2026-01-28
 > **相关模块**: `datus/agent/workflow.yml`, `datus/agent/node/`
 
 ---
 
 基于最新的系统优化与实战验证（2026-01-26），Text2SQL 任务处理流程已升级为**具备高度自愈能力的智能工作流**。系统采用了证据驱动的生成架构，引入了**Preflight 预检编排**、**意图澄清节点**、**专用 SQL 验证节点**、**数仓开发版 SQL 报告**、**多层级 Schema 发现**、**Schema 充分性验证**与**动态反思纠错**机制，确保在生成 SQL 之前先完成意图分析、Schema 探查和验证，然后进行 SQL 生成和验证，若不合适则通过 Reflect 进行反思，继续尝试，直到找不到满足的表才报错终止。
+
+**v2.12 新增特性**（2026-01-28）：
+
+- ✅ **外部知识增强（指标知识增强）**：在 Schema Discovery 阶段支持从 `ext_knowledge` 表检索指标/指标定义
+- ✅ **新增配置参数**：`external_knowledge_enabled` 和 `external_knowledge_top_n` 用于控制外部知识检索
+- ✅ **业务术语覆盖提升**：关键术语覆盖率从 1/5 提升至 5/5
+- ✅ **Schema 自动检测与重建**：支持 `ext_knowledge` 表的 Schema 不匹配自动检测和表重建
 
 **v2.11 新增特性**（2026-01-26）：
 
@@ -166,6 +173,9 @@ schema_discovery:
   hybrid_tag_bonus: 0.1
   hybrid_comment_bonus: 0.05
   hybrid_rerank_enabled: false
+  # 启用外部知识增强（指标检索）
+  external_knowledge_enabled: true
+  external_knowledge_top_n: 5
 ```
 
 2) SQL 审查（高精度 + 误报控制）
@@ -186,6 +196,9 @@ schema_discovery:
   hybrid_rerank_column: "definition"
   hybrid_rerank_min_cpu_count: 4
   hybrid_rerank_min_memory_gb: 8.0
+  # 启用外部知识增强（指标检索）
+  external_knowledge_enabled: true
+  external_knowledge_top_n: 5
 ```
 
 #### **阶段 2: 深度元数据扫描** (Context Search)
@@ -208,6 +221,42 @@ schema_discovery:
 2. 限制返回数量（最多 50 张表）避免上下文溢出
 3. 使用候选表进行后续处理
 4. **增强回退策略**：当 DDL 检索失败时，存储表名供 LLM 参考
+
+#### **阶段 4: 外部知识增强** ⭐ NEW v2.12
+
+**触发条件**：`external_knowledge_enabled: true` 时启用
+
+**执行内容**:
+
+- **指标知识检索**：在 `ext_knowledge` 表中搜索与查询相关的业务指标定义
+- **搜索方法**：调用 `ContextSearchTools.search_external_knowledge()` 方法进行语义检索
+- **结果注入**：检索到的知识通过 `workflow.task.external_knowledge` 注入到 Prompt 中
+- **Top N 控制**：通过 `external_knowledge_top_n` 配置控制返回的知识条目数量（默认 5 条）
+
+**知识注入流程**:
+
+```python
+# 1. Schema Discovery 阶段检索外部知识
+external_knowledge = await ContextSearchTools.search_external_knowledge(
+    query=clarified_task,
+    top_n=config.external_knowledge_top_n
+)
+
+# 2. 注入到 workflow.task
+workflow.task.external_knowledge = external_knowledge
+
+# 3. 在 Generate SQL 阶段通过 Prompt 模板使用
+# 参考下文 3.5 节
+```
+
+**配置示例**:
+```yaml
+schema_discovery:
+  # ... 现有配置 ...
+  # 启用外部知识增强（指标检索）
+  external_knowledge_enabled: true
+  external_knowledge_top_n: 5
+```
 
 ### 3.4 Schema Validation (Schema 充分性验证)
 
@@ -247,6 +296,10 @@ schema_discovery:
 - 完全依赖 `schema_discovery` 加载并通过 `schema_validation` 验证的 Schema
 - 使用结构化提示词模板（`sql_system_1.0.j2`）
 - 支持外部知识（`ext_knowledge`）的优先级注入
+
+**外部知识使用** ⭐ NEW v2.12:
+
+当 `external_knowledge_enabled: true` 时，从 `ext_knowledge` 表检索到的知识（`knowledge_content`）会被注入到 Prompt 模板中，帮助 LLM 理解业务指标的定义和计算方式，从而生成更准确的 SQL。知识内容通过 `workflow.task.external_knowledge` 传递给 Prompt 渲染上下文。
 
 ### 3.6 SQL Validate (SQL 验证) ⭐ NEW v2.8
 
@@ -598,6 +651,14 @@ pip install sqlglot
 ```
 
 ## 7. 总结
+
+### v2.12 核心改进（2026-01-28）
+
+1. ✅ **外部知识增强**：Schema Discovery 新增第 4 阶段，支持从 `ext_knowledge` 表检索业务指标定义
+2. ✅ **指标检索工具**：新增 `ContextSearchTools.search_external_knowledge()` 方法
+3. ✅ **知识注入机制**：通过 `workflow.task.external_knowledge` 将知识注入 Prompt
+4. ✅ **业务术语覆盖提升**：关键术语覆盖率从 1/5 提升至 5/5
+5. ✅ **Schema 自动修复**：`ext_knowledge` 表 Schema 不匹配时自动检测和重建
 
 ### v2.10 核心改进（2026-01-23）
 
