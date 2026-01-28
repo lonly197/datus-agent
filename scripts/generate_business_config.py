@@ -47,9 +47,14 @@ except ImportError:
     sys.exit(1)
 
 from datus.configuration.agent_config_loader import load_agent_config
+from datus.models.base import LLMBaseModel
 from datus.storage.cache import get_storage_cache_instance
 from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata import SchemaStorage
+from datus.storage.schema_metadata.llm_enhanced_extract import (
+    extract_business_metadata_with_llm,
+    parse_design_requirement_with_llm,
+)
 from datus.utils.loggings import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -71,10 +76,55 @@ SYNONYM_MAP = {
 }
 
 
-class BusinessConfigGenerator:
-    """业务术语配置生成器"""
+class BusinessTermMapping:
+    """
+    带置信度的业务术语映射项
+    
+    支持多源合并和冲突解决
+    """
+    def __init__(self, term: str, targets: List[str], source: str, confidence: float = 0.5):
+        self.term = term
+        self.targets = set(targets) if isinstance(targets, list) else {targets}
+        self.sources = {source: confidence}
+        self.confidence = confidence
+        self.metadata = {}
+    
+    def merge(self, other: 'BusinessTermMapping') -> 'BusinessTermMapping':
+        """合并两个映射项，保留高置信度的来源"""
+        self.targets.update(other.targets)
+        for src, conf in other.sources.items():
+            if src not in self.sources or conf > self.sources[src]:
+                self.sources[src] = conf
+        self.confidence = max(self.confidence, other.confidence)
+        return self
+    
+    def to_dict(self) -> Dict:
+        """转换为字典格式（用于YAML输出）"""
+        return {
+            "targets": sorted(list(self.targets)),
+            "confidence": round(self.confidence, 2),
+            "sources": self.sources,
+        }
 
-    def __init__(self, agent_config, namespace: str):
+
+class BusinessConfigGenerator:
+    """
+    业务术语配置生成器（支持LLM增强）
+    
+    三级处理策略：
+    1. Regex Extraction (快速规则提取，置信度0.6-0.9)
+    2. Pattern Matching (模式匹配，置信度0.4-0.7)
+    3. LLM Enhancement (LLM增强理解，置信度0.5-0.9)
+    """
+
+    # 置信度阈值配置
+    CONFIDENCE_THRESHOLDS = {
+        "high": 0.8,      # 高置信度：直接采用，无需审核
+        "medium": 0.6,    # 中置信度：建议采用，可抽样审核
+        "low": 0.4,       # 低置信度：仅供参考，需人工审核
+    }
+
+    def __init__(self, agent_config, namespace: str, use_llm: bool = False, llm_model=None):
         self.agent_config = agent_config
         self.namespace = namespace
         self.db_path = agent_config.rag_storage_path()
@@ -82,7 +132,22 @@ class BusinessConfigGenerator:
             db_path=self.db_path,
             embedding_model=get_db_embedding_model()
         )
-        logger.info(f"Initialized generator for namespace: {namespace}, db_path: {self.db_path}")
+        
+        # LLM 支持
+        self.use_llm = use_llm
+        self.llm_model = llm_model
+        if use_llm and not llm_model:
+            try:
+                self.llm_model = LLMBaseModel.create_model(agent_config=agent_config)
+                logger.info("LLM model initialized for enhanced extraction")
+            except Exception as e:
+                logger.warning(f"Failed to initialize LLM model: {e}, falling back to regex mode")
+                self.use_llm = False
+        
+        # 带置信度的术语映射存储
+        self._term_mappings: Dict[str, BusinessTermMapping] = {}
+        
+        logger.info(f"Initialized generator for namespace: {namespace}, db_path: {self.db_path}, use_llm: {use_llm}")
 
     def generate_from_architecture_csv(
         self,
@@ -125,7 +190,8 @@ class BusinessConfigGenerator:
             
             # 打印实际的列名用于调试
             if reader.fieldnames:
-                logger.debug(f"CSV columns: {reader.fieldnames}")
+                logger.info(f"[CSV解析] 数据架构文件列名: {list(reader.fieldnames)}")
+                logger.debug(f"[CSV解析] 完整列名详情: {reader.fieldnames}")
             
             for row in reader:
                 stats["total_rows"] += 1
@@ -185,10 +251,24 @@ class BusinessConfigGenerator:
                             stats["terms_extracted"] += 1
 
         logger.info(
-            f"Architecture CSV processed: {stats['valid_rows']}/{stats['total_rows']} valid rows, "
-            f"{len(stats['tables_found'])} tables, "
-            f"{stats['terms_extracted']} terms extracted"
+            f"[CSV解析] 数据架构处理完成: {stats['valid_rows']}/{stats['total_rows']} 有效行, "
+            f"{len(stats['tables_found'])} 个表, "
+            f"{stats['terms_extracted']} 个术语提取"
         )
+        
+        # 详细调试信息
+        if stats['tables_found']:
+            sample_tables = list(stats['tables_found'])[:5]
+            logger.info(f"[CSV解析] 样本表名: {sample_tables}")
+        
+        if term_to_table:
+            sample_terms = list(term_to_table.keys())[:10]
+            logger.info(f"[术语提取] 样本术语(前10): {sample_terms}")
+            logger.debug(f"[术语提取] 全部术语({len(term_to_table)}): {list(term_to_table.keys())}")
+        
+        if table_keywords:
+            sample_keywords = list(table_keywords.keys())[:5]
+            logger.info(f"[关键词] 样本表关键词(前5): {sample_keywords}")
 
         return {
             "term_to_table": dict(term_to_table),
@@ -238,7 +318,8 @@ class BusinessConfigGenerator:
             
             # 打印列名用于调试
             if reader.fieldnames:
-                logger.debug(f"Metrics CSV columns: {reader.fieldnames}")
+                logger.info(f"[CSV解析] 指标清单文件列名: {list(reader.fieldnames)}")
+                logger.debug(f"[CSV解析] 完整列名详情: {reader.fieldnames}")
             
             for row in reader:
                 stats["total_metrics"] += 1
@@ -281,9 +362,18 @@ class BusinessConfigGenerator:
                             term_to_schema[metric_name].add(ref)
 
         logger.info(
-            f"Metrics CSV processed: {stats['valid_metrics']}/{stats['total_metrics']} valid metrics, "
-            f"{len(stats['tables_added'])} source tables added"
+            f"[CSV解析] 指标清单处理完成: {stats['valid_metrics']}/{stats['total_metrics']} 有效指标, "
+            f"{len(stats['tables_added'])} 个来源表"
         )
+        
+        # 详细调试信息
+        if stats['tables_added']:
+            logger.info(f"[指标提取] 来源表示例: {list(stats['tables_added'])[:5]}")
+        
+        # 显示新增的关键术语映射
+        new_terms = set(term_to_table.keys()) - set(existing_terms.get("term_to_table", {}).keys())
+        if new_terms:
+            logger.info(f"[术语合并] 指标清单新增术语({len(new_terms)}个): {list(new_terms)[:10]}")
 
         return {
             "term_to_table": dict(term_to_table),
@@ -360,10 +450,27 @@ class BusinessConfigGenerator:
             logger.warning(f"Failed to merge DDL comments: {e}")
 
         logger.info(
-            f"DDL merge complete: {ddl_stats['tables_checked']} tables checked, "
-            f"{ddl_stats['comments_found']} comments found, "
-            f"{ddl_stats['terms_added']} terms added"
+            f"[DDL合并] 完成: {ddl_stats['tables_checked']} 表检查, "
+            f"{ddl_stats['comments_found']} 注释发现, "
+            f"{ddl_stats['terms_added']} 术语添加"
         )
+        
+        # 详细调试：显示新增的术语样本
+        if ddl_stats['terms_added'] > 0:
+            new_ddl_terms = list(term_to_schema.keys())[-20:]  # 最后添加的20个
+            logger.info(f"[DDL合并] DDL新增术语样本(后20): {new_ddl_terms}")
+            
+            # 统计按表分部的术语
+            tables_with_terms = defaultdict(int)
+            for term, fields in term_to_schema.items():
+                for f in fields:
+                    if '.' in f:
+                        table = f.split('.')[0]
+                        tables_with_terms[table] += 1
+            
+            if tables_with_terms:
+                top_tables = sorted(tables_with_terms.items(), key=lambda x: x[1], reverse=True)[:5]
+                logger.info(f"[DDL合并] 术语最多的表(Top5): {top_tables}")
 
         return {
             "term_to_table": dict(term_to_table),
@@ -387,19 +494,27 @@ class BusinessConfigGenerator:
                     return self._clean_string(row[key])
         return ""
 
-    def _is_valid_table_name(self, name: str) -> bool:
+    def _is_valid_table_name(self, name: str, verbose: bool = False) -> bool:
         """验证是否为有效的表名（以字母开头，只包含字母数字下划线）"""
         if not name or len(name) < 2:
+            if verbose and name:
+                logger.debug(f"[过滤] 表名太短或为空: '{name}'")
             return False
         # 必须以字母开头
         if not re.match(r'^[a-zA-Z]', name):
+            if verbose:
+                logger.debug(f"[过滤] 表名不以字母开头: '{name}'")
             return False
         # 只能包含字母、数字、下划线
         if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+            if verbose:
+                logger.debug(f"[过滤] 表名含非法字符: '{name}'")
             return False
         # 排除常见技术关键词
         technical_keywords = {'engine', 'key', 'duplicate', 'distributed', 'random', 'min', 'max', 'properties'}
         if name.lower() in technical_keywords:
+            if verbose:
+                logger.debug(f"[过滤] 技术关键词表名: '{name}'")
             return False
         return True
 
@@ -533,20 +648,185 @@ class BusinessConfigGenerator:
 
         return len(comment) >= 4  # 有意义的注释通常至少有4个字符
 
-    def save_to_yaml(self, business_terms: Dict, output_path: Path):
-        """保存业务术语配置到YAML文件"""
-        # 转换set为sorted list，确保输出稳定
-        output = {
-            "term_to_table": {
-                k: sorted(list(v)) if isinstance(v, (set, list)) else v
-                for k, v in business_terms.get("term_to_table", {}).items()
-            },
-            "term_to_schema": {
-                k: sorted(list(v)) if isinstance(v, (set, list)) else v
-                for k, v in business_terms.get("term_to_schema", {}).items()
-            },
-            "table_keywords": business_terms.get("table_keywords", {}),
-        }
+    def add_mapping_with_confidence(
+        self,
+        term: str,
+        targets: List[str],
+        source: str,
+        confidence: float,
+        metadata: Dict = None
+    ):
+        """
+        添加带置信度的术语映射
+        
+        合并策略：
+        - 同术语同来源：更新置信度（取最高）
+        - 同术语不同来源：合并targets，记录多来源
+        """
+        if term not in self._term_mappings:
+            self._term_mappings[term] = BusinessTermMapping(term, targets, source, confidence)
+        else:
+            existing = self._term_mappings[term]
+            existing.targets.update(targets)
+            if source in existing.sources:
+                # 同来源取最高置信度
+                existing.sources[source] = max(existing.sources[source], confidence)
+            else:
+                existing.sources[source] = confidence
+            existing.confidence = max(existing.confidence, confidence)
+        
+        if metadata:
+            self._term_mappings[term].metadata.update(metadata)
+
+    def llm_enhance_term_extraction(
+        self,
+        term: str,
+        context: str,
+        table_candidates: List[str]
+    ) -> Dict:
+        """
+        使用LLM增强术语理解，解决歧义和冲突
+        
+        适用于：
+        - 术语有歧义（如"客户"可能指厂端/店端/线索客户）
+        - 多表冲突（多个表都匹配同一术语）
+        - 需要语义理解（如"首触"→"首次接触的原始线索"）
+        """
+        if not self.use_llm or not self.llm_model:
+            return {"enhanced": False, "confidence": 0.0}
+        
+        prompt = f"""You are a data warehouse business analyst. Analyze the business term and determine the most relevant tables.
+
+## Input
+Business Term: {term}
+Context: {context}
+Candidate Tables: {table_candidates}
+
+## Task
+1. Analyze the semantic meaning of the business term
+2. Evaluate relevance of each candidate table (score 0-1)
+3. Identify if this term has ambiguity (e.g., "客户" could be factory customer, dealer customer, or lead customer)
+
+## Output Format
+Return ONLY a JSON object:
+{{
+  "term_analysis": "brief semantic analysis of the term",
+  "primary_table": "most relevant table name",
+  "primary_confidence": 0.0-1.0,
+  "secondary_tables": ["other relevant tables"],
+  "ambiguity": true/false,
+  "disambiguation": "if ambiguous, explain different contexts",
+  "related_terms": ["synonyms or related business concepts"],
+  "confidence": 0.0-1.0
+}}
+"""
+        try:
+            response = self.llm_model.generate_with_json_output(prompt)
+            if isinstance(response, dict):
+                return {
+                    "enhanced": True,
+                    "analysis": response.get("term_analysis", ""),
+                    "primary_table": response.get("primary_table", ""),
+                    "primary_confidence": response.get("primary_confidence", 0.0),
+                    "secondary_tables": response.get("secondary_tables", []),
+                    "ambiguity": response.get("ambiguity", False),
+                    "related_terms": response.get("related_terms", []),
+                    "confidence": response.get("confidence", 0.0),
+                }
+        except Exception as e:
+            logger.debug(f"LLM enhancement failed for term '{term}': {e}")
+        
+        return {"enhanced": False, "confidence": 0.0}
+
+    def resolve_conflicts_with_llm(self) -> Dict[str, BusinessTermMapping]:
+        """
+        使用LLM解决术语映射冲突
+        
+        冲突场景：
+        1. 同一术语映射到多个表（歧义）
+        2. 多个术语指向同一表（冗余）
+        3. 设计文档与实际DDL不一致
+        """
+        if not self.use_llm:
+            return self._term_mappings
+        
+        resolved = {}
+        
+        for term, mapping in self._term_mappings.items():
+            # 只处理有冲突的映射（多targets或低置信度）
+            if len(mapping.targets) > 1 or mapping.confidence < self.CONFIDENCE_THRESHOLDS["medium"]:
+                context = f"Sources: {mapping.sources}, Metadata: {mapping.metadata}"
+                table_candidates = list(mapping.targets)
+                
+                enhancement = self.llm_enhance_term_extraction(term, context, table_candidates)
+                
+                if enhancement.get("enhanced") and enhancement.get("confidence", 0) > 0.6:
+                    # 使用LLM建议作为主映射
+                    primary = enhancement.get("primary_table", "")
+                    if primary in mapping.targets:
+                        # 重新排序targets，将primary放在首位
+                        ordered_targets = [primary] + [t for t in mapping.targets if t != primary]
+                        mapping.targets = set(ordered_targets)
+                        mapping.confidence = enhancement.get("confidence", mapping.confidence)
+                        mapping.metadata["llm_analysis"] = enhancement.get("analysis", "")
+                        mapping.metadata["related_terms"] = enhancement.get("related_terms", [])
+            
+            resolved[term] = mapping
+        
+        return resolved
+
+    def save_to_yaml(self, business_terms: Dict, output_path: Path, include_confidence: bool = False):
+        """
+        保存业务术语配置到YAML文件
+        
+        Args:
+            business_terms: 术语映射字典
+            output_path: 输出路径
+            include_confidence: 是否包含置信度信息（调试用）
+        """
+        # 如果启用了置信度模式，先解决冲突
+        if self._term_mappings and include_confidence:
+            resolved = self.resolve_conflicts_with_llm()
+            
+            # 按置信度分组输出
+            output = {
+                "_metadata": {
+                    "high_confidence_threshold": self.CONFIDENCE_THRESHOLDS["high"],
+                    "medium_confidence_threshold": self.CONFIDENCE_THRESHOLDS["medium"],
+                },
+                "high_confidence": {},      # >= 0.8
+                "medium_confidence": {},    # 0.6 - 0.8
+                "low_confidence": {},       # < 0.6
+                "term_to_table": {},
+                "term_to_schema": {},
+                "table_keywords": {},
+            }
+            
+            for term, mapping in resolved.items():
+                entry = mapping.to_dict() if include_confidence else sorted(list(mapping.targets))
+                
+                if mapping.confidence >= self.CONFIDENCE_THRESHOLDS["high"]:
+                    output["high_confidence"][term] = entry
+                elif mapping.confidence >= self.CONFIDENCE_THRESHOLDS["medium"]:
+                    output["medium_confidence"][term] = entry
+                else:
+                    output["low_confidence"][term] = entry
+                
+                # 同时输出扁平格式供生产使用
+                output["term_to_table"][term] = sorted(list(mapping.targets))
+        else:
+            # 传统模式：转换set为sorted list
+            output = {
+                "term_to_table": {
+                    k: sorted(list(v)) if isinstance(v, (set, list)) else v
+                    for k, v in business_terms.get("term_to_table", {}).items()
+                },
+                "term_to_schema": {
+                    k: sorted(list(v)) if isinstance(v, (set, list)) else v
+                    for k, v in business_terms.get("term_to_schema", {}).items()
+                },
+                "table_keywords": business_terms.get("table_keywords", {}),
+            }
 
         # 添加生成信息注释
         header = f"""# Business Terms Configuration
@@ -574,48 +854,61 @@ class BusinessConfigGenerator:
 
         logger.info(f"Business terms saved to: {output_path}")
 
-        # 打印统计
+        # 打印统计报告
         stats = business_terms.get("_stats", {})
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 70)
         print("BUSINESS TERMS GENERATION REPORT")
-        print("=" * 60)
+        print("=" * 70)
         print(f"Output file: {output_path}")
         print(f"Table terms: {len(output['term_to_table'])}")
         print(f"Schema terms: {len(output['term_to_schema'])}")
-        print(f"Table keywords: {len(output['table_keywords'])}")
+        print(f"Table keywords: {len(output.get('table_keywords', {}))}")
+        
+        # 显示样本术语
+        if output['term_to_table']:
+            sample = list(output['term_to_table'].keys())[:5]
+            print(f"\nSample table terms: {sample}")
+        if output['term_to_schema']:
+            sample = list(output['term_to_schema'].keys())[:5]
+            print(f"Sample schema terms: {sample}")
+        
         if stats:
             print("\nGeneration stats:")
             for k, v in stats.items():
                 print(f"  {k}: {v}")
-        print("=" * 60)
+        print("=" * 70)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate business terms configuration from design documents",
+        description="Generate business terms configuration from design documents (with optional LLM enhancement)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Generate from architecture CSV only
+  # Basic generation from architecture CSV
   python scripts/generate_business_config.py \\
       --config=conf/agent.yml \\
       --namespace=test \\
       --arch-csv=/path/to/数据架构详细设计v2.3.csv
 
-  # Generate from both CSV files
+  # Generate with LLM enhancement (recommended)
   python scripts/generate_business_config.py \\
       --config=conf/agent.yml \\
       --namespace=test \\
       --arch-csv=/path/to/数据架构详细设计v2.3.csv \\
       --metrics-csv=/path/to/指标清单v2.4.csv \\
-      --output=conf/business_terms.yml
+      --merge-ddl \\
+      --use-llm \\
+      --include-confidence
 
-  # Merge with existing DDL comments
+  # Debug mode with confidence scores
   python scripts/generate_business_config.py \\
       --config=conf/agent.yml \\
       --namespace=test \\
       --arch-csv=/path/to/数据架构详细设计v2.3.csv \\
-      --merge-ddl
+      --use-llm \\
+      --include-confidence \\
+      --output=conf/business_terms_debug.yml
         """,
     )
 
@@ -639,19 +932,47 @@ Examples:
         default=2,
         help="Minimum term length (default: 2)",
     )
+    parser.add_argument(
+        "--use-llm",
+        action="store_true",
+        help="Enable LLM enhancement for term disambiguation and conflict resolution",
+    )
+    parser.add_argument(
+        "--include-confidence",
+        action="store_true",
+        help="Include confidence scores in output (for debugging)",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="count",
+        default=0,
+        help="Verbose output (-v for INFO, -vv for DEBUG)",
+    )
 
     args = parser.parse_args()
 
-    # 初始化日志
-    configure_logging()
+    # 初始化日志（根据verbose级别设置）
+    if args.verbose >= 2:
+        configure_logging(log_level="DEBUG")
+    elif args.verbose >= 1:
+        configure_logging(log_level="INFO")
+    else:
+        configure_logging(log_level="WARNING")
 
     # 加载配置
     logger.info(f"Loading agent config from: {args.config}")
     agent_config = load_agent_config(config=args.config)
     agent_config.current_namespace = args.namespace
 
-    # 初始化生成器
-    generator = BusinessConfigGenerator(agent_config, args.namespace)
+    # 初始化生成器（支持LLM增强）
+    generator = BusinessConfigGenerator(
+        agent_config, 
+        args.namespace,
+        use_llm=args.use_llm
+    )
+    
+    if args.use_llm:
+        logger.info("LLM enhancement enabled for term extraction and conflict resolution")
 
     # 生成业务术语
     business_terms = None
@@ -694,7 +1015,7 @@ Examples:
     # 保存输出
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    generator.save_to_yaml(business_terms, output_path)
+    generator.save_to_yaml(business_terms, output_path, include_confidence=args.include_confidence)
 
     logger.info("Business configuration generation complete!")
 
