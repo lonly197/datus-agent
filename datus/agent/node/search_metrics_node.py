@@ -38,20 +38,29 @@ class SearchMetricsNode(Node):
 
     def setup_input(self, workflow: Workflow) -> Dict:
         logger.info("Setup search metrics input")
+        
+        # Safely access workflow.task and workflow.context
+        task = getattr(workflow, 'task', None)
+        context = getattr(workflow, 'context', None)
+        
+        if not task:
+            return {"success": False, "message": "No task available in workflow"}
 
         # irrelevant to current node: it should be Start or Reflection node now
-        matching_rate = self.agent_config.search_metrics_rate
+        agent_config = getattr(self, 'agent_config', None)
+        matching_rate = getattr(agent_config, 'search_metrics_rate', 'medium') if agent_config else 'medium'
         matching_rates = ["fast", "medium", "slow"]
-        start = matching_rates.index(matching_rate)
-        final_matching_rate = matching_rates[min(start + workflow.reflection_round, len(matching_rates) - 1)]
+        start = matching_rates.index(matching_rate) if matching_rate in matching_rates else 1
+        reflection_round = getattr(workflow, 'reflection_round', 0)
+        final_matching_rate = matching_rates[min(start + reflection_round, len(matching_rates) - 1)]
         logger.debug(f"Final matching rate: {final_matching_rate}")
 
         next_input = SearchMetricsInput(
-            input_text=workflow.task.task,
+            input_text=getattr(task, 'task', ''),
             matching_rate=final_matching_rate,
-            sql_task=workflow.task,
-            database_type=workflow.task.database_type,
-            sql_contexts=workflow.context.sql_contexts,
+            sql_task=task,
+            database_type=getattr(task, 'database_type', None),
+            sql_contexts=getattr(context, 'sql_contexts', None) if context else None,
         )
         self.input = next_input
         return {"success": True, "message": "Search Metrics appears valid"}
@@ -105,10 +114,12 @@ class SearchMetricsNode(Node):
                 return self.get_bad_result(str(e))
 
     def get_bad_result(self, error_msg: str):
+        input_data = getattr(self, 'input', None)
+        sql_task = getattr(input_data, 'sql_task', None) if input_data else None
         return SearchMetricsResult(
             success=False,
             error=error_msg,
-            sql_task=self.input.sql_task,
+            sql_task=sql_task,
             metrics=[],
             metrics_count=0,
         )
@@ -116,9 +127,19 @@ class SearchMetricsNode(Node):
     def update_context(self, workflow: Workflow) -> Dict:
         """Update search metrics results to workflow context."""
         result = self.result
+        
+        # Check if workflow.context exists
+        workflow_context = getattr(workflow, 'context', None)
+        if workflow_context is None:
+            error_msg = "Workflow context is not available"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+        
         try:
-            if len(workflow.context.metrics) == 0:
-                workflow.context.metrics = result.metrics
+            workflow_metrics = getattr(workflow_context, 'metrics', None) or []
+            if len(workflow_metrics) == 0:
+                result_metrics = getattr(result, 'metrics', None) if result else None
+                workflow_context.metrics = result_metrics if result_metrics else []
             else:
                 pass  # if it's not the first search metrics, wait it after execute_sql
 

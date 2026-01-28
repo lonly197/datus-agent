@@ -68,9 +68,11 @@ class SQLValidateNode(Node):
         """Setup SQL validation input from workflow context."""
         # Extract SQL query from latest SQL context
         sql_query = ""
-        if workflow and workflow.context and workflow.context.sql_contexts:
-            latest_sql_context = workflow.context.sql_contexts[-1]
-            sql_query = latest_sql_context.sql_query
+        context = getattr(workflow, 'context', None)
+        sql_contexts = getattr(context, 'sql_contexts', None) if context else None
+        if sql_contexts and len(sql_contexts) > 0:
+            latest_sql_context = sql_contexts[-1]
+            sql_query = getattr(latest_sql_context, 'sql_query', "") if latest_sql_context else ""
 
         # Get database dialect from agent config
         dialect = None

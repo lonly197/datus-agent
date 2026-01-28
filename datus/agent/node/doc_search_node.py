@@ -59,16 +59,25 @@ class DocSearchNode(Node):
             yield action
 
     def setup_input(self, workflow: Workflow) -> Dict:
-        next_input = DocSearchInput(keywords=workflow.context.doc_search_keywords, top_n=3, method="internal")
+        context = getattr(workflow, 'context', None)
+        doc_search_keywords = getattr(context, 'doc_search_keywords', None) if context else None
+        next_input = DocSearchInput(keywords=doc_search_keywords, top_n=3, method="internal")
         self.input = next_input
         return {"success": True, "message": "Document appears valid", "suggestions": [next_input]}
 
     def update_context(self, workflow: Workflow) -> Dict:
         """Update document search results to workflow context."""
         result = self.result
+        
+        workflow_context = getattr(workflow, 'context', None)
+        if not workflow_context:
+            error_msg = "Workflow context is not available"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+        
         try:
             logger.info(f"Updating document search context: {result}")
-            workflow.context.document_result = result
+            workflow_context.document_result = result
             return {"success": True, "message": "Updated document search context"}
         except Exception as e:
             logger.error(f"Failed to update document search context: {str(e)}")
@@ -76,7 +85,11 @@ class DocSearchNode(Node):
 
     def _execute_document(self) -> DocSearchResult:
         """Execute document search based on method"""
-        return SearchTool(self.agent_config).execute(self.input)
+        agent_config = getattr(self, 'agent_config', None)
+        if not agent_config:
+            logger.error("Agent config is not available for document search")
+            return DocSearchResult(success=False, error="Agent config is not available")
+        return SearchTool(agent_config).execute(self.input)
 
     async def _doc_search_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None

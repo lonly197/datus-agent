@@ -77,6 +77,9 @@ class OutputNode(Node):
             # For plan mode without SQL execution, the response is in action history
             logger.info("Plan mode without SQL execution - output will use chat response")
 
+        # Safely access workflow.context
+        context = getattr(workflow, 'context', None)
+        
         # Collect workflow metadata for comprehensive report generation
         workflow_metadata = {
             "sql_validation": workflow.metadata.get("sql_validation"),
@@ -84,13 +87,14 @@ class OutputNode(Node):
             "clarified_task": workflow.metadata.get("clarified_task"),
             "intent_analysis": workflow.metadata.get("intent_analysis"),
             "reflection_count": workflow.metadata.get("reflection_count") or None,  # Use None instead of 0
-            "table_schemas": workflow.context.table_schemas,  # Pass table schemas for developer report
+            "table_schemas": getattr(context, 'table_schemas', None) if context else None,  # Pass table schemas for developer report
         }
 
         # Debug logging for metadata troubleshooting
         logger.debug(f"output_node metadata keys: {list(workflow_metadata.keys())}")
+        table_schemas = getattr(context, 'table_schemas', None) if context else None
         logger.debug(
-            f"table_schemas count: {len(workflow.context.table_schemas) if workflow.context.table_schemas else 0}"
+            f"table_schemas count: {len(table_schemas) if table_schemas else 0}"
         )
         logger.debug(f"reflection_count: {workflow_metadata['reflection_count']}")
 
@@ -104,8 +108,8 @@ class OutputNode(Node):
             gen_sql=gen_sql,
             sql_result=sql_result,
             row_count=row_count,
-            table_schemas=workflow.context.table_schemas,
-            metrics=workflow.context.metrics,
+            table_schemas=getattr(context, 'table_schemas', None) if context else None,
+            metrics=getattr(context, 'metrics', None) if context else None,
             external_knowledge=workflow.task.external_knowledge,
             error=error,
             metadata=workflow_metadata,

@@ -46,13 +46,38 @@ class CompareNode(Node):
     def update_context(self, workflow: Workflow) -> Dict:
         """Update comparison results to workflow context."""
         result = self.result
+        
+        # Check if input and result are valid
+        if not self.input:
+            error_msg = "CompareNode input is not initialized"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+        
+        sql_context = getattr(self.input, 'sql_context', None)
+        sql_query = getattr(sql_context, 'sql_query', None) if sql_context else None
+        
+        if not sql_query:
+            error_msg = "SQL query is not available for comparison context update"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+        
+        workflow_context = getattr(workflow, 'context', None)
+        if not workflow_context:
+            error_msg = "Workflow context is not available"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+        
         try:
             # Add comparison result as a new SQL context for reference
+            explanation = getattr(result, 'explanation', 'No explanation') if result else 'No explanation'
+            suggest = getattr(result, 'suggest', 'No suggestions') if result else 'No suggestions'
             new_record = SQLContext(
-                sql_query=self.input.sql_context.sql_query,
-                explanation=f"Comparison Analysis: {result.explanation}. Suggestions: {result.suggest}",
+                sql_query=sql_query,
+                explanation=f"Comparison Analysis: {explanation}. Suggestions: {suggest}",
             )
-            workflow.context.sql_contexts.append(new_record)
+            if not hasattr(workflow_context, 'sql_contexts'):
+                workflow_context.sql_contexts = []
+            workflow_context.sql_contexts.append(new_record)
             return {"success": True, "message": "Updated comparison context"}
         except Exception as e:
             logger.error(f"Failed to update comparison context: {str(e)}")
@@ -98,6 +123,11 @@ class CompareNode(Node):
             return
 
         try:
+            # Safely access input attributes
+            input_data = self.input
+            sql_task = getattr(input_data, 'sql_task', None) if input_data else None
+            sql_context = getattr(input_data, 'sql_context', None) if input_data else None
+            
             # Setup comparison context action
             setup_action = ActionHistory(
                 action_id="setup_comparison",
@@ -105,11 +135,11 @@ class CompareNode(Node):
                 messages="Setting up SQL comparison with database context",
                 action_type="comparison_setup",
                 input={
-                    "database_type": self.input.sql_task.database_type,
-                    "database_name": self.input.sql_task.database_name,
-                    "task": self.input.sql_task.task,
-                    "sql_query": self.input.sql_context.sql_query,
-                    "expectation": self.input.expectation,
+                    "database_type": getattr(sql_task, 'database_type', None),
+                    "database_name": getattr(sql_task, 'database_name', None),
+                    "task": getattr(sql_task, 'task', None),
+                    "sql_query": getattr(sql_context, 'sql_query', None),
+                    "expectation": getattr(input_data, 'expectation', None) if input_data else None,
                 },
                 status=ActionStatus.SUCCESS,
             )
@@ -119,8 +149,8 @@ class CompareNode(Node):
             setup_action.output = {
                 "success": True,
                 "comparison_input_prepared": True,
-                "database_name": self.input.sql_task.database_name,
-                "has_expectation": bool(self.input.expectation),
+                "database_name": getattr(sql_task, 'database_name', None),
+                "has_expectation": bool(getattr(input_data, 'expectation', None)),
             }
             setup_action.end_time = datetime.now()
             # Stream the comparison process

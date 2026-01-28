@@ -165,10 +165,15 @@ class GenerateSQLNode(Node):
         Returns:
             Dict containing success status and suggestions.
         """
-        if workflow.context.document_result:
+        # Safely access workflow.context
+        context = getattr(workflow, 'context', None)
+        
+        if context and getattr(context, 'document_result', None):
             database_docs = "\n Reference documents:\n"
-            for _, docs in workflow.context.document_result.docs.items():
-                database_docs += "\n".join(docs) + "\n"
+            document_result = context.document_result
+            if hasattr(document_result, 'docs') and document_result.docs:
+                for _, docs in document_result.docs.items():
+                    database_docs += "\n".join(docs) + "\n"
         else:
             database_docs = ""
 
@@ -178,7 +183,8 @@ class GenerateSQLNode(Node):
 
         # Use smart strategy to decide whether to include DDL
         query = task.task if hasattr(task, "task") else ""
-        table_count = len(workflow.context.table_schemas) if workflow.context.table_schemas else 0
+        table_schemas = getattr(context, 'table_schemas', None) if context else None
+        table_count = len(table_schemas) if table_schemas else 0
         include_ddl = self._should_include_ddl(query, table_count)
         validation_summary = None
         if hasattr(workflow, "metadata") and workflow.metadata:
@@ -195,13 +201,13 @@ class GenerateSQLNode(Node):
 
         # Create input for the next step
         next_input = GenerateSQLInput(
-            database_type=task.database_type,
+            database_type=getattr(task, 'database_type', None),
             sql_task=task,
-            table_schemas=workflow.context.table_schemas,
-            data_details=workflow.context.table_values,
-            metrics=workflow.context.metrics,
-            contexts=workflow.context.sql_contexts,
-            external_knowledge=task.external_knowledge,
+            table_schemas=getattr(context, 'table_schemas', None) if context else None,
+            data_details=getattr(context, 'table_values', None) if context else None,
+            metrics=getattr(context, 'metrics', None) if context else None,
+            contexts=getattr(context, 'sql_contexts', None) if context else None,
+            external_knowledge=getattr(task, 'external_knowledge', None),
             database_docs=database_docs,
             include_schema_ddl=include_ddl,
             validation_summary=validation_summary,
@@ -235,7 +241,12 @@ class GenerateSQLNode(Node):
                 reflection_explanation="",
                 sql_error="",
             )
-            workflow.context.sql_contexts.append(new_record)
+            workflow_context = getattr(workflow, 'context', None)
+            if workflow_context is None:
+                return {"success": False, "message": "Workflow context is not available"}
+            if not hasattr(workflow_context, 'sql_contexts'):
+                workflow_context.sql_contexts = []
+            workflow_context.sql_contexts.append(new_record)
 
             # Log table usage for debugging
             if result.tables:

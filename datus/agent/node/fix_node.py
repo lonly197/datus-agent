@@ -29,10 +29,17 @@ class FixNode(Node):
 
     def setup_input(self, workflow: Workflow) -> Dict:
         # irrelevant to current node
+        # Safely access workflow.task and workflow.context
+        task = getattr(workflow, 'task', None)
+        context = getattr(workflow, 'context', None)
+        
+        if not task:
+            return {"success": False, "message": "No task available in workflow"}
+        
         next_input = FixInput(
-            sql_task=workflow.task,
-            sql_context=workflow.get_last_sqlcontext(),
-            schemas=workflow.context.table_schemas,
+            sql_task=task,
+            sql_context=workflow.get_last_sqlcontext() if hasattr(workflow, 'get_last_sqlcontext') else None,
+            schemas=getattr(context, 'table_schemas', None) if context else None,
         )
         self.input = next_input
         return {"success": True, "message": "Schema appears valid", "suggestions": [next_input]}
@@ -40,9 +47,30 @@ class FixNode(Node):
     def update_context(self, workflow: Workflow) -> Dict:
         """Update fix SQL results to workflow context."""
         result = self.result
+        
+        # Check if result is None
+        if not result:
+            error_msg = "Fix result is not available"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+        
+        workflow_context = getattr(workflow, 'context', None)
+        if not workflow_context:
+            error_msg = "Workflow context is not available"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+        
         try:
-            new_record = SQLContext(sql_query=result.sql_query, explanation=result.explanation or "")
-            workflow.context.sql_contexts.append(new_record)
+            sql_query = getattr(result, 'sql_query', None)
+            if not sql_query:
+                error_msg = "Fixed SQL query is not available"
+                logger.error(error_msg)
+                return {"success": False, "message": error_msg}
+            
+            new_record = SQLContext(sql_query=sql_query, explanation=getattr(result, 'explanation', None) or "")
+            if not hasattr(workflow_context, 'sql_contexts'):
+                workflow_context.sql_contexts = []
+            workflow_context.sql_contexts.append(new_record)
             return {"success": True, "message": "Updated fix SQL context"}
         except Exception as e:
             logger.error(f"Failed to update fix SQL context: {str(e)}")

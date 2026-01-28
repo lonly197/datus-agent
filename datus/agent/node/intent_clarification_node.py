@@ -119,8 +119,6 @@ class IntentClarificationNode(Node, LLMMixin):
                 )
                 return
 
-            context = self.workflow.context
-
             # Step 1: Clarify intent using LLM
             clarification_result = await self._clarify_intent(
                 task_text=task_text,

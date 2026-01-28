@@ -80,14 +80,21 @@ class ReasonSQLNode(Node):
             yield action
 
     def setup_input(self, workflow: Workflow) -> Dict:
+        # Safely access workflow.task and workflow.context
+        task = getattr(workflow, 'task', None)
+        context = getattr(workflow, 'context', None)
+        
+        if not task:
+            return {"success": False, "message": "No task available in workflow"}
+        
         next_input = ReasoningInput(
-            database_type=workflow.task.database_type,
-            sql_task=workflow.task,
-            table_schemas=workflow.context.table_schemas,
-            data_details=workflow.context.table_values,
-            metrics=workflow.context.metrics,
-            external_knowledge=workflow.task.external_knowledge,
-            contexts=workflow.context.sql_contexts[-1:] if workflow.context.sql_contexts else [],
+            database_type=getattr(task, 'database_type', None),
+            sql_task=task,
+            table_schemas=getattr(context, 'table_schemas', None) if context else None,
+            data_details=getattr(context, 'table_values', None) if context else None,
+            metrics=getattr(context, 'metrics', None) if context else None,
+            external_knowledge=getattr(task, 'external_knowledge', None),
+            contexts=context.sql_contexts[-1:] if context and getattr(context, 'sql_contexts', None) else [],
         )
         self.input = next_input
         logger.info(f"Setup reasoning input: {self.input}")
@@ -107,21 +114,26 @@ class ReasonSQLNode(Node):
                 logger.info(f"Using streaming results: {len(sql_contexts)} SQL contexts found")
 
                 # Add successful SQL contexts to workflow context
-                for sql_ctx in sql_contexts:
-                    if sql_ctx.sql_error == "":  # only add the successful sql context
-                        workflow.context.sql_contexts.append(sql_ctx)
-                    else:
-                        logger.warning(f"Failed context, skip it: {sql_ctx.sql_query}, {sql_ctx.sql_error}")
+                workflow_context = getattr(workflow, 'context', None)
+                if workflow_context and hasattr(workflow_context, 'sql_contexts'):
+                    for sql_ctx in sql_contexts:
+                        if sql_ctx.sql_error == "":  # only add the successful sql context
+                            workflow_context.sql_contexts.append(sql_ctx)
+                        else:
+                            logger.warning(f"Failed context, skip it: {sql_ctx.sql_query}, {sql_ctx.sql_error}")
+                else:
+                    logger.warning("Workflow context or sql_contexts not available, skipping context update")
 
                 return {"success": True, "message": "Updated reasoning context from streaming results"}
 
             # Fall back to non-streaming result
             result = self.result
-            if result and result.success:
+            workflow_context = getattr(workflow, 'context', None)
+            if result and result.success and workflow_context and hasattr(workflow_context, 'sql_contexts'):
                 # Add the reasoning process sqls to the sql context
                 for sql_ctx in result.sql_contexts:
                     if sql_ctx.sql_error == "":  # only add the successful sql context
-                        workflow.context.sql_contexts.append(sql_ctx)
+                        workflow_context.sql_contexts.append(sql_ctx)
                     else:
                         logger.warning(f"Failed context, skip it: {sql_ctx.sql_query}, {sql_ctx.sql_error}")
 
@@ -202,30 +214,32 @@ class ReasonSQLNode(Node):
 
         try:
             # Setup reasoning context action
+            input_data = self.input
             setup_action = ActionHistory(
                 action_id="setup_reasoning",
                 role=ActionRole.WORKFLOW,
                 messages="Setting up reasoning context with database schemas and data",
                 action_type="schema_linking",
                 input={
-                    "database_type": self.input.database_type,
-                    "task": self.input.sql_task.task,
-                    "table_schemas_count": len(self.input.table_schemas),
-                    "data_details_count": len(self.input.data_details),
-                    "metrics_count": len(self.input.metrics),
-                    "contexts_count": len(self.input.contexts),
-                    "external_knowledge_available": bool(self.input.external_knowledge),
+                    "database_type": getattr(input_data, 'database_type', None),
+                    "task": getattr(getattr(input_data, 'sql_task', None), 'task', None),
+                    "table_schemas_count": len(input_data.table_schemas) if getattr(input_data, 'table_schemas', None) else 0,
+                    "data_details_count": len(input_data.data_details) if getattr(input_data, 'data_details', None) else 0,
+                    "metrics_count": len(input_data.metrics) if getattr(input_data, 'metrics', None) else 0,
+                    "contexts_count": len(input_data.contexts) if getattr(input_data, 'contexts', None) else 0,
+                    "external_knowledge_available": bool(getattr(input_data, 'external_knowledge', None)),
                 },
                 status=ActionStatus.SUCCESS,
             )
             yield setup_action
 
             # Update setup action with success
+            sql_task = getattr(input_data, 'sql_task', None)
             setup_action.output = {
                 "success": True,
                 "reasoning_input_prepared": True,
-                "database_name": self.input.sql_task.database_name,
-                "max_turns": self.input.max_turns,
+                "database_name": getattr(sql_task, 'database_name', None) if sql_task else None,
+                "max_turns": getattr(input_data, 'max_turns', None),
             }
             setup_action.end_time = datetime.now()
 

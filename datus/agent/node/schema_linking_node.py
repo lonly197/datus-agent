@@ -76,21 +76,39 @@ class SchemaLinkingNode(Node):
         method merges the new schemas with existing ones.
         """
         result = self.result
+        
+        # Check if result is None
+        if result is None:
+            error_msg = "Schema linking result is None"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+        
+        # Check if workflow.context exists
+        workflow_context = getattr(workflow, 'context', None)
+        if workflow_context is None:
+            error_msg = "Workflow context is not available"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+        
         try:
-            if len(workflow.context.table_schemas) == 0:
+            workflow_table_schemas = getattr(workflow_context, 'table_schemas', None) or []
+            if len(workflow_table_schemas) == 0:
                 # First schema linking - set directly
-                workflow.context.table_schemas = result.table_schemas
-                workflow.context.table_values = result.table_values
-                logger.info(f"Schema linking set initial context with {len(result.table_schemas)} schemas")
+                workflow_context.table_schemas = getattr(result, 'table_schemas', None) or []
+                workflow_context.table_values = getattr(result, 'table_values', None) or []
+                result_schemas = getattr(result, 'table_schemas', None) or []
+                logger.info(f"Schema linking set initial context with {len(result_schemas)} schemas")
             else:
                 # Merge schemas: add only tables that don't already exist
-                existing_table_names = {s.table_name for s in workflow.context.table_schemas}
-                new_schemas = [s for s in result.table_schemas if s.table_name not in existing_table_names]
-                new_values = [v for v in result.table_values if v.table_name not in existing_table_names]
+                existing_table_names = {s.table_name for s in workflow_table_schemas}
+                result_schemas = getattr(result, 'table_schemas', None) or []
+                result_values = getattr(result, 'table_values', None) or []
+                new_schemas = [s for s in result_schemas if s.table_name not in existing_table_names]
+                new_values = [v for v in result_values if v.table_name not in existing_table_names]
 
                 if new_schemas:
-                    workflow.context.table_schemas.extend(new_schemas)
-                    workflow.context.table_values.extend(new_values)
+                    workflow_context.table_schemas.extend(new_schemas)
+                    workflow_context.table_values.extend(new_values)
                     logger.info(f"Schema linking added {len(new_schemas)} new tables to existing context")
                 else:
                     logger.debug("Schema linking found no new tables to add to context")
@@ -102,43 +120,56 @@ class SchemaLinkingNode(Node):
 
     def setup_input(self, workflow: Workflow) -> Dict:
         logger.info("Setup schema linking input")
+        
+        # Safely access workflow.task and workflow.context
+        task = getattr(workflow, 'task', None)
+        context = getattr(workflow, 'context', None)
+        
+        if not task:
+            return {"success": False, "message": "No task available in workflow"}
 
         # Search and enhance external knowledge before schema linking
+        task_query = getattr(task, 'task', None)
+        subject_path = getattr(task, 'subject_path', None)
         enhanced_external_knowledge = self._search_external_knowledge(
-            workflow.task.task,  # User query
-            workflow.task.subject_path,  # Subject hierarchy path
+            task_query,  # User query
+            subject_path,  # Subject hierarchy path
         )
 
         # Combine original and searched knowledge
         if enhanced_external_knowledge:
-            original_knowledge = workflow.task.external_knowledge
+            original_knowledge = getattr(task, 'external_knowledge', None)
             combined_knowledge = self._combine_knowledge(original_knowledge, enhanced_external_knowledge)
-            workflow.task.external_knowledge = combined_knowledge
-        if workflow.context and workflow.context.table_schemas:
-            self._table_schemas = workflow.context.table_schemas
-            self._table_values = workflow.context.table_values
+            task.external_knowledge = combined_knowledge
+        if context and getattr(context, 'table_schemas', None):
+            self._table_schemas = context.table_schemas
+            self._table_values = context.table_values
+            agent_config = getattr(self, 'agent_config', None)
+            matching_rate = getattr(agent_config, 'schema_linking_rate', 'medium') if agent_config else 'medium'
             self.input = SchemaLinkingInput(
-                input_text=workflow.task.task,
-                matching_rate=self.agent_config.schema_linking_rate,
-                database_type=workflow.task.database_type,
-                database_name=workflow.task.database_name,
+                input_text=getattr(task, 'task', ''),
+                matching_rate=matching_rate,
+                database_type=getattr(task, 'database_type', None),
+                database_name=getattr(task, 'database_name', None),
                 sql_context=None,
-                table_type=workflow.task.schema_linking_type,
+                table_type=getattr(task, 'schema_linking_type', None),
             )
         else:
             # Setup schema linking input
-            matching_rate = self.agent_config.schema_linking_rate
+            agent_config = getattr(self, 'agent_config', None)
+            matching_rate = getattr(agent_config, 'schema_linking_rate', 'medium') if agent_config else 'medium'
             matching_rates = ["fast", "medium", "slow", "from_llm"]
-            start = matching_rates.index(matching_rate)
-            final_matching_rate = matching_rates[min(start + workflow.reflection_round, len(matching_rates) - 1)]
+            start = matching_rates.index(matching_rate) if matching_rate in matching_rates else 1
+            reflection_round = getattr(workflow, 'reflection_round', 0)
+            final_matching_rate = matching_rates[min(start + reflection_round, len(matching_rates) - 1)]
             logger.debug(f"Final matching rate: {final_matching_rate}")
             next_input = SchemaLinkingInput(
-                input_text=workflow.task.task,
+                input_text=getattr(task, 'task', ''),
                 matching_rate=final_matching_rate,
-                database_type=workflow.task.database_type,
-                database_name=workflow.task.database_name,
+                database_type=getattr(task, 'database_type', None),
+                database_name=getattr(task, 'database_name', None),
                 sql_context=None,
-                table_type=workflow.task.schema_linking_type,
+                table_type=getattr(task, 'schema_linking_type', None),
             )
             self.input = next_input
         return {"success": True, "message": "Schema and external knowledge prepared"}
