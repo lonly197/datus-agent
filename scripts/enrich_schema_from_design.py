@@ -626,12 +626,19 @@ class SchemaEnricher:
             table_name_lower, design_records, existing_col_comments)
         
         # 3. 增强业务标签
-        existing_tags = existing_record.get("business_tags", []) or []
-        if isinstance(existing_tags, str):
+        existing_tags = existing_record.get("business_tags", [])
+        # 处理可能的数组类型（Arrow array, numpy array, JSON string）
+        if existing_tags is None:
+            existing_tags = []
+        elif isinstance(existing_tags, str):
             try:
                 existing_tags = json.loads(existing_tags)
             except:
                 existing_tags = []
+        elif hasattr(existing_tags, 'tolist'):  # numpy array or Arrow array
+            existing_tags = existing_tags.tolist()
+        elif not isinstance(existing_tags, (list, tuple)):
+            existing_tags = []
         result.enriched_tags = self._enrich_business_tags(design_records, existing_tags)
         
         # 4. 推断枚举值
