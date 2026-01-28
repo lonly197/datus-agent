@@ -159,11 +159,16 @@ class BusinessConfigGenerator:
 
     def _read_excel_with_header(self, xlsx_path: Path, header_rows: int, sheet_name: int = 0) -> List[Dict]:
         """
-        读取Excel文件，处理多行表头
+        读取Excel文件，智能处理多行表头
+        
+        针对复杂表头结构（如数据架构设计文档）：
+        - 第1行：分组标题（资产目录/业务属性/技术属性/管理属性）
+        - 第2行：实际列名（物理表名、字段名等）★ 使用这行
+        - 第3行：列说明/注释
         
         Args:
             xlsx_path: Excel文件路径
-            header_rows: 表头行数（如3表示前3行是表头）
+            header_rows: 表头行数（用于确定实际列名所在行）
             sheet_name: 工作表索引，默认第一个
             
         Returns:
@@ -174,26 +179,31 @@ class BusinessConfigGenerator:
             return []
         
         try:
-            # 读取Excel，指定多行表头
-            df = pd.read_excel(xlsx_path, sheet_name=sheet_name, header=list(range(header_rows)))
-            logger.info(f"[Excel读取] 读取 {xlsx_path.name}, 表头行数: {header_rows}, 数据行数: {len(df)}")
+            # 智能表头检测：
+            # - 如果 header_rows=3，表示第2行（索引1）是实际列名
+            # - 如果 header_rows=2，表示第1行（索引0）是实际列名
+            actual_header_row = header_rows - 2 if header_rows >= 2 else 0
             
-            # 展平多级列名（如 ('物理表名', 'Unnamed: 13_level_1') -> '物理表名'）
-            def flatten_col(col):
-                if isinstance(col, tuple):
-                    # 返回第一个非空的值
-                    for c in col:
-                        if pd.notna(c) and str(c).strip() and not str(c).startswith('Unnamed'):
-                            return str(c).strip()
-                    return str(col[0]).strip()
-                return str(col).strip()
+            logger.info(f"[Excel读取] 读取 {xlsx_path.name}, 使用第 {actual_header_row + 1} 行作为列名")
             
-            # 展平列名并处理重复
-            flat_columns = [flatten_col(col) for col in df.columns]
-            # 如果有重复列名，添加序号区分
+            # 读取Excel，使用实际列名行作为header
+            df = pd.read_excel(xlsx_path, sheet_name=sheet_name, header=actual_header_row)
+            logger.info(f"[Excel读取] 数据行数: {len(df)}")
+            
+            # 清理列名（去除空格、换行符）
+            def clean_col(col):
+                if pd.isna(col):
+                    return f"Unnamed_{id(col)}"
+                s = str(col).strip()
+                # 移除换行符和多余空格
+                s = ' '.join(s.split())
+                return s
+            
+            # 清理并处理重复列名
+            clean_columns = [clean_col(col) for col in df.columns]
             seen = {}
             unique_columns = []
-            for col in flat_columns:
+            for col in clean_columns:
                 if col in seen:
                     seen[col] += 1
                     unique_columns.append(f"{col}_{seen[col]}")
@@ -202,7 +212,7 @@ class BusinessConfigGenerator:
                     unique_columns.append(col)
             df.columns = unique_columns
             
-            logger.info(f"[Excel读取] 展平后的列名(前30): {df.columns.tolist()[:30]}")
+            logger.info(f"[Excel读取] 清理后的列名(前30): {df.columns.tolist()[:30]}")
             
             # 转换为字典列表，跳过空行
             records = []
@@ -280,12 +290,12 @@ class BusinessConfigGenerator:
             # 提取关键字段（启用调试）
             table_name = self._extract_field(row, ["物理表名", "table_name", "表名"], debug=(stats['total_rows']==1))
             column_name = self._extract_field(row, ["字段名", "column_name", "列名", "column"], debug=(stats['total_rows']==1))
-            attr_def = self._clean_string(row.get("属性业务定义", ""))
-            attr_cn = self._clean_string(row.get("属性（中文）", ""))
-            obj_name = self._clean_string(row.get("分析对象（中文）", ""))
-            obj_en = self._clean_string(row.get("分析对象（英文）", ""))
-            logic_entity = self._clean_string(row.get("逻辑实体（中文）", ""))
-            logic_entity_def = self._clean_string(row.get("逻辑实体业务含义", ""))
+            attr_def = self._extract_field(row, ["属性业务定义", "属性定义"], debug=(stats['total_rows']==1))
+            attr_cn = self._extract_field(row, ["属性（中文）", "属性中文名", "属性名称"], debug=(stats['total_rows']==1))
+            obj_name = self._extract_field(row, ["分析对象（中文）", "分析对象中文名", "分析对象"], debug=(stats['total_rows']==1))
+            obj_en = self._extract_field(row, ["分析对象（英文）", "分析对象英文名"], debug=(stats['total_rows']==1))
+            logic_entity = self._extract_field(row, ["逻辑实体（中文）", "逻辑实体中文名", "逻辑实体"], debug=(stats['total_rows']==1))
+            logic_entity_def = self._extract_field(row, ["逻辑实体业务含义", "逻辑实体定义", "逻辑实体说明"], debug=(stats['total_rows']==1))
 
             # 验证表名和字段名
             table_valid = self._is_valid_table_name(table_name, verbose=(stats['total_rows'] <= 10))
@@ -403,12 +413,13 @@ class BusinessConfigGenerator:
         for row in records:
             stats["total_metrics"] += 1
 
-            metric_code = self._clean_string(row.get("指标编码", ""))
-            metric_name = self._clean_string(row.get("指标名称", ""))
-            biz_def = self._clean_string(row.get("业务定义及说明", ""))
-            calc_logic = self._clean_string(row.get("计算公式/业务逻辑", ""))
-            source_model = self._clean_string(row.get("来源dws模型", ""))
-            biz_activity = self._clean_string(row.get("业务活动", ""))
+            # 使用 _extract_field 支持多种列名变体
+            metric_code = self._extract_field(row, ["指标编码", "指标编码 -固定值（勿改）"], debug=(stats['total_metrics']==1))
+            metric_name = self._extract_field(row, ["指标名称"], debug=(stats['total_metrics']==1))
+            biz_def = self._extract_field(row, ["业务定义及说明", "业务定义"], debug=(stats['total_metrics']==1))
+            calc_logic = self._extract_field(row, ["计算公式/业务逻辑", "计算公式", "业务逻辑"], debug=(stats['total_metrics']==1))
+            source_model = self._extract_field(row, ["来源dws模型", "dws模型", "来源模型"], debug=(stats['total_metrics']==1))
+            biz_activity = self._extract_field(row, ["业务活动"], debug=(stats['total_metrics']==1))
 
             if not metric_name:
                 continue
@@ -827,19 +838,36 @@ class BusinessConfigGenerator:
         }
 
     def _extract_field(self, row: Dict, possible_names: List[str], debug: bool = False) -> str:
-        """从行中提取字段值，尝试多个可能的列名"""
+        """
+        从行中提取字段值，尝试多个可能的列名
+        
+        支持多种匹配策略：
+        1. 精确匹配
+        2. 大小写不敏感匹配
+        3. 前缀匹配（用于处理带注释的列名，如 "指标编码\n-固定值（勿改）"）
+        4. 子串匹配（用于处理复杂列名）
+        """
+        row_keys = list(row.keys())
+        
         for name in possible_names:
-            # 尝试精确匹配
+            # 1. 尝试精确匹配
             if name in row and row[name]:
                 return self._clean_string(row[name])
-            # 尝试大小写不敏感匹配
-            for key in row.keys():
+            
+            # 2. 尝试大小写不敏感匹配
+            for key in row_keys:
                 if key and key.lower() == name.lower():
                     return self._clean_string(row[key])
+            
+            # 3. 尝试前缀匹配（处理带换行符/注释的列名）
+            for key in row_keys:
+                if key and (key.startswith(name) or name in key):
+                    if row[key]:
+                        return self._clean_string(row[key])
         
         # 调试：打印失败的匹配
         if debug:
-            logger.debug(f"[字段提取] 未找到匹配: {possible_names}, 可用列: {list(row.keys())[:10]}...")
+            logger.debug(f"[字段提取] 未找到匹配: {possible_names}, 可用列: {row_keys[:15]}...")
         return ""
 
     def _is_valid_table_name(self, name: str, verbose: bool = False) -> bool:
