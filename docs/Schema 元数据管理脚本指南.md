@@ -10,6 +10,8 @@
 | 脚本 | 功能 | 推荐场景 |
 |------|------|----------|
 | [migrate_v0_to_v1.py](#migrate_v0_to_v1py---schema-迁移) | v0→v1 Schema 迁移 | 升级元数据结构 |
+| [enrich_schema_from_design.py](#enrich_schema_from_designpy---schema-增强) | 从设计文档增强元数据 | 补齐业务注释/标签 |
+| [verify_schema_enrichment.py](#verify_schema_enrichmentpy---增强验证) | 验证增强效果 | 对比增强前后质量 |
 | [diagnose_schema_ddl.py](#diagnose_schema_ddlpy---ddl-诊断) | 抽样诊断 DDL | 排查解析问题 |
 | [check_migration_report.py](#check_migration_reportpy---迁移报告) | 验证迁移质量 | 检查填充率 |
 | [rebuild_schema.sh](#rebuild_schemash---重建-schema) | 清空+重新导入 | 完全刷新 |
@@ -207,9 +209,88 @@ python scripts/rebuild_schema_fts_index.py \
 
 ---
 
+## enrich_schema_from_design.py - Schema 增强
+
+**功能**: 从数据架构设计文档（Excel）中提取业务元数据，增强 LanceDB 中的 Schema 信息。
+
+**核心增强内容**:
+- **表注释**: 从"逻辑实体业务含义"补充 `table_comment`
+- **列注释**: 从"属性业务定义"补充 `column_comments`
+- **业务标签**: 从"主题域分组"、"分析对象"提取 `business_tags`
+- **枚举值推断**: 基于字段名模式推断 `column_enums`
+
+**核心参数**:
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--config` | 配置文件路径 | 必填 |
+| `--namespace` | 命名空间 | 必填 |
+| `--arch-xlsx` | 数据架构设计 Excel 路径 | 必填 |
+| `--arch-sheet-name` | 工作表名称/索引 | 自动检测 |
+| `--dry-run` | 预览变更 | - |
+| `--apply` | 应用变更 | - |
+| `--output` | 保存报告路径 | - |
+
+**使用示例**:
+
+```bash
+# 1. 预览变更（推荐先执行）
+python scripts/enrich_schema_from_design.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --dry-run \
+  --output=/tmp/enrichment_preview.txt
+
+# 2. 应用增强
+python scripts/enrich_schema_from_design.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --apply
+
+# 3. 验证增强效果
+python scripts/check_migration_report.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test
+```
+
+---
+
+## verify_schema_enrichment.py - 增强验证
+
+**功能**: 验证 Schema 增强效果，对比增强前后的元数据质量变化。
+
+**核心参数**:
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--config` | 配置文件路径 | 必填 |
+| `--namespace` | 命名空间 | 必填 |
+| `--before-backup` | 增强前的备份路径 | - |
+| `--output-json` | 保存详细结果到 JSON | - |
+
+**使用示例**:
+
+```bash
+# 对比增强前后（需要备份）
+python scripts/verify_schema_enrichment.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --before-backup=/root/.datus/data/datus_db_test.backup_v0_20260128_120000 \
+  --output-json=/tmp/enrichment_comparison.json
+
+# 仅查看当前状态
+python scripts/verify_schema_enrichment.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test
+```
+
+---
+
 ## 完整操作流程
 
-### 流程 1: 完整迁移
+### 流程 1: 完整迁移（含设计文档增强）
 
 ```bash
 # 1. 备份
@@ -226,12 +307,24 @@ python scripts/migrate_v0_to_v1.py \
   --clear \
   --force
 
-# 3. 验证报告
+# 3. 【新增】从设计文档增强 Schema 元数据
+python scripts/enrich_schema_from_design.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --apply
+
+# 4. 【新增】验证增强效果
+python scripts/verify_schema_enrichment.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test
+
+# 5. 验证报告
 python scripts/check_migration_report.py \
   --config=conf/agent.yml \
   --namespace=test
 
-# 4. 抽样诊断
+# 6. 抽样诊断
 python scripts/diagnose_schema_ddl.py \
   --config=conf/agent.yml \
   --namespace=test \
@@ -239,12 +332,12 @@ python scripts/diagnose_schema_ddl.py \
   --random \
   --compare-db
 
-# 5. FTS 检查
+# 7. FTS 检查
 python scripts/check_search_text_fts.py \
   --config=conf/agent.yml \
   --namespace=test
 
-# 6. FTS 索引重建（必要时）
+# 8. FTS 索引重建（必要时）
 python scripts/rebuild_schema_fts_index.py \
   --config=conf/agent.yml \
   --namespace=test
@@ -280,6 +373,11 @@ python scripts/check_migration_report.py \
 ---
 
 ## 版本记录
+
+### v1.3 (2026-01-28)
+- 新增 `enrich_schema_from_design.py` 脚本说明
+- 新增 `verify_schema_enrichment.py` 脚本说明
+- 更新完整操作流程，包含设计文档增强步骤
 
 ### v1.2 (2026-01-27)
 - 精简文档，聚焦 Schema 元数据管理
