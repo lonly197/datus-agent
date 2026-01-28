@@ -576,7 +576,9 @@ class BusinessConfigGenerator:
                 
                 # 映射2: 中文描述 -> 表名（用于匹配Sheet1）
                 # 注意：Sheet2的"指标定义"是详细业务定义，不是"来源dws模型"值
-                # 这里存储的目的是辅助匹配，主要匹配逻辑在 _match_chinese_model_to_entity
+                if metric_def and metric_def != 'nan':
+                    clean_def = ' '.join(metric_def.split())
+                    chinese_to_tables[clean_def] = tables
                     # 同时存储前10个字符的简短版本（应对截断情况）
                     if len(clean_def) > 10:
                         chinese_to_tables[clean_def[:10]] = tables
@@ -1563,15 +1565,6 @@ class BusinessConfigGenerator:
             
             explanation = "\n".join(explanation_parts) if explanation_parts else biz_def or metric_name
             
-            # 构建metadata
-            metadata = {
-                "source_table": source_model,
-                "dimensions": [d.strip() for d in dimensions.split('\n') if d.strip()] if dimensions else [],
-                "metric_level": metric_level,
-                "category1": category1,
-                "category2": category2,
-            }
-            
             # 构建subject_path
             subject_path = ["Metrics"]
             if biz_activity:
@@ -1579,12 +1572,12 @@ class BusinessConfigGenerator:
             if category1:
                 subject_path.append(category1)
             
+            # 注意：ext_knowledge表的schema只支持特定字段，不要添加额外字段如metadata
             metric_entry = {
                 "subject_path": subject_path,
                 "name": metric_code,
                 "terminology": metric_name,
                 "explanation": explanation,
-                "metadata": metadata,
             }
             metrics.append(metric_entry)
         
