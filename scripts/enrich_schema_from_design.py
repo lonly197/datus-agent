@@ -63,6 +63,7 @@ except ImportError:
     LANCEDB_AVAILABLE = False
 
 from datus.configuration.agent_config_loader import load_agent_config
+from datus.models.base import LLMBaseModel
 from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata import SchemaStorage
 from datus.utils.loggings import configure_logging, get_logger
@@ -143,16 +144,41 @@ class SchemaEnricher:
         
         # LanceDB 中的实际表名集合（用于匹配）
         self._lancedb_tables: Set[str] = set()
+        self.llm_model: Optional[LLMBaseModel] = None
         
         logger.info(f"Initialized SchemaEnricher for namespace: {namespace}")
         logger.info(f"Database path: {self.db_path}")
 
-    def _load_lancedb_tables(self):
-        """加载 LanceDB 中的所有表名"""
+    def _load_lancedb_tables(self, target_layers: List[str] = None):
+        """
+        加载 LanceDB 中的所有表名
+        
+        Args:
+            target_layers: 目标数据层列表，如 ['dwd', 'dws', 'dim']，None 表示加载所有
+        """
         try:
             self.schema_storage._ensure_table_ready()
-            all_data = self.schema_storage.table.to_pandas()
-            self._lancedb_tables = set(all_data['table_name'].str.lower().tolist())
+            
+            # 使用 _search_all 获取所有记录（避免 to_pandas 限制）
+            import lancedb
+            db = lancedb.connect(self.db_path)
+            table = db.open_table("schema_metadata")
+            
+            # 分批读取所有数据
+            all_data = table.to_pandas()
+            total_count = len(all_data)
+            logger.info(f"Total records in LanceDB: {total_count}")
+            
+            # 过滤目标层
+            if target_layers:
+                target_layers = [layer.lower() for layer in target_layers]
+                mask = all_data['table_name'].str.lower().str.startswith(tuple(target_layers))
+                filtered_data = all_data[mask]
+                logger.info(f"Filtered to {len(filtered_data)} tables for layers: {target_layers}")
+                self._lancedb_tables = set(filtered_data['table_name'].str.lower().tolist())
+            else:
+                self._lancedb_tables = set(all_data['table_name'].str.lower().tolist())
+            
             logger.info(f"Loaded {len(self._lancedb_tables)} tables from LanceDB")
             
             # 显示样本
@@ -164,10 +190,144 @@ class SchemaEnricher:
             for t in self._lancedb_tables:
                 prefix = t.split('_')[0] if '_' in t else 'other'
                 prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
-            logger.info(f"Table prefix distribution: {dict(sorted(prefix_counts.items(), key=lambda x: -x[1])[:5])}")
+            logger.info(f"Table prefix distribution: {dict(sorted(prefix_counts.items(), key=lambda x: -x[1])[:10])}")
             
         except Exception as e:
             logger.error(f"Failed to load LanceDB tables: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+
+    def init_llm(self, agent_config) -> bool:
+        """
+        初始化 LLM 模型用于增强解析
+        
+        Returns:
+            True if LLM initialized successfully
+        """
+        try:
+            self.llm_model = LLMBaseModel.create_model(agent_config=agent_config)
+            logger.info("LLM model initialized for enhanced extraction")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to initialize LLM model: {e}")
+            return False
+
+    def llm_enhance_table_matching(
+        self, 
+        lancedb_table: str, 
+        candidate_records: List[DesignDocRecord]
+    ) -> Optional[DesignDocRecord]:
+        """
+        使用 LLM 判断哪个设计文档记录最匹配给定的 LanceDB 表
+        
+        Args:
+            lancedb_table: LanceDB 中的表名
+            candidate_records: 候选的设计文档记录
+            
+        Returns:
+            最佳匹配的 DesignDocRecord，或 None
+        """
+        if not self.llm_model or not candidate_records:
+            return None
+        
+        # 构建提示
+        candidates_info = []
+        for i, r in enumerate(candidate_records[:5]):  # 限制候选数量
+            info = f"{i+1}. 逻辑实体: {r.logic_entity_cn}\n"
+            info += f"   英文表名: {r.logic_entity_en}\n"
+            info += f"   业务含义: {r.logic_entity_def[:100] if r.logic_entity_def else 'N/A'}"
+            candidates_info.append(info)
+        
+        prompt = f"""你是一位数据仓库专家。请分析以下 LanceDB 表名应该匹配哪个设计文档中的逻辑实体。
+
+## LanceDB 表名
+{lancedb_table}
+
+## 候选设计文档记录
+{"\n\n".join(candidates_info)}
+
+## 分析任务
+1. 解析 LanceDB 表名的含义（前缀、业务领域、粒度等）
+2. 对比每个候选记录的相关性
+3. 选择最匹配的候选记录序号
+
+## 输出格式
+只返回一个 JSON 对象：
+{{
+  "analysis": "简要分析表名含义和匹配逻辑",
+  "best_match_index": 1-5之间的整数，0表示没有匹配,
+  "confidence": 0.0-1.0之间的置信度,
+  "reason": "选择该匹配的原因"
+}}
+"""
+        
+        try:
+            response = self.llm_model.generate_with_json_output(prompt)
+            if isinstance(response, dict):
+                best_idx = response.get("best_match_index", 0)
+                confidence = response.get("confidence", 0)
+                
+                if best_idx > 0 and best_idx <= len(candidate_records) and confidence > 0.6:
+                    matched_record = candidate_records[best_idx - 1]
+                    logger.info(
+                        f"LLM matched '{lancedb_table}' to '{matched_record.logic_entity_cn}' "
+                        f"(confidence: {confidence:.2f})"
+                    )
+                    return matched_record
+        except Exception as e:
+            logger.debug(f"LLM matching failed for {lancedb_table}: {e}")
+        
+        return None
+
+    def llm_generate_column_comment(
+        self,
+        column_name: str,
+        table_context: str,
+        existing_comment: str
+    ) -> str:
+        """
+        使用 LLM 生成或增强字段注释
+        
+        Args:
+            column_name: 字段名
+            table_context: 表的业务上下文
+            existing_comment: 现有注释（可能为空）
+            
+        Returns:
+            增强后的注释
+        """
+        if not self.llm_model:
+            return existing_comment
+        
+        prompt = f"""为数据仓库字段生成业务注释。
+
+## 输入信息
+- 字段名: {column_name}
+- 表上下文: {table_context}
+- 现有注释: {existing_comment or "无"}
+
+## 任务
+根据字段名和表上下文，生成清晰、准确的业务注释（中文）。
+如果已有注释，请完善它；如果没有，请根据命名规范推断含义。
+
+## 输出格式
+只返回 JSON：
+{{
+  "comment": "生成的业务注释",
+  "explanation": "注释的生成依据"
+}}
+"""
+        
+        try:
+            response = self.llm_model.generate_with_json_output(prompt)
+            if isinstance(response, dict):
+                new_comment = response.get("comment", "").strip()
+                if new_comment and len(new_comment) > len(existing_comment or ""):
+                    return new_comment
+        except Exception as e:
+            logger.debug(f"LLM comment generation failed for {column_name}: {e}")
+        
+        return existing_comment
 
     def load_design_document(self, xlsx_path: Path, sheet_name=None) -> int:
         """
@@ -933,9 +1093,11 @@ Examples:
     parser.add_argument("--namespace", required=True, help="Target namespace")
     parser.add_argument("--arch-xlsx", required=True, help="Path to 数据架构详细设计 Excel file")
     parser.add_argument("--arch-sheet-name", default=None, help="Sheet name or index (default: auto-detect)")
+    parser.add_argument("--layers", default="dwd,dws,dim", help="Target data layers, comma-separated (default: dwd,dws,dim)")
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without applying")
     parser.add_argument("--apply", action="store_true", help="Apply enrichment to LanceDB")
     parser.add_argument("--output", help="Path to save report")
+    parser.add_argument("--use-llm", action="store_true", help="Enable LLM enhancement for matching and comment generation")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     
     args = parser.parse_args()
@@ -957,8 +1119,18 @@ Examples:
     # 初始化 enricher
     enricher = SchemaEnricher(agent_config, args.namespace)
     
+    # 初始化 LLM（如果启用）
+    if args.use_llm:
+        llm_initialized = enricher.init_llm(agent_config)
+        if not llm_initialized:
+            logger.warning("LLM enhancement requested but failed to initialize, continuing without LLM")
+    
+    # 解析目标层
+    target_layers = [layer.strip() for layer in args.layers.split(",") if layer.strip()]
+    logger.info(f"Target data layers: {target_layers}")
+    
     # 先加载 LanceDB 表名（用于匹配验证）
-    enricher._load_lancedb_tables()
+    enricher._load_lancedb_tables(target_layers=target_layers)
     
     # 加载设计文档
     arch_path = Path(args.arch_xlsx)

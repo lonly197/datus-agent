@@ -211,13 +211,21 @@ python scripts/rebuild_schema_fts_index.py \
 
 ## enrich_schema_from_design.py - Schema 增强
 
-**功能**: 从数据架构设计文档（Excel）中提取业务元数据，增强 LanceDB 中的 Schema 信息。
+**功能**: 从数据架构设计文档（Excel）中提取业务元数据，增强 LanceDB 中的 Schema 信息。支持按数据层过滤和 LLM 智能匹配。
+
+**核心特性**:
+- **数据层过滤**: 支持按 DWD/DWS/DIM 等数据层选择性处理
+- **智能表名匹配**: 精确匹配 + 模糊匹配 + LLM 增强匹配
+- **元数据增强**: 表注释、列注释、业务标签、枚举值推断
+- **匹配追踪**: 记录匹配来源（exact/fuzzy/none）便于分析
 
 **核心增强内容**:
-- **表注释**: 从"逻辑实体业务含义"补充 `table_comment`
-- **列注释**: 从"属性业务定义"补充 `column_comments`
-- **业务标签**: 从"主题域分组"、"分析对象"提取 `business_tags`
-- **枚举值推断**: 基于字段名模式推断 `column_enums`
+| 元数据字段 | 增强来源 | 说明 |
+|------------|----------|------|
+| `table_comment` | 逻辑实体业务含义 | 表的业务描述 |
+| `column_comments` | 属性业务定义 + LLM生成 | 字段的详细业务含义 |
+| `business_tags` | 主题域分组、分析对象 | 用于检索和分类 |
+| `column_enums` | 字段名模式+安全分类 | 推断枚举值 |
 
 **核心参数**:
 
@@ -227,33 +235,58 @@ python scripts/rebuild_schema_fts_index.py \
 | `--namespace` | 命名空间 | 必填 |
 | `--arch-xlsx` | 数据架构设计 Excel 路径 | 必填 |
 | `--arch-sheet-name` | 工作表名称/索引 | 自动检测 |
-| `--dry-run` | 预览变更 | - |
-| `--apply` | 应用变更 | - |
+| `--layers` | 目标数据层（逗号分隔） | `dwd,dws,dim` |
+| `--dry-run` | 预览变更，不实际修改 | - |
+| `--apply` | 应用变更到 LanceDB | - |
+| `--use-llm` | 启用 LLM 智能匹配和注释生成 | false |
 | `--output` | 保存报告路径 | - |
+| `-v, --verbose` | 详细输出 | false |
 
 **使用示例**:
 
 ```bash
-# 1. 预览变更（推荐先执行）
+# 1. 预览变更 - DWD/DWS/DIM 层（默认）
 python scripts/enrich_schema_from_design.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test \
   --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --layers=dwd,dws,dim \
   --dry-run \
   --output=/tmp/enrichment_preview.txt
 
-# 2. 应用增强
+# 2. 应用增强 - 只处理 DWS 层
 python scripts/enrich_schema_from_design.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test \
   --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --layers=dws \
   --apply
 
-# 3. 验证增强效果
+# 3. LLM 增强模式（智能匹配模糊表名）
+python scripts/enrich_schema_from_design.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --layers=dwd,dws,dim \
+  --apply \
+  --use-llm
+
+# 4. 验证增强效果
 python scripts/check_migration_report.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test
 ```
+
+**设计文档 Excel 格式要求**:
+- 第1行: 分组标题
+- 第2行: 实际列名（**逻辑实体（英文）列实际存储物理表名**）⭐
+- 第3行: 列说明/注释
+- 关键列: `逻辑实体（英文）`（物理表名）、`字段名`、`属性业务定义`、`逻辑实体业务含义`
+
+**匹配策略说明**:
+1. **精确匹配**: Excel `逻辑实体（英文）` = LanceDB `table_name`
+2. **模糊匹配**: 基于表名关键词相似度匹配
+3. **LLM 匹配**: 使用 LLM 分析业务语义选择最佳匹配（需 `--use-llm`）
 
 ---
 
@@ -307,14 +340,24 @@ python scripts/migrate_v0_to_v1.py \
   --clear \
   --force
 
-# 3. 【新增】从设计文档增强 Schema 元数据
+# 3. 【新增】从设计文档增强 Schema 元数据（DWD/DWS/DIM 层）
 python scripts/enrich_schema_from_design.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test \
   --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --layers=dwd,dws,dim \
   --apply
 
-# 4. 【新增】验证增强效果
+# 4. 【可选】使用 LLM 增强模式（智能匹配和注释生成）
+python scripts/enrich_schema_from_design.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --layers=dwd,dws,dim \
+  --apply \
+  --use-llm
+
+# 5. 【新增】验证增强效果
 python scripts/verify_schema_enrichment.py \
   --config=/root/.datus/conf/agent.yml \
   --namespace=test
@@ -359,7 +402,9 @@ python scripts/check_migration_report.py \
 
 | 问题 | 解决方案 |
 |------|----------|
-| LLM 回退失败 | 禁用 `--llm-fallback` |
+| LLM 回退失败 | 禁用 `--use-llm` 参数 |
+| 匹配率为 0% | 检查 `--layers` 参数是否与设计文档层一致 |
+| 只加载了少量表 | 确认 Excel 中 `逻辑实体（英文）` 列包含物理表名 |
 | 权限错误 | 检查数据库用户权限 |
 | 回滚恢复 | `bash scripts/backup_storage.sh` 后手动恢复 |
 
@@ -373,6 +418,13 @@ python scripts/check_migration_report.py \
 ---
 
 ## 版本记录
+
+### v1.4 (2026-01-28)
+- 更新 `enrich_schema_from_design.py` 脚本说明
+  - 新增 `--layers` 参数支持数据层过滤
+  - 新增 `--use-llm` 参数支持 LLM 智能匹配
+  - 新增匹配来源追踪（exact/fuzzy/none）
+  - 修复 LanceDB 加载数量问题
 
 ### v1.3 (2026-01-28)
 - 新增 `enrich_schema_from_design.py` 脚本说明
