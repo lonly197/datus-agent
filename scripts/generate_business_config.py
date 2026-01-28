@@ -161,10 +161,15 @@ class BusinessConfigGenerator:
         """
         读取Excel文件，智能处理多行表头
         
-        针对复杂表头结构（如数据架构设计文档）：
-        - 第1行：分组标题（资产目录/业务属性/技术属性/管理属性）
-        - 第2行：实际列名（物理表名、字段名等）★ 使用这行
-        - 第3行：列说明/注释
+        针对复杂表头结构：
+        - 数据架构设计文档：
+          - 第1行：分组标题（资产目录/业务属性/技术属性/管理属性）
+          - 第2行：实际列名（物理表名、字段名等）★ 使用这行
+          - 第3行：列说明/注释
+        
+        - 指标清单（特殊）：
+          - 第1行：主要列名（部分列为空，如"来源dws模型"）
+          - 第2行：子列名/补充列名（包含"来源dws模型"等）★ 合并使用
         
         Args:
             xlsx_path: Excel文件路径
@@ -211,6 +216,33 @@ class BusinessConfigGenerator:
             df = pd.read_excel(xlsx_path, sheet_name=sheet_name, header=actual_header_row)
             logger.info(f"[Excel读取] 数据行数: {len(df)}")
             
+            # 对于2行表头的情况（如指标清单），检查是否需要读取第2行补充列名
+            if header_rows == 2:
+                # 读取第2行（作为数据）来获取补充列名
+                df_second_row = pd.read_excel(xlsx_path, sheet_name=sheet_name, header=None, skiprows=actual_header_row+1, nrows=1)
+                if not df_second_row.empty:
+                    # 获取第2行的值作为补充列名
+                    second_row_values = df_second_row.iloc[0].tolist()
+                    original_columns = df.columns.tolist()
+                    
+                    # 合并列名：如果原列名是Unnamed，使用第2行的值
+                    merged_columns = []
+                    for i, col in enumerate(original_columns):
+                        col_str = str(col) if col is not None else ""
+                        if 'Unnamed' in col_str and i < len(second_row_values):
+                            second_val = str(second_row_values[i]) if second_row_values[i] is not None else ""
+                            if second_val and second_val != 'nan':
+                                merged_columns.append(second_val)
+                            else:
+                                merged_columns.append(col_str)
+                        else:
+                            merged_columns.append(col_str)
+                    
+                    # 检查是否有更新
+                    if merged_columns != original_columns:
+                        logger.info(f"[Excel读取] 检测到第2行补充列名，已合并")
+                        df.columns = merged_columns
+            
             # 清理列名（去除空格、换行符）
             def clean_col(col):
                 if pd.isna(col):
@@ -234,6 +266,8 @@ class BusinessConfigGenerator:
             df.columns = unique_columns
             
             logger.info(f"[Excel读取] 清理后的列名(前30): {df.columns.tolist()[:30]}")
+            if len(df.columns) > 30:
+                logger.info(f"[Excel读取] 清理后的列名(31-): {df.columns.tolist()[30:]}")
             
             # 转换为字典列表，跳过空行
             records = []
@@ -510,6 +544,39 @@ class BusinessConfigGenerator:
                 keywords.append(kw)
         return keywords
 
+    def _extract_business_keywords(self, text: str, min_length: int = 2) -> List[str]:
+        """
+        从业务定义中提取高价值业务关键词（用于text2sql）
+        
+        策略：提取业务场景关键词，如：
+        - "首触"、"有效线索"、"试驾预约"、"订单转化"
+        - 过滤通用词汇（的、和、是等）
+        """
+        if not text:
+            return []
+        
+        # 业务关键词模式：2-8字中文业务词
+        keywords = []
+        for match in re.finditer(r"[\u4e00-\u9fa5]{2,8}", text):
+            kw = match.group()
+            # 停用词过滤
+            if kw in STOP_WORDS or len(kw) < min_length:
+                continue
+            # 技术词汇过滤
+            if kw in ['明细', '汇总', '统计', '计算', '结果', '数据', '信息', '字段', '表名']:
+                continue
+            keywords.append(kw)
+        
+        # 去重并保持顺序
+        seen = set()
+        unique_keywords = []
+        for kw in keywords:
+            if kw not in seen:
+                seen.add(kw)
+                unique_keywords.append(kw)
+        
+        return unique_keywords[:10]  # 限制数量，避免噪音
+
     def generate_from_metrics_xlsx(
         self,
         xlsx_path: Path,
@@ -519,12 +586,20 @@ class BusinessConfigGenerator:
         sheet_name = None
     ) -> Dict:
         """
-        从指标清单Excel补充业务术语映射（支持多行表头）
+        从指标清单Excel提取text2sql关键映射
         
-        采用双表融合策略：
-        1. Sheet2（如有）：获取指标编码到物理表名的精确映射
-        2. Sheet1（主表）：获取完整的指标定义和中文描述
-        3. 关联两者，优先使用Sheet2的物理表名
+        【设计聚焦】只提取对text2sql有直接价值的映射：
+        1. 指标名称 -> 物理表名（核心，用于schema discovery）
+        2. 业务关键词 -> 表名（用于表排序boost）
+        
+        【数据来源】
+        - Sheet2: 优先，包含人工维护的指标编码->物理表名映射
+        - Sheet1: 补充，提供指标名称和业务定义
+        
+        【关键原则】
+        - 不输出指标编码（M-0018），这只是内部关联媒介
+        - 不强求100%表名匹配，业务术语本身就有检索价值
+        - 简化term_to_schema，字段映射准确率不高，由LLM从表结构推断
         
         Args:
             xlsx_path: Excel文件路径
@@ -533,26 +608,24 @@ class BusinessConfigGenerator:
             min_term_length: 最小术语长度
             sheet_name: 工作表名称或索引（None时自动检测，Sheet1为主表）
         """
-        logger.info(f"Processing metrics Excel: {xlsx_path}")
+        logger.info(f"Processing metrics Excel for text2sql: {xlsx_path}")
 
+        # 核心输出：只保留text2sql真正需要的映射
         term_to_table = defaultdict(set, existing_terms.get("term_to_table", {}))
-        term_to_schema = defaultdict(set, existing_terms.get("term_to_schema", {}))
         table_keywords = existing_terms.get("table_keywords", {})
+        # term_to_schema简化：只保留高置信度的字段映射
+        term_to_schema = defaultdict(set, existing_terms.get("term_to_schema", {}))
 
-        stats = {"total_metrics": 0, "valid_metrics": 0, "tables_added": set(), "sheet2_matched": 0}
+        stats = {
+            "total_metrics": 0,      # 处理的总指标数
+            "valid_metrics": 0,      # 有效指标数（有名称）
+            "with_tables": 0,        # 成功关联到表的指标数
+            "tables_added": set(),   # 涉及的物理表集合
+            "sheet2_matched": 0,     # 通过Sheet2精确匹配的数量
+        }
 
-        # 步骤1: 从Sheet2加载指标编码-表名映射（如果有的话）
+        # 步骤1: 从Sheet2加载编码->表名映射（内部使用，不输出）
         code_to_tables = self._load_metrics_code_to_tables_mapping(xlsx_path)
-        
-        # 获取所有可用表名（用于中文描述匹配）
-        available_tables = []
-        table_comments = {}
-        try:
-            all_schemas = self.schema_storage.table.to_pandas()
-            available_tables = all_schemas['table_name'].tolist()
-            table_comments = dict(zip(all_schemas['table_name'], all_schemas.get('table_comment', '')))
-        except Exception as e:
-            logger.warning(f"[表名加载] 无法从LanceDB加载表列表: {e}")
 
         # 步骤2: 读取Sheet1（主指标清单）
         records = self._read_excel_with_header(xlsx_path, header_rows, sheet_name)
@@ -569,84 +642,85 @@ class BusinessConfigGenerator:
                 }},
             }
 
-        # 调试：打印第一条记录的所有列名和值
+        # 调试：检查是否读取到"来源dws模型"列
         if records:
-            logger.info(f"[指标清单调试] 第一条记录的所有列: {list(records[0].keys())}")
-            logger.info(f"[指标清单调试] 第一条记录样本值: { {k: v for k, v in list(records[0].items())[:10] if v} }")
-            # 尝试查找包含'dws'或'来源'的列名
-            dws_cols = [k for k in records[0].keys() if 'dws' in k.lower() or '来源' in k or '模型' in k or '编码' in k]
-            logger.info(f"[指标清单调试] 关键列名: {dws_cols}")
+            all_cols = list(records[0].keys())
+            logger.info(f"[指标清单] 总列数: {len(all_cols)}")
+            dws_cols = [c for c in all_cols if 'dws' in c.lower() or '来源' in c or '模型' in c]
+            logger.info(f"[指标清单] DWS相关列: {dws_cols}")
 
         for row in records:
             stats["total_metrics"] += 1
 
-            # 使用 _extract_field 支持多种列名变体
-            metric_code = self._extract_field(row, ["指标编码", "指标编码 -固定值（勿改）"], debug=(stats['total_metrics']==1))
-            metric_name = self._extract_field(row, ["指标名称"], debug=(stats['total_metrics']==1))
-            biz_def = self._extract_field(row, ["业务定义及说明", "业务定义"], debug=(stats['total_metrics']==1))
-            calc_logic = self._extract_field(row, ["计算公式/业务逻辑", "计算公式", "业务逻辑"], debug=(stats['total_metrics']==1))
-            source_model_cn = self._extract_field(row, ["来源dws模型", "dws模型", "来源模型"], debug=(stats['total_metrics']==1))
-            biz_activity = self._extract_field(row, ["业务活动"], debug=(stats['total_metrics']==1))
+            # 提取核心字段（text2sql相关）
+            metric_code = self._extract_field(row, ["指标编码", "指标编码 -固定值（勿改）"])
+            metric_name = self._extract_field(row, ["指标名称"])
+            biz_def = self._extract_field(row, ["业务定义及说明", "业务定义"])
+            biz_activity = self._extract_field(row, ["业务活动"])
+            # 关键：尝试多种可能的"来源dws模型"列名变体
+            source_model = self._extract_field(row, [
+                "来源dws模型", "dws模型", "来源模型", 
+                "模型", "source_model", "来源表"
+            ])
 
             if not metric_name:
                 continue
 
             stats["valid_metrics"] += 1
 
-            # === 核心改进：双表融合策略获取物理表名 ===
+            # === 核心：获取物理表名（优先Sheet2，其次Sheet1）===
             source_tables = []
             
-            # 策略1: 优先使用 Sheet2 的精确映射（通过指标编码关联）
+            # 策略1: Sheet2精确映射（高置信度）
             if metric_code and metric_code in code_to_tables:
                 source_tables = code_to_tables[metric_code]
                 stats["sheet2_matched"] += 1
-                if stats['valid_metrics'] <= 5:
-                    logger.info(f"[Sheet2匹配] {metric_name} ({metric_code}) -> {source_tables}")
             
-            # 策略2: Sheet1 的"来源dws模型"可能是物理表名（直接验证）
-            elif source_model_cn and self._is_valid_table_name(source_model_cn):
-                source_tables = [source_model_cn]
+            # 策略2: Sheet1的"来源dws模型"列（可能是物理表名或中文描述）
+            elif source_model:
+                if self._is_valid_table_name(source_model):
+                    # 直接是物理表名
+                    source_tables = [source_model]
+                # 否则是中文描述，暂时不处理（准确率不高，避免噪音）
+                # 未来可考虑通过table_comment模糊匹配
             
-            # 策略3: Sheet1 的"来源dws模型"是中文描述，尝试匹配 table_comment
-            elif source_model_cn and available_tables:
-                matched = self._match_chinese_model_name_to_table(
-                    source_model_cn, available_tables, table_comments
-                )
-                if matched:
-                    source_tables = matched
-                    if stats['valid_metrics'] <= 5:
-                        logger.info(f"[中文匹配] {metric_name}: '{source_model_cn}' -> {matched}")
+            if not source_tables:
+                continue  # 没有表名关联，跳过（避免低质量映射）
+            
+            stats["with_tables"] += 1
 
-            # 3. 建立指标名称 -> 物理表映射
-            if source_tables:
+            # === 核心输出1: 指标名称 -> 表名 ===
+            for table_name in source_tables:
+                term_to_table[metric_name].add(table_name)
+                stats["tables_added"].add(table_name)
+
+            # === 核心输出2: 业务活动+指标名 -> 表名（增加上下文）===
+            if biz_activity:
+                composite_term = f"{biz_activity}_{metric_name}"
                 for table_name in source_tables:
-                    if len(metric_name) >= min_term_length and self._is_meaningful_term(metric_name):
-                        term_to_table[metric_name].add(table_name)
-                        stats["tables_added"].add(table_name)
+                    term_to_table[composite_term].add(table_name)
 
-                        # 添加业务活动分类映射
-                        if biz_activity and self._is_meaningful_term(biz_activity):
-                            term_to_table[f"{biz_activity}_{metric_name}"].add(table_name)
-
-                # 4. 从业务定义提取关键词 -> 表映射
-                if biz_def:
-                    keywords = self._extract_meaningful_keywords(biz_def, min_term_length)
-                    for kw in keywords:
-                        for table_name in source_tables:
-                            term_to_table[kw].add(table_name)
-
-            # 5. 从计算公式提取表名引用
-            if calc_logic:
-                table_refs = self._extract_table_refs(calc_logic)
-                for ref in table_refs:
-                    if self._is_valid_table_name(ref):
-                        term_to_schema[metric_name].add(ref)
+            # === 核心输出3: 从业务定义提取关键词 -> 表名 ===
+            if biz_def:
+                # 提取业务关键词（如"首触"、"有效线索"）
+                keywords = self._extract_business_keywords(biz_def, min_term_length)
+                for kw in keywords:
+                    for table_name in source_tables:
+                        term_to_table[kw].add(table_name)
+                    # 同时加入table_keywords（用于表排序）
+                    if len(kw) >= 4:  # 较长关键词更可靠
+                        table_keywords[kw] = list(source_tables)[0]
 
         logger.info(
-            f"[Excel解析] 指标清单处理完成: {stats['valid_metrics']}/{stats['total_metrics']} 有效指标, "
-            f"{len(stats['tables_added'])} 个来源表, "
-            f"{stats['sheet2_matched']} 个通过Sheet2精确匹配"
+            f"[指标清单] text2sql映射生成: {stats['with_tables']}/{stats['valid_metrics']} 指标关联表, "
+            f"{len(stats['tables_added'])} 个物理表, "
+            f"{stats['sheet2_matched']} 个Sheet2精确匹配"
         )
+        
+        # 输出关键业务术语样本（用于验证）
+        key_terms = ['有效线索', '首触', '试驾', '订单', '客户']
+        found_terms = [t for t in key_terms if t in term_to_table]
+        logger.info(f"[术语验证] 关键业务术语覆盖: {found_terms}")
         
         # 详细调试信息
         if stats['tables_added']:
