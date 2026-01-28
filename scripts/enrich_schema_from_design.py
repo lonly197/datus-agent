@@ -159,27 +159,35 @@ class SchemaEnricher:
         try:
             self.schema_storage._ensure_table_ready()
             
-            # 使用 _search_all 获取所有记录（避免 to_pandas 限制）
+            # 使用 lancedb 直接查询获取所有记录
             import lancedb
             db = lancedb.connect(self.db_path)
             table = db.open_table("schema_metadata")
             
-            # 分批读取所有数据
-            all_data = table.to_pandas()
-            total_count = len(all_data)
+            # 先获取总数
+            total_count = table.count_rows()
             logger.info(f"Total records in LanceDB: {total_count}")
+            
+            # 使用 to_arrow() 然后转换，避免 to_pandas() 限制
+            # 显式设置 limit 为总数以确保获取所有数据
+            arrow_data = table.search().limit(total_count).to_arrow()
+            all_data = arrow_data.to_pandas()
+            
+            logger.info(f"Loaded {len(all_data)} records from LanceDB")
             
             # 过滤目标层
             if target_layers:
                 target_layers = [layer.lower() for layer in target_layers]
-                mask = all_data['table_name'].str.lower().str.startswith(tuple(target_layers))
-                filtered_data = all_data[mask]
+                # 标准化表名后过滤
+                all_data['table_name_lower'] = all_data['table_name'].str.lower()
+                mask = all_data['table_name_lower'].str.startswith(tuple(target_layers))
+                filtered_data = all_data[mask].copy()
                 logger.info(f"Filtered to {len(filtered_data)} tables for layers: {target_layers}")
-                self._lancedb_tables = set(filtered_data['table_name'].str.lower().tolist())
+                self._lancedb_tables = set(filtered_data['table_name_lower'].tolist())
             else:
                 self._lancedb_tables = set(all_data['table_name'].str.lower().tolist())
             
-            logger.info(f"Loaded {len(self._lancedb_tables)} tables from LanceDB")
+            logger.info(f"Final loaded {len(self._lancedb_tables)} tables from LanceDB")
             
             # 显示样本
             sample = list(self._lancedb_tables)[:10]
@@ -635,27 +643,51 @@ class SchemaEnricher:
         return result
     
     def _fuzzy_match_table(self, table_name: str) -> List[DesignDocRecord]:
-        """基于逻辑实体名称模糊匹配表"""
+        """
+        基于逻辑实体名称模糊匹配表
+        
+        支持处理表名后缀变体（如 _di11, _back, _bak20251101 等）
+        """
         matched_records = []
+        table_lower = table_name.lower()
         
-        # 提取表名关键词（去除前缀如 ods_, dwd_ 等）
-        clean_name = re.sub(r'^(ods|dwd|dws|dim|ads|tmp|stg)_', '', table_name)
-        clean_name = re.sub(r'_(di|df|tmp|temp|bak|\d+)$', '', clean_name)
+        # 提取核心表名（去除前缀和后缀）
+        # 去除层前缀
+        clean_name = re.sub(r'^(ods|dwd|dws|dim|ads|tmp|stg)_', '', table_lower)
+        # 去除常见后缀：_di, _df, _bak, _backup, _temp, 数字后缀等
+        clean_name = re.sub(r'_(di|df|tmp|temp|bak|backup|back)(?:_?[0-9]{6,})?$', '', clean_name)
+        clean_name = re.sub(r'_[0-9]+$', '', clean_name)  # 去除末尾数字如 _11
+        clean_name = re.sub(r'_[0-9]{8}$', '', clean_name)  # 去除日期后缀如 _20251101
         
-        # 在逻辑实体中查找匹配
-        for entity, tables in self._entity_to_tables.items():
-            entity_clean = entity.lower().replace('事实表', '').replace('明细', '').replace('汇总', '')
-            # 计算相似度
-            if clean_name in entity_clean or entity_clean in clean_name:
-                # 获取该实体的所有记录
-                for t in tables:
-                    matched_records.extend(self._table_to_records.get(t, []))
+        logger.debug(f"Fuzzy matching: original='{table_name}', cleaned='{clean_name}'")
+        
+        # 策略1：直接匹配清理后的表名
+        for excel_table, records in self._table_to_records.items():
+            excel_clean = re.sub(r'_(di|df|tmp|temp|bak|backup)(?:_?[0-9]{6,})?$', '', excel_table)
+            excel_clean = re.sub(r'_[0-9]+$', '', excel_clean)
+            
+            if clean_name == excel_clean:
+                matched_records.extend(records)
+                logger.debug(f"Exact clean match: '{table_name}' -> '{excel_table}'")
                 continue
             
-            # 尝试计算关键词相似度
-            if self._calculate_similarity(clean_name, entity_clean) > 0.5:
-                for t in tables:
-                    matched_records.extend(self._table_to_records.get(t, []))
+            # 包含关系匹配
+            if clean_name in excel_clean or excel_clean in clean_name:
+                matched_records.extend(records)
+                logger.debug(f"Substring match: '{table_name}' -> '{excel_table}'")
+                continue
+        
+        # 策略2：基于逻辑实体名称匹配
+        if not matched_records:
+            for entity, tables in self._entity_to_tables.items():
+                entity_clean = entity.lower().replace('事实表', '').replace('明细', '').replace('汇总', '')
+                
+                # 计算关键词相似度
+                similarity = self._calculate_similarity(clean_name, entity_clean)
+                if similarity > 0.6:
+                    for t in tables:
+                        matched_records.extend(self._table_to_records.get(t, []))
+                    logger.debug(f"Entity similarity match ({similarity:.2f}): '{table_name}' -> '{entity}'")
         
         # 去重
         seen = set()
@@ -665,6 +697,9 @@ class SchemaEnricher:
             if key not in seen:
                 seen.add(key)
                 unique_records.append(r)
+        
+        if unique_records:
+            logger.info(f"Fuzzy matched '{table_name}' (cleaned: '{clean_name}') with {len(unique_records)} records")
         
         return unique_records
     
@@ -888,10 +923,15 @@ class SchemaEnricher:
         """
         self.schema_storage._ensure_table_ready()
         
-        # 获取所有现有记录
-        all_records = self.schema_storage.table.to_pandas()
-        total = len(all_records)
+        # 使用 lancedb 直接查询获取所有记录（避免 to_pandas 限制）
+        import lancedb
+        db = lancedb.connect(self.db_path)
+        table = db.open_table("schema_metadata")
+        total_count = table.count_rows()
+        arrow_data = table.search().limit(total_count).to_arrow()
+        all_records = arrow_data.to_pandas()
         
+        total = len(all_records)
         logger.info(f"Processing {total} tables from LanceDB")
         
         enriched_count = 0
