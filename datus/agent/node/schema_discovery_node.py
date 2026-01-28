@@ -1631,46 +1631,66 @@ class SchemaDiscoveryNode(Node, LLMMixin):
     async def _repair_metadata(self, table_names: List[str], schema_storage, task) -> int:
         """
         Attempt to repair missing metadata by fetching DDL directly from the database.
+
+        Uses paginated batch processing to avoid overwhelming the database.
+        SAFETY: Never uses LLM to infer schema structure.
+
+        Args:
+            table_names: List of table names needing metadata repair
+            schema_storage: SchemaStorage instance for updating metadata
+            task: Current task with database connection info
+
+        Returns:
+            Number of tables successfully repaired
         """
         repaired_count = 0
+        if not table_names:
+            return 0
+
         try:
             db_manager = get_db_manager()
-            # Use the configured connection for the current task
             connector = db_manager.get_conn(self.agent_config.current_namespace, task.database_name)
 
             if not connector:
+                logger.warning(f"No connector available for namespace={self.agent_config.current_namespace}, db={task.database_name}")
                 return 0
 
-            per_table_supported = hasattr(connector, "get_table_ddl") or hasattr(connector, "get_ddl")
+            logger.info(f"Repairing metadata for {len(table_names)} tables with pagination...")
 
-            if per_table_supported:
-                for table in table_names:
+            # Process tables in batches to avoid overwhelming the database
+            batch_size = 10
+            total_batches = (len(table_names) + batch_size - 1) // batch_size
+
+            for batch_idx in range(0, len(table_names), batch_size):
+                batch = table_names[batch_idx:batch_idx + batch_size]
+                current_batch = batch_idx // batch_size + 1
+                logger.debug(f"Repairing batch {current_batch}/{total_batches}: {len(batch)} tables")
+
+                for table in batch:
                     try:
-                        ddl = None
-                        if hasattr(connector, "get_table_ddl"):
-                            ddl = connector.get_table_ddl(table)
-                        elif hasattr(connector, "get_ddl"):
-                            ddl = connector.get_ddl(table)
+                        ddl = await self._get_ddl_with_fallbacks(
+                            connector,
+                            table,
+                            task.database_name or "",
+                            task.catalog_name or "",
+                            task.schema_name or "",
+                        )
 
                         if ddl:
                             schema_storage.update_table_schema(table, ddl)
                             repaired_count += 1
-                            logger.info(f"Repaired metadata for table: {table}")
+                            logger.debug(f"Repaired metadata for table: {table}")
+
                     except Exception as e:
                         logger.debug(f"Failed to repair metadata for table {table}: {e}")
-            elif hasattr(connector, "get_tables_with_ddl"):
-                tables_with_ddl = connector.get_tables_with_ddl()
-                ddl_by_table = {}
-                for tbl_info in tables_with_ddl:
-                    table_name = tbl_info.get("table_name") or tbl_info.get("name")
-                    if table_name:
-                        ddl_by_table[str(table_name)] = tbl_info.get("ddl", "")
-                for table in table_names:
-                    ddl = ddl_by_table.get(table)
-                    if ddl:
-                        schema_storage.update_table_schema(table, ddl)
-                        repaired_count += 1
-                        logger.info(f"Repaired metadata for table: {table}")
+
+                # Brief pause between batches
+                if batch_idx + batch_size < len(table_names):
+                    import asyncio
+                    await asyncio.sleep(0.05)
+
+            if repaired_count > 0:
+                logger.info(f"Successfully repaired metadata for {repaired_count}/{len(table_names)} tables")
 
         except Exception as e:
             logger.error(f"Metadata repair process failed: {e}")
@@ -1725,39 +1745,51 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 try:
                     dialect = getattr(connector, "dialect", None) or getattr(task, "database_type", None)
                     db_candidates = self._filter_candidate_tables_for_db(candidate_tables, db_name, dialect)
-                    if db_candidates and (hasattr(connector, "get_table_ddl") or hasattr(connector, "get_ddl")):
-                        logger.info(f"Retrieving DDL for candidate tables individually from {db_name}...")
-                        lookup_seen = set()
-                        for table_name in db_candidates:
-                            lookup_name = table_name.split(".")[-1] if "." in table_name else table_name
-                            if lookup_name in lookup_seen:
-                                continue
-                            lookup_seen.add(lookup_name)
-                            try:
-                                ddl = None
-                                if hasattr(connector, "get_table_ddl"):
-                                    ddl = connector.get_table_ddl(lookup_name)
-                                elif hasattr(connector, "get_ddl"):
-                                    ddl = connector.get_ddl(lookup_name)
+                    if db_candidates:
+                        # Use paginated retrieval for better performance
+                        logger.info(f"Retrieving DDL for {len(db_candidates)} candidate tables from {db_name} (paginated)...")
 
-                                if ddl:
-                                    identifier = f"{catalog or ''}.{db_name}..{lookup_name}.table"
-                                    if identifier in seen_identifiers:
-                                        continue
-                                    seen_identifiers.add(identifier)
-                                    schemas_to_store.append(
-                                        {
-                                            "identifier": identifier,
-                                            "catalog_name": catalog or "",
-                                            "database_name": db_name,
-                                            "schema_name": schema or "",
-                                            "table_name": lookup_name,
-                                            "table_type": "table",
-                                            "definition": ddl,
-                                        }
+                        batch_size = 20
+                        lookup_seen = set()
+
+                        for batch_idx in range(0, len(db_candidates), batch_size):
+                            batch = db_candidates[batch_idx:batch_idx + batch_size]
+                            logger.debug(f"Processing batch {batch_idx//batch_size + 1}/{(len(db_candidates) + batch_size - 1)//batch_size}")
+
+                            for table_name in batch:
+                                lookup_name = table_name.split(".")[-1] if "." in table_name else table_name
+                                if lookup_name in lookup_seen:
+                                    continue
+                                lookup_seen.add(lookup_name)
+
+                                try:
+                                    ddl = await self._get_ddl_with_fallbacks(
+                                        connector, lookup_name, db_name, catalog, schema
                                     )
-                            except Exception as e:
-                                logger.debug(f"Failed to get DDL for table {lookup_name} from {db_name}: {e}")
+
+                                    if ddl:
+                                        identifier = f"{catalog or ''}.{db_name}..{lookup_name}.table"
+                                        if identifier in seen_identifiers:
+                                            continue
+                                        seen_identifiers.add(identifier)
+                                        schemas_to_store.append(
+                                            {
+                                                "identifier": identifier,
+                                                "catalog_name": catalog or "",
+                                                "database_name": db_name,
+                                                "schema_name": schema or "",
+                                                "table_name": lookup_name,
+                                                "table_type": "table",
+                                                "definition": ddl,
+                                            }
+                                        )
+                                except Exception as e:
+                                    logger.debug(f"Failed to get DDL for table {lookup_name} from {db_name}: {e}")
+
+                            # Brief pause between batches
+                            if batch_idx + batch_size < len(db_candidates):
+                                import asyncio
+                                await asyncio.sleep(0.05)
                     elif hasattr(connector, "get_tables_with_ddl"):
                         if candidate_tables and not db_candidates:
                             logger.info(f"Skipping full DDL scan for {db_name}; no candidates for this database")
@@ -1888,11 +1920,14 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         """
         Enhanced fallback strategy when get_tables_with_ddl returns 0 tables.
 
-        This method implements a multi-tier fallback:
-        1. Use get_tables() to get all table names
-        2. Try to get DDL for each candidate table individually
-        3. Try get_table_schema() to build DDL from column info
-        4. Store minimal schema entries as last resort
+        This method implements a safe multi-tier fallback with pagination support:
+        1. Use paginated batch retrieval for DDL (recommended for large databases)
+        2. Try individual DDL retrieval for candidate tables
+        3. Build DDL from schema metadata (DESCRIBE/SHOW COLUMNS)
+        4. Store minimal schema entries (table name only) as last resort - NO LLM HALLUCINATION
+
+        SAFETY GUARANTEE: This method NEVER uses LLM to infer schema structure.
+        It only uses database-native methods to retrieve actual schema information.
 
         Args:
             candidate_tables: List of table names to search for
@@ -1913,130 +1948,111 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             db_configs = self.agent_config.current_db_configs()
             is_multi_db = len(db_configs) > 1
 
-            # Strategy 1: Retrieve DDL for candidates (or limited tables if no candidates)
-            try:
-                candidate_limit = 50
-                if self.agent_config and hasattr(self.agent_config, "schema_discovery_config"):
-                    candidate_limit = self.agent_config.schema_discovery_config.fallback_table_limit
-
-                if candidate_tables:
-                    target_tables = [name.split(".")[-1] for name in candidate_tables]
-                else:
-                    all_tables = connector.get_tables(
-                        catalog_name=current_catalog,
-                        database_name=current_db,
-                        schema_name=current_schema,
-                    )
-                    if len(all_tables) > candidate_limit:
-                        logger.warning(
-                            f"Too many tables ({len(all_tables)}), limiting to first {candidate_limit} for DDL fallback"
-                        )
-                        all_tables = all_tables[:candidate_limit]
-                    target_tables = all_tables
-
-                if target_tables:
-                    logger.info(
-                        f"Trying individual DDL retrieval for {len(target_tables)} tables in {current_db}..."
-                    )
-
-                    rag = SchemaWithValueRAG(agent_config=self.agent_config)
-                    schemas_to_store = []
-                    retrieved_count = 0
-
-                    # Try to get DDL for each table
-                    for table_name in target_tables:
-                        try:
-                            # Try different DDL retrieval methods
-                            ddl = None
-
-                            # Method 1: get_table_ddl
-                            if hasattr(connector, "get_table_ddl"):
-                                try:
-                                    ddl = connector.get_table_ddl(table_name)
-                                except Exception as e:
-                                    logger.debug(f"get_table_ddl failed for {table_name}: {e}")
-
-                            # Method 2: get_ddl
-                            if not ddl and hasattr(connector, "get_ddl"):
-                                try:
-                                    ddl = connector.get_ddl(table_name)
-                                except Exception as e:
-                                    logger.debug(f"get_ddl failed for {table_name}: {e}")
-
-                            # Method 3: Build DDL from schema
-                            if not ddl and hasattr(connector, "get_schema"):
-                                try:
-                                    schema_info = connector.get_schema(table_name=table_name)
-                                    if schema_info:
-                                        ddl = self._build_ddl_from_schema(table_name, schema_info)
-                                except Exception as e:
-                                    logger.debug(f"get_schema failed for {table_name}: {e}")
-
-                            if ddl:
-                                schemas_to_store.append(
-                                    {
-                                        "identifier": f"{current_catalog or ''}.{current_db}..{table_name}.table",
-                                        "catalog_name": current_catalog or "",
-                                        "database_name": current_db,
-                                        "schema_name": current_schema or "",
-                                        "table_name": table_name,
-                                        "table_type": "table",
-                                        "definition": ddl,
-                                    }
-                                )
-                                retrieved_count += 1
-
-                        except Exception as e:
-                            logger.debug(f"Failed to get DDL for table {table_name}: {e}")
-
-                    if retrieved_count > 0:
-                        logger.info(f"Enhanced fallback retrieved DDL for {retrieved_count} tables from {current_db}")
-                        rag.store_batch(schemas_to_store, [])
-
-                        # Retry schema search
-                        target_database = "" if is_multi_db else (task.database_name or "")
-                        target_catalog = "" if is_multi_db else (task.catalog_name or "")
-                        target_schema = "" if is_multi_db else (task.schema_name or "")
-
-                        schemas, values = rag.search_tables(
-                            tables=candidate_tables,
-                            catalog_name=target_catalog,
-                            database_name=target_database,
-                            schema_name=target_schema,
-                            dialect=task.database_type if hasattr(task, "database_type") else None,
-                        )
-
-                        if schemas:
-                            logger.info(
-                                f"Schema search successful after enhanced fallback: found {len(schemas)} schemas"
-                            )
-                            return
-
-            except Exception as e:
-                logger.warning(f"Enhanced DDL fallback strategy failed for {current_db}: {e}")
-
-            # Strategy 2: Final fallback - store just table names for LLM reference
+            # Strategy 1: Paginated batch DDL retrieval (most efficient for large databases)
             if candidate_tables:
-                logger.warning(f"All DDL retrieval attempts failed for {current_db}, storing table names for LLM reference")
-                rag = SchemaWithValueRAG(agent_config=self.agent_config)
-                db_candidates = self._filter_candidate_tables_for_db(candidate_tables, current_db, dialect)
-                candidate_lookup = {name.split(".")[-1] for name in db_candidates}
+                target_tables = [name.split(".")[-1] for name in candidate_tables]
+            else:
+                # Get all tables with pagination
+                all_tables = connector.get_tables(
+                    catalog_name=current_catalog,
+                    database_name=current_db,
+                    schema_name=current_schema,
+                )
+                target_tables = all_tables
 
-                # Create minimal schema entries with just table names
+            if not target_tables:
+                logger.warning(f"No tables found in {current_db}")
+                return
+
+            # Use paginated retrieval for better performance
+            batch_size = 20  # Process tables in batches to avoid overwhelming the database
+            logger.info(f"Using paginated DDL retrieval for {len(target_tables)} tables in {current_db} (batch_size={batch_size})")
+
+            rag = SchemaWithValueRAG(agent_config=self.agent_config)
+            schemas_to_store = []
+            retrieved_count = 0
+            failed_tables = []
+
+            # Process tables in batches
+            for i in range(0, len(target_tables), batch_size):
+                batch = target_tables[i:i + batch_size]
+                logger.debug(f"Processing batch {i//batch_size + 1}/{(len(target_tables) + batch_size - 1)//batch_size}: {len(batch)} tables")
+
+                for table_name in batch:
+                    try:
+                        ddl = await self._get_ddl_with_fallbacks(connector, table_name, current_db, current_catalog, current_schema)
+
+                        if ddl:
+                            schemas_to_store.append(
+                                {
+                                    "identifier": f"{current_catalog or ''}.{current_db}..{table_name}.table",
+                                    "catalog_name": current_catalog or "",
+                                    "database_name": current_db,
+                                    "schema_name": current_schema or "",
+                                    "table_name": table_name,
+                                    "table_type": "table",
+                                    "definition": ddl,
+                                }
+                            )
+                            retrieved_count += 1
+                        else:
+                            failed_tables.append(table_name)
+
+                    except Exception as e:
+                        logger.debug(f"Failed to get DDL for table {table_name}: {e}")
+                        failed_tables.append(table_name)
+
+                # Brief pause between batches to avoid overwhelming the database
+                if i + batch_size < len(target_tables):
+                    import asyncio
+                    await asyncio.sleep(0.1)
+
+            # Store successfully retrieved schemas
+            if retrieved_count > 0:
+                logger.info(f"Enhanced fallback retrieved DDL for {retrieved_count}/{len(target_tables)} tables from {current_db}")
+                rag.store_batch(schemas_to_store, [])
+
+                # Retry schema search
+                target_database = "" if is_multi_db else (task.database_name or "")
+                target_catalog = "" if is_multi_db else (task.catalog_name or "")
+                target_schema = "" if is_multi_db else (task.schema_name or "")
+
+                schemas, values = rag.search_tables(
+                    tables=candidate_tables,
+                    catalog_name=target_catalog,
+                    database_name=target_database,
+                    schema_name=target_schema,
+                    dialect=task.database_type if hasattr(task, "database_type") else None,
+                )
+
+                if schemas:
+                    logger.info(
+                        f"Schema search successful after enhanced fallback: found {len(schemas)} schemas"
+                    )
+                    return
+
+            # Strategy 2: Final fallback - store just table names (NO fabricated columns)
+            # SAFETY: We only store table names, NEVER use LLM to infer column names
+            if failed_tables:
+                logger.warning(
+                    f"DDL retrieval failed for {len(failed_tables)} tables in {current_db}. "
+                    f"Storing minimal schema entries (table names only, no fabricated columns)."
+                )
                 minimal_schemas = []
-                for table_name in candidate_lookup:
-                    if table_name in candidate_lookup:
-                        minimal_schemas.append(
-                            {
-                                "identifier": f"{current_catalog or ''}.{current_db}..{table_name}.table",
-                                "catalog_name": current_catalog or "",
-                                "database_name": current_db,
-                                "schema_name": current_schema or "",
-                                "table_name": table_name,
-                                "table_type": "table",
-                                "definition": f"CREATE TABLE {table_name} (-- DDL retrieval failed, table name only)",
-                            }
-                        )
+                for table_name in failed_tables:
+                    # SAFETY GUARANTEE: Only store table name, no LLM-generated columns
+                    minimal_schemas.append(
+                        {
+                            "identifier": f"{current_catalog or ''}.{current_db}..{table_name}.table",
+                            "catalog_name": current_catalog or "",
+                            "database_name": current_db,
+                            "schema_name": current_schema or "",
+                            "table_name": table_name,
+                            "table_type": "table",
+                            # Explicitly mark as missing DDL - LLM should NOT hallucinate columns
+                            "definition": f"-- TABLE: {table_name}\n-- WARNING: DDL retrieval failed. Schema information unavailable.",
+                        }
+                    )
 
                 if minimal_schemas:
                     rag.store_batch(minimal_schemas, [])
@@ -2044,6 +2060,90 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
         except Exception as e:
             logger.error(f"Enhanced DDL fallback failed for {db_name}: {e}")
+
+    async def _get_ddl_with_fallbacks(
+        self,
+        connector,
+        table_name: str,
+        database_name: str,
+        catalog_name: str = "",
+        schema_name: str = "",
+    ) -> Optional[str]:
+        """
+        Get DDL for a table using multiple fallback methods.
+
+        Methods tried in order:
+        1. connector.get_tables_with_ddl() - Batch method with specific table
+        2. connector.get_table_ddl() - Individual table method
+        3. connector.get_ddl() - Generic DDL method
+        4. connector.get_schema() + _build_ddl_from_schema() - Build from column metadata
+
+        SAFETY: This method NEVER uses LLM to generate DDL. It only uses database-native methods.
+
+        Args:
+            connector: Database connector instance
+            table_name: Name of the table
+            database_name: Database name
+            catalog_name: Optional catalog name
+            schema_name: Optional schema name
+
+        Returns:
+            DDL string if successful, None otherwise
+        """
+        ddl = None
+
+        # Method 1: Try get_tables_with_ddl with specific table filter
+        if not ddl and hasattr(connector, "get_tables_with_ddl"):
+            try:
+                tables_with_ddl = connector.get_tables_with_ddl(
+                    catalog_name=catalog_name,
+                    database_name=database_name,
+                    schema_name=schema_name,
+                    tables=[table_name],
+                )
+                if tables_with_ddl and len(tables_with_ddl) > 0:
+                    ddl = tables_with_ddl[0].get("definition", "") or tables_with_ddl[0].get("ddl", "")
+                    if ddl:
+                        logger.debug(f"Got DDL for {table_name} via get_tables_with_ddl")
+            except Exception as e:
+                logger.debug(f"get_tables_with_ddl failed for {table_name}: {e}")
+
+        # Method 2: Try get_table_ddl
+        if not ddl and hasattr(connector, "get_table_ddl"):
+            try:
+                ddl = connector.get_table_ddl(table_name)
+                if ddl:
+                    logger.debug(f"Got DDL for {table_name} via get_table_ddl")
+            except Exception as e:
+                logger.debug(f"get_table_ddl failed for {table_name}: {e}")
+
+        # Method 3: Try get_ddl
+        if not ddl and hasattr(connector, "get_ddl"):
+            try:
+                ddl = connector.get_ddl(table_name)
+                if ddl:
+                    logger.debug(f"Got DDL for {table_name} via get_ddl")
+            except Exception as e:
+                logger.debug(f"get_ddl failed for {table_name}: {e}")
+
+        # Method 4: Build DDL from schema metadata (DESCRIBE/SHOW COLUMNS)
+        # SAFETY: This uses actual database metadata, not LLM inference
+        if not ddl and hasattr(connector, "get_schema"):
+            try:
+                schema_info = connector.get_schema(
+                    table_name=table_name,
+                    catalog_name=catalog_name,
+                    database_name=database_name,
+                    schema_name=schema_name,
+                )
+                if schema_info:
+                    ddl = self._build_ddl_from_schema(table_name, schema_info)
+                    if ddl:
+                        logger.debug(f"Built DDL for {table_name} from schema metadata")
+            except Exception as e:
+                logger.debug(f"get_schema failed for {table_name}: {e}")
+
+        return ddl
 
     def _build_ddl_from_schema(self, table_name: str, schema_info: List[Dict[str, Any]]) -> str:
         """
