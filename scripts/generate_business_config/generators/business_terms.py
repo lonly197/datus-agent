@@ -13,20 +13,46 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from ..readers import ExcelReader, CsvReader, HeaderParser
 from ..extractors import TermExtractor, KeywordExtractor
+from ..shared import (
+    TablePriority, 
+    get_table_priority, 
+    should_include_table,
+    clean_excel_text,
+    extract_clean_keywords
+)
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
 
 class BusinessTermsGenerator:
-    """业务术语生成器"""
+    """业务术语生成器
+    
+    支持表优先级过滤：
+    - 优先使用 DWD/DWS/DIM 表
+    - 其次考虑 ADS 表  
+    - 尽量少使用 ODS 表
+    """
 
-    def __init__(self, min_term_length: int = 2):
+    def __init__(
+        self, 
+        min_term_length: int = 2,
+        max_table_priority: TablePriority = TablePriority.ADS,
+        enable_text_cleaning: bool = True
+    ):
         self.min_term_length = min_term_length
+        self.max_table_priority = max_table_priority
+        self.enable_text_cleaning = enable_text_cleaning
         self.excel_reader = ExcelReader()
         self.csv_reader = CsvReader()
         self.term_extractor = TermExtractor(min_term_length)
         self.keyword_extractor = KeywordExtractor(min_term_length)
+        
+        # 统计信息
+        self.stats = {
+            "tables_filtered_by_priority": 0,
+            "tables_by_priority": {p.name: 0 for p in TablePriority},
+        }
 
     def generate_from_architecture_xlsx(
         self,
@@ -74,7 +100,8 @@ class BusinessTermsGenerator:
         table_keywords: Dict[str, str],
         stats: Dict
     ):
-        """处理单行数据架构记录"""
+        """处理单行数据架构记录（支持表优先级过滤和文本清洗）"""
+        # 提取原始字段
         table_name = HeaderParser.extract_field(row, ["物理表名", "table_name", "表名"], debug=(stats['total_rows']==1))
         column_name = HeaderParser.extract_field(row, ["字段名", "column_name", "列名", "column"], debug=(stats['total_rows']==1))
         attr_def = HeaderParser.extract_field(row, ["属性业务定义", "属性定义"], debug=(stats['total_rows']==1))
@@ -84,8 +111,27 @@ class BusinessTermsGenerator:
         logic_entity = HeaderParser.extract_field(row, ["逻辑实体（中文）", "逻辑实体中文名", "逻辑实体"], debug=(stats['total_rows']==1))
         logic_entity_def = HeaderParser.extract_field(row, ["逻辑实体业务含义", "逻辑实体定义", "逻辑实体说明"], debug=(stats['total_rows']==1))
 
+        # 文本清洗
+        if self.enable_text_cleaning:
+            attr_def = clean_excel_text(attr_def, remove_newlines=True)
+            attr_cn = clean_excel_text(attr_cn)
+            obj_name = clean_excel_text(obj_name)
+            obj_en = clean_excel_text(obj_en)
+            logic_entity = clean_excel_text(logic_entity)
+            logic_entity_def = clean_excel_text(logic_entity_def, remove_newlines=True)
+
+        # 验证表名和列名
         if not HeaderParser.is_valid_table_name(table_name) or not HeaderParser.is_valid_column_name(column_name):
             return
+
+        # 表优先级过滤
+        if not should_include_table(table_name, self.max_table_priority):
+            self.stats["tables_filtered_by_priority"] += 1
+            return
+
+        # 统计表优先级分布
+        priority = get_table_priority(table_name)
+        self.stats["tables_by_priority"][priority.name] += 1
 
         stats["valid_rows"] += 1
         stats["tables_found"].add(table_name)
@@ -96,27 +142,33 @@ class BusinessTermsGenerator:
             if obj_en and HeaderParser.is_meaningful_term(obj_en):
                 term_to_table[obj_en.lower()].add(table_name)
 
-        # 逻辑实体 -> 表映射
+        # 逻辑实体 -> 表映射（限制关键词长度，避免过长描述）
         if logic_entity and len(logic_entity) >= self.min_term_length and HeaderParser.is_meaningful_term(logic_entity):
             term_to_table[logic_entity].add(table_name)
-            table_keywords[logic_entity] = table_name
+            # 只有较短的逻辑实体名才作为关键词
+            if len(logic_entity) <= 30:
+                table_keywords[logic_entity] = table_name
 
             if logic_entity_def:
-                keywords = self.term_extractor.extract_meaningful_keywords(logic_entity_def)
+                # 使用清洗后的关键词提取
+                keywords = extract_clean_keywords(logic_entity_def, min_length=self.min_term_length, max_length=10)
                 for kw in keywords:
-                    table_keywords[kw] = table_name
-                    term_to_table[kw].add(table_name)
+                    # 只添加有意义且不太长的关键词
+                    if len(kw) >= self.min_term_length and len(kw) <= 20:
+                        table_keywords[kw] = table_name
+                        term_to_table[kw].add(table_name)
 
         # 属性（中文）-> 字段映射
         if attr_cn and len(attr_cn) >= self.min_term_length and HeaderParser.is_meaningful_term(attr_cn):
             term_to_schema[attr_cn].add(f"{table_name}.{column_name}")
             term_to_schema[attr_cn].add(column_name)
 
-        # 属性业务定义 -> 关键词映射
+        # 属性业务定义 -> 关键词映射（限制关键词质量和数量）
         if attr_def and len(attr_def) >= self.min_term_length:
-            keywords = self.term_extractor.extract_meaningful_keywords(attr_def)
+            keywords = extract_clean_keywords(attr_def, min_length=self.min_term_length, max_length=10)
             for kw in keywords:
-                if len(kw) <= 50:
+                # 限制关键词长度和质量
+                if len(kw) <= 30:
                     term_to_schema[kw].add(column_name)
                     term_to_schema[kw].add(f"{table_name}.{column_name}")
                     stats["terms_extracted"] += 1
@@ -147,6 +199,8 @@ class BusinessTermsGenerator:
                 "valid_rows": stats["valid_rows"],
                 "tables_count": len(stats["tables_found"]),
                 "terms_count": stats["terms_extracted"],
+                "tables_filtered_by_priority": self.stats["tables_filtered_by_priority"],
+                "tables_by_priority": self.stats["tables_by_priority"],
             },
         }
 
@@ -244,7 +298,8 @@ class BusinessTermsGenerator:
         term_to_schema: Dict[str, Set[str]],
         table_keywords: Dict[str, str]
     ):
-        """处理单行指标数据"""
+        """处理单行指标数据（支持文本清洗和表优先级过滤）"""
+        # 提取原始字段
         metric_name = HeaderParser.extract_field(row, ["指标名称"])
         biz_def = HeaderParser.extract_field(row, ["业务定义及说明", "业务定义"])
         biz_activity = HeaderParser.extract_field(row, ["业务活动"])
@@ -252,37 +307,62 @@ class BusinessTermsGenerator:
         category2 = HeaderParser.extract_field(row, ["分类2", "分类二", "二级分类"])
         source_model = HeaderParser.extract_field(row, ["来源dws模型", "dws模型", "来源模型", "来源表"])
 
+        # 文本清洗
+        if self.enable_text_cleaning:
+            metric_name = clean_excel_text(metric_name)
+            biz_def = clean_excel_text(biz_def, remove_newlines=True)
+            biz_activity = clean_excel_text(biz_activity)
+            category1 = clean_excel_text(category1)
+            category2 = clean_excel_text(category2)
+
         if not metric_name:
             return
 
+        # 表优先级过滤
         if source_model and HeaderParser.is_valid_table_name(source_model):
+            if not should_include_table(source_model, self.max_table_priority):
+                self.stats["tables_filtered_by_priority"] += 1
+                return
+            
+            # 统计表优先级
+            priority = get_table_priority(source_model)
+            self.stats["tables_by_priority"][priority.name] += 1
+
             term_to_table[metric_name].add(source_model)
 
+            # 添加业务活动作为命名空间前缀
             if biz_activity:
                 composite_term = f"{biz_activity}_{metric_name}"
                 term_to_table[composite_term].add(source_model)
+                # 单独添加业务活动映射
+                if len(biz_activity) >= self.min_term_length:
+                    term_to_table[biz_activity].add(source_model)
 
+        # 从业务定义提取关键词（使用清洗后的提取）
         if biz_def:
-            keywords = self.term_extractor.extract_business_keywords(biz_def)
+            keywords = extract_clean_keywords(biz_def, min_length=self.min_term_length, max_length=10)
             for kw in keywords:
-                if source_model and HeaderParser.is_valid_table_name(source_model):
+                if source_model and should_include_table(source_model, self.max_table_priority):
                     term_to_table[kw].add(source_model)
-                    if len(kw) >= 4:
+                    # 只添加有意义且不太短的关键词
+                    if len(kw) >= 4 and len(kw) <= 20:
                         table_keywords[kw] = source_model
 
+        # 从指标名称提取术语
         if metric_name:
             metric_terms = self.term_extractor.extract_metric_terms(metric_name)
             for term in metric_terms:
-                if source_model and HeaderParser.is_valid_table_name(source_model):
+                if source_model and should_include_table(source_model, self.max_table_priority):
                     term_to_table[term].add(source_model)
-                    if len(term) >= 2:
+                    if len(term) >= 2 and len(term) <= 20:
                         table_keywords[term] = source_model
 
+        # 处理分类
         for category in [category1, category2]:
             if category and len(category) >= self.min_term_length and HeaderParser.is_meaningful_term(category):
                 clean_cat = category.strip()
                 if clean_cat and clean_cat.lower() not in ['nan', 'none', 'null', '']:
-                    if source_model and HeaderParser.is_valid_table_name(source_model):
+                    if source_model and should_include_table(source_model, self.max_table_priority):
                         term_to_table[clean_cat].add(source_model)
-                        if len(clean_cat) >= 2:
+                        if len(clean_cat) >= 2 and len(clean_cat) <= 20:
                             table_keywords[clean_cat] = source_model

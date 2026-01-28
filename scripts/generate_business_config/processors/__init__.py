@@ -9,5 +9,6 @@ Processors package for business configuration generation.
 
 from .merger import DdlMerger
 from .importer import ExtKnowledgeImporter
+from .text_rewriter import LLMTextRewriter
 
-__all__ = ['DdlMerger', 'ExtKnowledgeImporter']
+__all__ = ['DdlMerger', 'ExtKnowledgeImporter', 'LLMTextRewriter']

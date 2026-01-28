@@ -16,28 +16,48 @@ from datus.utils.loggings import get_logger
 
 from ..readers import ExcelReader, CsvReader, HeaderParser
 from ..extractors import TermExtractor
+from ..processors import LLMTextRewriter
+from ..shared import (
+    TablePriority,
+    get_table_priority,
+    should_include_table,
+    clean_excel_text,
+    extract_clean_keywords
+)
 
 logger = get_logger(__name__)
 
 
 class LLMEnhancedBusinessTermsGenerator:
-    """LLM增强的业务术语生成器"""
+    """LLM增强的业务术语生成器
+    
+    特性：
+    - 表优先级过滤（DWD/DWS/DIM > ADS > ODS）
+    - 文本清洗（去除emoji、序号、特殊符号等）
+    - LLM智能改写指标定义
+    """
 
     def __init__(
         self,
         agent_config=None,
         namespace: str = "",
         min_term_length: int = 2,
-        use_llm: bool = False
+        use_llm: bool = False,
+        max_table_priority: TablePriority = TablePriority.ADS,
+        enable_text_cleaning: bool = True
     ):
         self.min_term_length = min_term_length
         self.use_llm = use_llm
+        self.max_table_priority = max_table_priority
+        self.enable_text_cleaning = enable_text_cleaning
         self.llm_model = None
+        self.text_rewriter = None
 
         if use_llm and agent_config:
             try:
                 self.llm_model = LLMBaseModel.create_model(agent_config=agent_config)
-                logger.info("LLM model initialized for enhanced extraction")
+                self.text_rewriter = LLMTextRewriter(agent_config, use_llm=True)
+                logger.info("LLM model initialized for enhanced extraction and rewriting")
             except Exception as e:
                 logger.warning(f"Failed to initialize LLM model: {e}, falling back to regex mode")
                 self.use_llm = False
@@ -45,6 +65,13 @@ class LLMEnhancedBusinessTermsGenerator:
         self.excel_reader = ExcelReader()
         self.csv_reader = CsvReader()
         self.term_extractor = TermExtractor(min_term_length)
+        
+        # 统计信息
+        self.stats = {
+            "tables_filtered_by_priority": 0,
+            "tables_by_priority": {p.name: 0 for p in TablePriority},
+            "llm_rewrites": 0,
+        }
 
     def generate_from_architecture_xlsx(
         self,
@@ -97,7 +124,8 @@ class LLMEnhancedBusinessTermsGenerator:
         table_keywords: Dict[str, str],
         stats: Dict
     ):
-        """处理单行数据架构记录"""
+        """处理单行数据架构记录（支持表优先级过滤、文本清洗和LLM改写）"""
+        # 提取原始字段
         table_name = HeaderParser.extract_field(row, ["物理表名", "table_name", "表名"], debug=(stats['total_rows']==1))
         column_name = HeaderParser.extract_field(row, ["字段名", "column_name", "列名", "column"], debug=(stats['total_rows']==1))
         attr_def = HeaderParser.extract_field(row, ["属性业务定义", "属性定义"], debug=(stats['total_rows']==1))
@@ -107,35 +135,74 @@ class LLMEnhancedBusinessTermsGenerator:
         logic_entity = HeaderParser.extract_field(row, ["逻辑实体（中文）", "逻辑实体中文名", "逻辑实体"], debug=(stats['total_rows']==1))
         logic_entity_def = HeaderParser.extract_field(row, ["逻辑实体业务含义", "逻辑实体定义", "逻辑实体说明"], debug=(stats['total_rows']==1))
 
+        # 文本清洗
+        if self.enable_text_cleaning:
+            attr_def = clean_excel_text(attr_def, remove_newlines=True)
+            attr_cn = clean_excel_text(attr_cn)
+            obj_name = clean_excel_text(obj_name)
+            obj_en = clean_excel_text(obj_en)
+            logic_entity = clean_excel_text(logic_entity)
+            logic_entity_def = clean_excel_text(logic_entity_def, remove_newlines=True)
+
+        # 验证表名和列名
         if not HeaderParser.is_valid_table_name(table_name) or not HeaderParser.is_valid_column_name(column_name):
             return
+
+        # 表优先级过滤
+        if not should_include_table(table_name, self.max_table_priority):
+            self.stats["tables_filtered_by_priority"] += 1
+            return
+
+        # 统计表优先级分布
+        priority = get_table_priority(table_name)
+        self.stats["tables_by_priority"][priority.name] += 1
 
         stats["valid_rows"] += 1
         stats["tables_found"].add(table_name)
 
+        # 分析对象 -> 表映射
         if obj_name and len(obj_name) >= self.min_term_length and HeaderParser.is_meaningful_term(obj_name):
             term_to_table[obj_name].add(table_name)
             if obj_en and HeaderParser.is_meaningful_term(obj_en):
                 term_to_table[obj_en.lower()].add(table_name)
 
+        # 逻辑实体 -> 表映射
         if logic_entity and len(logic_entity) >= self.min_term_length and HeaderParser.is_meaningful_term(logic_entity):
             term_to_table[logic_entity].add(table_name)
-            table_keywords[logic_entity] = table_name
+            if len(logic_entity) <= 30:
+                table_keywords[logic_entity] = table_name
 
             if logic_entity_def:
-                keywords = self.term_extractor.extract_meaningful_keywords(logic_entity_def)
+                keywords = extract_clean_keywords(logic_entity_def, min_length=self.min_term_length, max_length=10)
                 for kw in keywords:
-                    table_keywords[kw] = table_name
-                    term_to_table[kw].add(table_name)
+                    if len(kw) >= self.min_term_length and len(kw) <= 20:
+                        table_keywords[kw] = table_name
+                        term_to_table[kw].add(table_name)
 
+        # 属性（中文）-> 字段映射
         if attr_cn and len(attr_cn) >= self.min_term_length and HeaderParser.is_meaningful_term(attr_cn):
             term_to_schema[attr_cn].add(f"{table_name}.{column_name}")
             term_to_schema[attr_cn].add(column_name)
 
+            # 使用LLM改写字段定义（如果启用）
+            if self.use_llm and self.text_rewriter and attr_def:
+                try:
+                    rewritten = self.text_rewriter.rewrite_field_definition(
+                        column_name, attr_cn, attr_def
+                    )
+                    for term in rewritten.get("search_terms", []):
+                        if len(term) <= 30:
+                            term_to_schema[term].add(column_name)
+                            term_to_schema[term].add(f"{table_name}.{column_name}")
+                    self.stats["llm_rewrites"] += 1
+                except Exception as e:
+                    logger.debug(f"LLM改写失败 '{column_name}': {e}")
+
+        # 属性业务定义 -> 关键词映射
         if attr_def and len(attr_def) >= self.min_term_length:
-            keywords = self.term_extractor.extract_meaningful_keywords(attr_def)
+            keywords = extract_clean_keywords(attr_def, min_length=self.min_term_length, max_length=10)
             for kw in keywords:
-                if len(kw) <= 50:
+                if len(kw) <= 30:
                     term_to_schema[kw].add(column_name)
                     term_to_schema[kw].add(f"{table_name}.{column_name}")
                     stats["terms_extracted"] += 1
@@ -166,6 +233,9 @@ class LLMEnhancedBusinessTermsGenerator:
                 "valid_rows": stats.get("valid_rows", 0),
                 "tables_count": len(stats.get("tables_found", set())),
                 "terms_count": stats.get("terms_extracted", 0),
+                "tables_filtered_by_priority": self.stats["tables_filtered_by_priority"],
+                "tables_by_priority": self.stats["tables_by_priority"],
+                "llm_rewrites": self.stats["llm_rewrites"],
             },
         }
 
@@ -284,45 +354,99 @@ Return ONLY a JSON object:
         term_to_schema: Dict[str, Set[str]],
         table_keywords: Dict[str, str]
     ):
-        """处理单行指标数据"""
+        """处理单行指标数据（支持文本清洗、表优先级过滤和LLM改写）"""
+        # 提取原始字段
         metric_name = HeaderParser.extract_field(row, ["指标名称"])
         biz_def = HeaderParser.extract_field(row, ["业务定义及说明", "业务定义"])
         biz_activity = HeaderParser.extract_field(row, ["业务活动"])
         category1 = HeaderParser.extract_field(row, ["分类1", "分类一", "一级分类"])
         category2 = HeaderParser.extract_field(row, ["分类2", "分类二", "二级分类"])
         source_model = HeaderParser.extract_field(row, ["来源dws模型", "dws模型", "来源模型", "来源表"])
+        calc_logic = HeaderParser.extract_field(row, ["计算公式/业务逻辑", "计算公式", "计算逻辑"])
+
+        # 文本清洗
+        if self.enable_text_cleaning:
+            metric_name = clean_excel_text(metric_name)
+            biz_def = clean_excel_text(biz_def, remove_newlines=True)
+            biz_activity = clean_excel_text(biz_activity)
+            category1 = clean_excel_text(category1)
+            category2 = clean_excel_text(category2)
+            calc_logic = clean_excel_text(calc_logic, remove_newlines=True)
 
         if not metric_name:
             return
 
+        # 表优先级过滤
         if source_model and HeaderParser.is_valid_table_name(source_model):
+            if not should_include_table(source_model, self.max_table_priority):
+                self.stats["tables_filtered_by_priority"] += 1
+                return
+            
+            # 统计表优先级
+            priority = get_table_priority(source_model)
+            self.stats["tables_by_priority"][priority.name] += 1
+
             term_to_table[metric_name].add(source_model)
 
+            # 添加业务活动映射
             if biz_activity:
                 composite_term = f"{biz_activity}_{metric_name}"
                 term_to_table[composite_term].add(source_model)
+                if len(biz_activity) >= self.min_term_length:
+                    term_to_table[biz_activity].add(source_model)
 
+            # 使用LLM改写指标定义（如果启用）
+            if self.use_llm and self.text_rewriter and biz_def:
+                try:
+                    rewritten = self.text_rewriter.rewrite_metric_definition(
+                        metric_name, biz_def, calc_logic
+                    )
+                    
+                    # 添加核心概念
+                    for concept in rewritten.get("core_concepts", []):
+                        if len(concept) <= 20:
+                            term_to_table[concept].add(source_model)
+                    
+                    # 添加检索关键词
+                    for term in rewritten.get("search_terms", []):
+                        if len(term) <= 20:
+                            term_to_table[term].add(source_model)
+                            table_keywords[term] = source_model
+                    
+                    # 添加同义词映射
+                    for term, synonyms in rewritten.get("synonyms", {}).items():
+                        for syn in synonyms:
+                            if len(syn) <= 20:
+                                term_to_table[syn].add(source_model)
+                    
+                    self.stats["llm_rewrites"] += 1
+                except Exception as e:
+                    logger.debug(f"LLM改写失败 '{metric_name}': {e}")
+
+        # 从业务定义提取关键词（使用清洗后的提取）
         if biz_def:
-            keywords = self.term_extractor.extract_business_keywords(biz_def)
+            keywords = extract_clean_keywords(biz_def, min_length=self.min_term_length, max_length=10)
             for kw in keywords:
-                if source_model and HeaderParser.is_valid_table_name(source_model):
+                if source_model and should_include_table(source_model, self.max_table_priority):
                     term_to_table[kw].add(source_model)
-                    if len(kw) >= 4:
+                    if len(kw) >= 4 and len(kw) <= 20:
                         table_keywords[kw] = source_model
 
+        # 从指标名称提取术语
         if metric_name:
             metric_terms = self.term_extractor.extract_metric_terms(metric_name)
             for term in metric_terms:
-                if source_model and HeaderParser.is_valid_table_name(source_model):
+                if source_model and should_include_table(source_model, self.max_table_priority):
                     term_to_table[term].add(source_model)
-                    if len(term) >= 2:
+                    if len(term) >= 2 and len(term) <= 20:
                         table_keywords[term] = source_model
 
+        # 处理分类
         for category in [category1, category2]:
             if category and len(category) >= self.min_term_length and HeaderParser.is_meaningful_term(category):
                 clean_cat = category.strip()
                 if clean_cat and clean_cat.lower() not in ['nan', 'none', 'null', '']:
-                    if source_model and HeaderParser.is_valid_table_name(source_model):
+                    if source_model and should_include_table(source_model, self.max_table_priority):
                         term_to_table[clean_cat].add(source_model)
-                        if len(clean_cat) >= 2:
+                        if len(clean_cat) >= 2 and len(clean_cat) <= 20:
                             table_keywords[clean_cat] = source_model

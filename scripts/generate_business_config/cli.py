@@ -18,6 +18,7 @@ from datus.utils.loggings import configure_logging, get_logger
 
 from .generators import BusinessTermsGenerator, MetricsCatalogGenerator, LLMEnhancedBusinessTermsGenerator
 from .processors import DdlMerger, ExtKnowledgeImporter
+from .shared import TablePriority
 
 logger = get_logger(__name__)
 
@@ -98,6 +99,23 @@ Examples:
         action="store_true",
         help="Import metrics catalog to ext_knowledge table in LanceDB",
     )
+    parser.add_argument(
+        "--max-table-priority",
+        choices=["DIM", "DWD", "DWS", "ADS", "ODS"],
+        default="ADS",
+        help="Maximum table priority to include (default: ADS, excludes ODS). "
+             "Priority order: DIM < DWD < DWS < ADS < ODS",
+    )
+    parser.add_argument(
+        "--disable-text-cleaning",
+        action="store_true",
+        help="Disable Excel text cleaning (enabled by default)",
+    )
+    parser.add_argument(
+        "--rewrite-with-llm",
+        action="store_true",
+        help="Use LLM to rewrite metric definitions for better searchability (requires --use-llm)",
+    )
 
     return parser
 
@@ -110,14 +128,33 @@ class BusinessConfigCLI:
         self.min_term_length = args.min_term_length
         self.use_llm = args.use_llm
         self.include_confidence = args.include_confidence
+        self.rewrite_with_llm = args.rewrite_with_llm
+        
+        # 表优先级设置
+        priority_map = {
+            "DIM": TablePriority.DIM,
+            "DWD": TablePriority.DWD,
+            "DWS": TablePriority.DWS,
+            "ADS": TablePriority.ADS,
+            "ODS": TablePriority.ODS,
+        }
+        self.max_table_priority = priority_map[args.max_table_priority]
+        self.enable_text_cleaning = not args.disable_text_cleaning
+        
         self.metrics_catalog_gen = MetricsCatalogGenerator(self.min_term_length)
 
         # 根据 use_llm 选择生成器
         if self.use_llm:
             logger.info("LLM enhancement enabled for term extraction and conflict resolution")
+            if self.rewrite_with_llm:
+                logger.info("LLM rewriting enabled for metric definitions")
             self.business_terms_gen = None  # 初始化时不需要，传agent_config
         else:
-            self.business_terms_gen = BusinessTermsGenerator(self.min_term_length)
+            self.business_terms_gen = BusinessTermsGenerator(
+                min_term_length=self.min_term_length,
+                max_table_priority=self.max_table_priority,
+                enable_text_cleaning=self.enable_text_cleaning,
+            )
 
     def run(self) -> int:
         """执行CLI主流程"""
@@ -135,7 +172,12 @@ class BusinessConfigCLI:
         if self.args.arch_xlsx:
             if self.use_llm:
                 llm_gen = LLMEnhancedBusinessTermsGenerator(
-                    agent_config, self.args.namespace, self.min_term_length, use_llm=True
+                    agent_config=agent_config,
+                    namespace=self.args.namespace,
+                    min_term_length=self.min_term_length,
+                    use_llm=True,
+                    max_table_priority=self.max_table_priority,
+                    enable_text_cleaning=self.enable_text_cleaning,
                 )
                 business_terms = llm_gen.generate_from_architecture_xlsx(
                     Path(self.args.arch_xlsx), header_rows=3, sheet_name=self.args.arch_sheet_name
@@ -154,7 +196,12 @@ class BusinessConfigCLI:
                 business_terms = {"term_to_table": {}, "term_to_schema": {}, "table_keywords": {}}
             if self.use_llm:
                 llm_gen = LLMEnhancedBusinessTermsGenerator(
-                    agent_config, self.args.namespace, self.min_term_length, use_llm=True
+                    agent_config=agent_config,
+                    namespace=self.args.namespace,
+                    min_term_length=self.min_term_length,
+                    use_llm=True,
+                    max_table_priority=self.max_table_priority,
+                    enable_text_cleaning=self.enable_text_cleaning,
                 )
                 business_terms = llm_gen.generate_from_metrics_xlsx(
                     Path(self.args.metrics_xlsx), business_terms, header_rows=2, sheet_name=self.args.metrics_sheet_name
