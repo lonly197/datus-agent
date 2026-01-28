@@ -180,20 +180,31 @@ class BusinessConfigGenerator:
             "terms_extracted": 0,
         }
 
-        # 读取前10行来确定实际的列名（处理多行表头）
+        # 智能检测表头：读取前10行找到真正的列名行
+        # 真正的列名行包含"物理表名"、"字段名"等关键词
         with open(csv_path, "r", encoding="utf-8-sig") as f:
-            # 跳过前5行的标题/说明行
-            for _ in range(5):
-                next(f, None)
-            
-            reader = csv.DictReader(f)
-            
-            # 打印实际的列名用于调试
-            if reader.fieldnames:
-                logger.info(f"[CSV解析] 数据架构文件列名: {list(reader.fieldnames)}")
-                logger.debug(f"[CSV解析] 完整列名详情: {reader.fieldnames}")
-            
-            for row in reader:
+            lines = f.readlines()
+        
+        # 找到包含关键列名的行作为表头
+        header_row_idx = 0
+        expected_columns = ["物理表名", "字段名", "属性（中文）", "分析对象（中文）"]
+        for i, line in enumerate(lines[:10]):  # 只检查前10行
+            if any(col in line for col in expected_columns):
+                header_row_idx = i
+                logger.info(f"[CSV解析] 找到表头在第 {i+1} 行: {line[:100]}...")
+                break
+        
+        # 从表头行开始读取
+        import io
+        csv_content = ''.join(lines[header_row_idx:])
+        reader = csv.DictReader(io.StringIO(csv_content))
+        
+        # 打印实际的列名用于调试
+        if reader.fieldnames:
+            logger.info(f"[CSV解析] 数据架构文件列名: {list(reader.fieldnames)}")
+            logger.debug(f"[CSV解析] 完整列名详情: {reader.fieldnames}")
+        
+        for row in reader:
                 stats["total_rows"] += 1
 
                 # 提取关键字段（使用实际的列名，兼容不同版本）
@@ -207,8 +218,12 @@ class BusinessConfigGenerator:
                 logic_entity = self._extract_field(row, ["逻辑实体（中文）", "逻辑实体", "entity_cn", "逻辑表名"])
                 logic_entity_def = self._extract_field(row, ["逻辑实体业务含义", "实体业务含义", "entity_def"])
 
-                # 验证表名和字段名 - 必须是以字母开头的有效标识符
-                if not self._is_valid_table_name(table_name) or not self._is_valid_column_name(column_name):
+                # 验证表名和字段名 - 必须是以字母开头的有效标识符（启用详细调试）
+                table_valid = self._is_valid_table_name(table_name, verbose=(stats['total_rows'] <= 10))
+                column_valid = self._is_valid_column_name(column_name)
+                if not table_valid or not column_valid:
+                    if stats['total_rows'] <= 20:  # 只在前20行显示调试信息
+                        logger.debug(f"[过滤] 表 '{table_name}' 或字段 '{column_name}' 验证失败 (表:{table_valid}, 字段:{column_valid})")
                     continue
 
                 stats["valid_rows"] += 1
@@ -309,19 +324,29 @@ class BusinessConfigGenerator:
 
         stats = {"total_metrics": 0, "valid_metrics": 0, "tables_added": set()}
 
+        # 智能检测表头：指标清单CSV前7行是说明，第8行是列名
         with open(csv_path, "r", encoding="utf-8-sig") as f:
-            # 跳过前7行的说明行
-            for _ in range(7):
-                next(f, None)
-            
-            reader = csv.DictReader(f)
-            
-            # 打印列名用于调试
-            if reader.fieldnames:
-                logger.info(f"[CSV解析] 指标清单文件列名: {list(reader.fieldnames)}")
-                logger.debug(f"[CSV解析] 完整列名详情: {reader.fieldnames}")
-            
-            for row in reader:
+            lines = f.readlines()
+        
+        # 找到包含"指标编码"、"指标名称"的行作为表头
+        header_row_idx = 7  # 默认第8行
+        for i, line in enumerate(lines[:15]):  # 检查前15行
+            if "指标编码" in line and "指标名称" in line:
+                header_row_idx = i
+                logger.info(f"[CSV解析] 指标清单表头在第 {i+1} 行")
+                break
+        
+        # 从表头行开始读取
+        import io
+        csv_content = ''.join(lines[header_row_idx:])
+        reader = csv.DictReader(io.StringIO(csv_content))
+        
+        # 打印列名用于调试
+        if reader.fieldnames:
+            logger.info(f"[CSV解析] 指标清单文件列名: {list(reader.fieldnames)}")
+            logger.debug(f"[CSV解析] 完整列名详情: {reader.fieldnames}")
+        
+        for row in reader:
                 stats["total_metrics"] += 1
 
                 # 尝试多种可能的列名
@@ -416,11 +441,12 @@ class BusinessConfigGenerator:
 
                 ddl_stats["tables_checked"] += 1
 
-                # 1. 表注释作为关键词
+                # 1. 表注释作为关键词（使用有意义的关键词提取）
                 if table_comment and len(table_comment) > 2:
-                    keywords = self._extract_keywords(table_comment, min_length=3)
+                    keywords = self._extract_meaningful_keywords(table_comment, min_length=3)
                     for kw in keywords:
-                        term_to_table[kw].add(table_name)
+                        if self._is_meaningful_term(kw):
+                            term_to_table[kw].add(table_name)
 
                 # 2. 字段注释映射
                 try:
@@ -441,10 +467,11 @@ class BusinessConfigGenerator:
                         term_to_schema[comment].add(col_name)
                         ddl_stats["terms_added"] += 1
 
-                        # 提取关键词
-                        keywords = self._extract_keywords(comment, min_length=2)
+                        # 提取有意义的关键词
+                        keywords = self._extract_meaningful_keywords(comment, min_length=2)
                         for kw in keywords:
-                            term_to_schema[kw].add(col_name)
+                            if self._is_meaningful_term(kw):
+                                term_to_schema[kw].add(col_name)
 
         except Exception as e:
             logger.warning(f"Failed to merge DDL comments: {e}")
