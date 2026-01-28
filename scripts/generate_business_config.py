@@ -429,6 +429,90 @@ class BusinessConfigGenerator:
             },
         }
 
+    def _load_architecture_entity_mapping(self, arch_xlsx_path: Path) -> Dict[str, List[str]]:
+        """
+        从数据架构Excel加载逻辑实体（中文）到物理表名的映射
+        
+        用于将Sheet1的"来源dws模型"中文描述（如"原始线索聚合明细"）
+        映射到物理表名（如"dws_obtain_original_clue_2h_di"）
+        
+        Returns:
+            Dict[逻辑实体中文名, 物理表名列表]
+        """
+        entity_to_tables = {}
+        
+        try:
+            df = pd.read_excel(arch_xlsx_path, header=1)  # 第2行是实际列名
+            logger.info(f"[数据架构] 加载了 {len(df)} 行架构数据")
+            
+            for _, row in df.iterrows():
+                table_name = str(row.get('物理表名', '')).strip() if pd.notna(row.get('物理表名')) else ''
+                entity = str(row.get('逻辑实体（中文）', '')).strip() if pd.notna(row.get('逻辑实体（中文）')) else ''
+                
+                if not table_name or not entity:
+                    continue
+                if table_name == '定义物理表名' or entity == '定义逻辑实体中文名':
+                    continue  # 跳过表头行
+                
+                if entity not in entity_to_tables:
+                    entity_to_tables[entity] = []
+                if table_name not in entity_to_tables[entity]:
+                    entity_to_tables[entity].append(table_name)
+            
+            logger.info(f"[数据架构] 建立了 {len(entity_to_tables)} 个逻辑实体映射")
+            
+            # 显示包含"明细"的实体样例
+            sample_entities = [e for e in entity_to_tables.keys() if '明细' in e][:5]
+            for e in sample_entities:
+                logger.info(f"[数据架构] 样例: {e} -> {entity_to_tables[e][:2]}")
+            
+        except Exception as e:
+            logger.warning(f"[数据架构] 加载逻辑实体映射失败: {e}")
+        
+        return entity_to_tables
+
+    def _match_chinese_model_to_entity(
+        self, 
+        chinese_model: str, 
+        entity_to_tables: Dict[str, List[str]]
+    ) -> List[str]:
+        """
+        将Sheet1的中文模型描述（如"原始线索聚合明细"）匹配到物理表名
+        
+        匹配策略：
+        1. 精确匹配
+        2. 包含匹配（chinese_model 是 entity 的子串）
+        3. 关键词匹配（提取核心业务词）
+        """
+        if not chinese_model or len(chinese_model) < 2:
+            return []
+        
+        chinese_clean = chinese_model.strip()
+        
+        # 1. 精确匹配
+        if chinese_clean in entity_to_tables:
+            return entity_to_tables[chinese_clean]
+        
+        # 2. 包含匹配（Sheet1的"原始线索聚合明细"匹配"原始线索聚合明细（油+电）"）
+        for entity, tables in entity_to_tables.items():
+            if chinese_clean in entity:
+                return tables
+        
+        # 3. 关键词匹配（提取核心业务词如"线索"、"试驾"等）
+        keywords = self._extract_core_keywords(chinese_clean)
+        if keywords:
+            best_match = None
+            best_score = 0
+            for entity, tables in entity_to_tables.items():
+                score = sum(1 for kw in keywords if kw in entity)
+                if score > best_score:
+                    best_score = score
+                    best_match = tables
+            if best_match and best_score >= 2:  # 至少匹配2个关键词
+                return best_match
+        
+        return []
+
     def _load_metrics_code_to_tables_mapping(self, xlsx_path: Path) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
         """
         从Sheet2读取指标映射关系
@@ -490,10 +574,8 @@ class BusinessConfigGenerator:
                     code_to_tables[code] = tables
                 
                 # 映射2: 中文描述 -> 表名（用于匹配Sheet1）
-                if metric_def and metric_def != 'nan' and len(metric_def) > 2:
-                    # 清理中文描述（去除换行、多余空格）
-                    clean_def = ' '.join(metric_def.split())
-                    chinese_to_tables[clean_def] = tables
+                # 注意：Sheet2的"指标定义"是详细业务定义，不是"来源dws模型"值
+                # 这里存储的目的是辅助匹配，主要匹配逻辑在 _match_chinese_model_to_entity
                     # 同时存储前10个字符的简短版本（应对截断情况）
                     if len(clean_def) > 10:
                         chinese_to_tables[clean_def[:10]] = tables
@@ -604,15 +686,25 @@ class BusinessConfigGenerator:
         table_comments = {}
         
         try:
-            # 确保表已就绪
-            self.schema_storage._ensure_table_ready()
+            import lancedb
+            
+            # 直接连接LanceDB，不依赖schema_storage
+            db = lancedb.connect(self.db_path)
+            
+            # 检查schema_metadata表是否存在
+            if "schema_metadata" not in db.table_names():
+                logger.warning("[LanceDB] schema_metadata表不存在")
+                return table_comments
             
             # 读取所有schema记录
-            all_records = self.schema_storage.table.to_pandas()
+            table = db.open_table("schema_metadata")
+            all_records = table.to_pandas()
             
             if all_records is None or all_records.empty:
                 logger.warning("[LanceDB] schema表为空")
                 return table_comments
+            
+            logger.info(f"[LanceDB] 从 {self.db_path} 读取到 {len(all_records)} 条schema记录")
             
             # 提取table_name和table_comment
             for _, row in all_records.iterrows():
@@ -622,10 +714,15 @@ class BusinessConfigGenerator:
                 if table_name and isinstance(table_name, str):
                     table_comments[table_name] = str(comment) if comment else ''
             
+            # 显示样本
+            sample_tables = list(table_comments.keys())[:3]
             logger.info(f"[LanceDB] 加载了 {len(table_comments)} 个表的comment信息")
+            logger.info(f"[LanceDB] 样例: {[(t, table_comments[t][:30]) for t in sample_tables]}")
             
         except Exception as e:
             logger.warning(f"[LanceDB] 加载表comment失败: {e}")
+            import traceback
+            logger.debug(f"[LanceDB] 错误详情: {traceback.format_exc()}")
         
         return table_comments
 
@@ -679,7 +776,8 @@ class BusinessConfigGenerator:
         existing_terms: Dict,
         header_rows: int = 2,
         min_term_length: int = 2,
-        sheet_name = None
+        sheet_name = None,
+        arch_xlsx_path: Path = None
     ) -> Dict:
         """
         从指标清单Excel提取text2sql关键映射
@@ -718,6 +816,7 @@ class BusinessConfigGenerator:
             "with_tables": 0,           # 成功关联到表的指标数
             "tables_added": set(),      # 涉及的物理表集合
             "sheet2_matched": 0,        # 通过Sheet2编码精确匹配的数量
+            "entity_matched": 0,        # 通过数据架构逻辑实体匹配的数量
             "sheet2_chinese_matched": 0,  # 通过Sheet2中文描述匹配的数量
             "lancedb_matched": 0,       # 通过LanceDB table_comment匹配的数量
         }
@@ -725,7 +824,13 @@ class BusinessConfigGenerator:
         # 步骤1: 从Sheet2加载编码->表名映射，同时构建中文描述->表名映射
         code_to_tables, chinese_to_tables = self._load_metrics_code_to_tables_mapping(xlsx_path)
         
-        # 步骤1.5: 从LanceDB加载table_comment信息（用于中文描述匹配）
+        # 步骤1.5: 从数据架构Excel加载逻辑实体->表名映射（关键！）
+        # 用于将Sheet1的"来源dws模型"中文描述（如"原始线索聚合明细"）映射到物理表名
+        entity_to_tables = {}
+        if arch_xlsx_path and arch_xlsx_path.exists():
+            entity_to_tables = self._load_architecture_entity_mapping(arch_xlsx_path)
+        
+        # 步骤1.6: 从LanceDB加载table_comment信息（用于中文描述匹配）
         lancedb_table_comments = self._load_table_comments_from_lancedb()
 
         # 步骤2: 读取Sheet1（主指标清单）
@@ -784,7 +889,17 @@ class BusinessConfigGenerator:
                 source_tables = [source_model]
                 match_source = "sheet1_direct"
             
-            # 策略3: Sheet1的"来源dws模型"是中文描述，用Sheet2映射匹配
+            # 策略3: Sheet1的"来源dws模型"是中文描述，用数据架构逻辑实体映射匹配（关键！）
+            elif source_model and entity_to_tables:
+                matched = self._match_chinese_model_to_entity(source_model, entity_to_tables)
+                if matched:
+                    source_tables = matched
+                    match_source = "arch_entity"
+                    stats["entity_matched"] = stats.get("entity_matched", 0) + 1
+                    if stats.get("entity_matched", 0) <= 3:
+                        logger.info(f"[实体匹配] {metric_name}: '{source_model}' -> {matched}")
+            
+            # 策略4: Sheet1的"来源dws模型"是中文描述，用Sheet2映射匹配
             elif source_model:
                 # 清理输入的中文描述
                 clean_source = ' '.join(source_model.split())
@@ -798,7 +913,7 @@ class BusinessConfigGenerator:
                     source_tables = chinese_to_tables[clean_source[:10]]
                     match_source = "sheet2_chinese_prefix"
                     stats["sheet2_chinese_matched"] += 1
-                # 策略4: 使用LanceDB的table_comment进行模糊匹配
+                # 策略5: 使用LanceDB的table_comment进行模糊匹配
                 elif lancedb_table_comments:
                     matched = self._match_chinese_to_table_by_comment(
                         clean_source, lancedb_table_comments
@@ -838,6 +953,7 @@ class BusinessConfigGenerator:
         # 统计各种匹配来源
         sheet2_chinese_matched = stats.get('sheet2_chinese_matched', 0)
         lancedb_matched = stats.get('lancedb_matched', 0)
+        entity_matched = stats.get('entity_matched', 0)
         
         logger.info(
             f"[指标清单] text2sql映射生成: {stats['with_tables']}/{stats['valid_metrics']} 指标关联表, "
@@ -845,6 +961,7 @@ class BusinessConfigGenerator:
         )
         logger.info(
             f"[指标清单] 匹配来源: {stats['sheet2_matched']}个编码精确匹配, "
+            f"{entity_matched}个数据架构实体匹配, "
             f"{sheet2_chinese_matched}个Sheet2中文匹配, "
             f"{lancedb_matched}个LanceDB注释匹配"
         )
@@ -1823,9 +1940,11 @@ Examples:
                 "table_keywords": {},
             }
 
+        # 传入数据架构Excel路径，用于中文描述到物理表名的映射
+        arch_path = Path(args.arch_xlsx) if args.arch_xlsx else None
         business_terms = generator.generate_from_metrics_xlsx(
             metrics_path, business_terms, header_rows=2, min_term_length=args.min_term_length,
-            sheet_name=args.metrics_sheet_name
+            sheet_name=args.metrics_sheet_name, arch_xlsx_path=arch_path
         )
 
     elif args.metrics_csv:
