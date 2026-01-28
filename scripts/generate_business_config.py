@@ -1607,6 +1607,11 @@ class BusinessConfigGenerator:
             # 初始化 ExtKnowledgeStore
             ext_store = ExtKnowledgeStore(db_path=self.db_path)
             
+            # 调试：显示表schema
+            ext_store._ensure_table_ready()
+            if ext_store.table:
+                logger.info(f"[ExtKnowledge] 表schema: {ext_store.table.schema}")
+            
             # 如果需要清空现有Metrics数据
             if clear_existing:
                 logger.info("[ExtKnowledge] 清空现有Metrics分类数据...")
@@ -1615,15 +1620,42 @@ class BusinessConfigGenerator:
             
             # 批量导入
             logger.info(f"[ExtKnowledge] 开始导入 {len(metrics_catalog)} 个指标...")
-            ext_store.batch_store_knowledge(metrics_catalog)
             
-            logger.info(f"[ExtKnowledge] 成功导入 {len(metrics_catalog)} 个指标到 ext_knowledge 表")
-            return len(metrics_catalog)
+            # 调试：显示第一个条目的字段
+            if metrics_catalog:
+                first_entry = metrics_catalog[0]
+                logger.info(f"[ExtKnowledge] 第一个条目字段: {list(first_entry.keys())}")
+                logger.info(f"[ExtKnowledge] 第一个条目: {first_entry}")
+            
+            # 分批导入，便于定位问题
+            batch_size = 50
+            imported_count = 0
+            for i in range(0, len(metrics_catalog), batch_size):
+                batch = metrics_catalog[i:i+batch_size]
+                try:
+                    ext_store.batch_store_knowledge(batch)
+                    imported_count += len(batch)
+                    logger.info(f"[ExtKnowledge] 已导入 {imported_count}/{len(metrics_catalog)} 个指标")
+                except Exception as batch_e:
+                    logger.error(f"[ExtKnowledge] 批次 {i//batch_size + 1} 导入失败: {batch_e}")
+                    # 尝试单条导入定位问题
+                    for j, entry in enumerate(batch):
+                        try:
+                            ext_store.batch_store_knowledge([entry])
+                            imported_count += 1
+                        except Exception as entry_e:
+                            logger.error(f"[ExtKnowledge] 条目 {i+j} 导入失败: {entry}")
+                            logger.error(f"[ExtKnowledge] 错误: {entry_e}")
+                            break
+                    break
+            
+            logger.info(f"[ExtKnowledge] 成功导入 {imported_count} 个指标到 ext_knowledge 表")
+            return imported_count
             
         except Exception as e:
             logger.error(f"[ExtKnowledge] 导入失败: {e}")
             import traceback
-            logger.debug(f"[ExtKnowledge] 错误详情: {traceback.format_exc()}")
+            logger.error(f"[ExtKnowledge] 错误详情: {traceback.format_exc()}")
             return 0
 
     def _extract_field(self, row: Dict, possible_names: List[str], debug: bool = False) -> str:
