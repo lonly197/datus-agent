@@ -17,6 +17,6 @@ New module structure:
 """
 
 # Backward compatibility: re-export from new location
-from datus.agent.runner import WorkflowExecutor
+from datus.agent.runner import WorkflowExecutor, WorkflowRunner
 
-__all__ = ["WorkflowExecutor"]
+__all__ = ["WorkflowExecutor", "WorkflowRunner"]

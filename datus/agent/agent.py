@@ -7,7 +7,7 @@ import asyncio
 import os
 from typing import Any, AsyncGenerator, Dict, Optional
 
-from datus.agent.workflow_runner import WorkflowRunner
+from datus.agent.runner import WorkflowExecutor
 from datus.configuration.agent_config import AgentConfig
 from datus.models.base import LLMBaseModel
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
@@ -71,9 +71,9 @@ class Agent:
 
     def create_workflow_runner(
         self, check_db: bool = True, run_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None
-    ) -> WorkflowRunner:
+    ) -> WorkflowExecutor:
         """Create a workflow runner that can safely execute in isolation."""
-        return WorkflowRunner(
+        return WorkflowExecutor(
             self.args,
             self.global_config,
             pre_run_callable=self.check_db if check_db else None,

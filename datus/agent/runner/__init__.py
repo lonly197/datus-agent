@@ -14,4 +14,7 @@ Refactored from workflow_runner.py into focused sub-modules:
 
 from .workflow_executor import WorkflowExecutor
 
-__all__ = ["WorkflowExecutor"]
+# Backward compatibility alias
+WorkflowRunner = WorkflowExecutor
+
+__all__ = ["WorkflowExecutor", "WorkflowRunner"]
