@@ -157,7 +157,7 @@ class BusinessConfigGenerator:
         
         logger.info(f"Initialized generator for namespace: {namespace}, db_path: {self.db_path}, use_llm: {use_llm}")
 
-    def _read_excel_with_header(self, xlsx_path: Path, header_rows: int, sheet_name: int = 0) -> List[Dict]:
+    def _read_excel_with_header(self, xlsx_path: Path, header_rows: int, sheet_name = None) -> List[Dict]:
         """
         读取Excel文件，智能处理多行表头
         
@@ -169,7 +169,7 @@ class BusinessConfigGenerator:
         Args:
             xlsx_path: Excel文件路径
             header_rows: 表头行数（用于确定实际列名所在行）
-            sheet_name: 工作表索引，默认第一个
+            sheet_name: 工作表名称或索引（None时自动检测：优先'Sheet1'，否则第一个）
             
         Returns:
             List[Dict]: 数据行列表
@@ -179,6 +179,27 @@ class BusinessConfigGenerator:
             return []
         
         try:
+            # 如果没有指定sheet_name，自动检测
+            if sheet_name is None:
+                # 获取所有sheet名称
+                xl = pd.ExcelFile(xlsx_path)
+                sheet_names = xl.sheet_names
+                
+                # 优先查找 "Sheet1"，否则使用第一个sheet
+                if "Sheet1" in sheet_names:
+                    sheet_name = "Sheet1"
+                    logger.info(f"[Excel读取] 自动选择工作表: 'Sheet1'")
+                else:
+                    sheet_name = 0  # 第一个sheet
+                    logger.info(f"[Excel读取] 自动选择第一个工作表: '{sheet_names[0]}'")
+            else:
+                # 尝试将数字字符串转为整数
+                try:
+                    sheet_name = int(sheet_name)
+                    logger.info(f"[Excel读取] 使用工作表索引: {sheet_name}")
+                except ValueError:
+                    logger.info(f"[Excel读取] 使用工作表名称: '{sheet_name}'")
+            
             # 智能表头检测：
             # - 如果 header_rows=3，表示第2行（索引1）是实际列名
             # - 如果 header_rows=2，表示第1行（索引0）是实际列名
@@ -245,7 +266,8 @@ class BusinessConfigGenerator:
         self,
         xlsx_path: Path,
         header_rows: int = 3,
-        min_term_length: int = 2
+        min_term_length: int = 2,
+        sheet_name = None
     ) -> Dict:
         """
         从数据架构Excel生成业务术语映射（支持多行表头）
@@ -254,6 +276,7 @@ class BusinessConfigGenerator:
             xlsx_path: Excel文件路径
             header_rows: 表头行数（数据架构设计文档为3行）
             min_term_length: 最小术语长度
+            sheet_name: 工作表名称或索引（None时自动检测）
         """
         logger.info(f"Processing architecture Excel: {xlsx_path}")
 
@@ -268,7 +291,7 @@ class BusinessConfigGenerator:
             "terms_extracted": 0,
         }
 
-        records = self._read_excel_with_header(xlsx_path, header_rows)
+        records = self._read_excel_with_header(xlsx_path, header_rows, sheet_name)
         
         if not records:
             logger.warning("[Excel读取] 未读取到有效数据")
@@ -377,7 +400,8 @@ class BusinessConfigGenerator:
         xlsx_path: Path,
         existing_terms: Dict,
         header_rows: int = 2,
-        min_term_length: int = 2
+        min_term_length: int = 2,
+        sheet_name = None
     ) -> Dict:
         """
         从指标清单Excel补充业务术语映射（支持多行表头）
@@ -387,6 +411,7 @@ class BusinessConfigGenerator:
             existing_terms: 已有的术语映射
             header_rows: 表头行数（指标清单为2行）
             min_term_length: 最小术语长度
+            sheet_name: 工作表名称或索引（None时自动检测）
         """
         logger.info(f"Processing metrics Excel: {xlsx_path}")
 
@@ -396,7 +421,7 @@ class BusinessConfigGenerator:
 
         stats = {"total_metrics": 0, "valid_metrics": 0, "tables_added": set()}
 
-        records = self._read_excel_with_header(xlsx_path, header_rows)
+        records = self._read_excel_with_header(xlsx_path, header_rows, sheet_name)
         
         if not records:
             logger.warning("[Excel读取] 指标清单未读取到有效数据")
@@ -409,6 +434,14 @@ class BusinessConfigGenerator:
                     "metrics_tables": 0,
                 }},
             }
+
+        # 调试：打印第一条记录的所有列名和值
+        if records:
+            logger.info(f"[指标清单调试] 第一条记录的所有列: {list(records[0].keys())}")
+            logger.info(f"[指标清单调试] 第一条记录样本值: { {k: v for k, v in list(records[0].items())[:10] if v} }")
+            # 尝试查找包含'dws'的列名
+            dws_cols = [k for k in records[0].keys() if 'dws' in k.lower() or '来源' in k or '模型' in k]
+            logger.info(f"[指标清单调试] 可能的DWS列名: {dws_cols}")
 
         for row in records:
             stats["total_metrics"] += 1
@@ -1270,6 +1303,15 @@ Examples:
       --merge-ddl \\
       --verbose
 
+  # 指定工作表名称或索引
+  python scripts/generate_business_config.py \\
+      --config=conf/agent.yml \\
+      --namespace=test \\
+      --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \\
+      --arch-sheet-name="Sheet1" \\
+      --metrics-xlsx=/path/to/指标清单v2.4.xlsx \\
+      --metrics-sheet-name=0
+
   # [兼容] 从CSV生成（需确保表头正确）
   python scripts/generate_business_config.py \\
       --config=conf/agent.yml \\
@@ -1294,6 +1336,18 @@ Examples:
     parser.add_argument("--metrics-csv", help="Path to 指标清单 CSV file (legacy, optional)")
     parser.add_argument("--arch-xlsx", help="Path to 数据架构详细设计 Excel file (推荐, 支持多行表头)")
     parser.add_argument("--metrics-xlsx", help="Path to 指标清单 Excel file (推荐, 支持多行表头)")
+    parser.add_argument(
+        "--arch-sheet-name",
+        dest="arch_sheet_name",
+        default=None,
+        help="Sheet name or index for architecture Excel (default: first sheet or 'Sheet1')",
+    )
+    parser.add_argument(
+        "--metrics-sheet-name",
+        dest="metrics_sheet_name",
+        default=None,
+        help="Sheet name or index for metrics Excel (default: first sheet or 'Sheet1')",
+    )
     parser.add_argument(
         "--output",
         default="conf/business_terms.yml",
@@ -1366,7 +1420,8 @@ Examples:
             sys.exit(1)
 
         business_terms = generator.generate_from_architecture_xlsx(
-            arch_path, header_rows=3, min_term_length=args.min_term_length
+            arch_path, header_rows=3, min_term_length=args.min_term_length,
+            sheet_name=args.arch_sheet_name
         )
 
     elif args.arch_csv:
@@ -1398,7 +1453,8 @@ Examples:
             }
 
         business_terms = generator.generate_from_metrics_xlsx(
-            metrics_path, business_terms, header_rows=2, min_term_length=args.min_term_length
+            metrics_path, business_terms, header_rows=2, min_term_length=args.min_term_length,
+            sheet_name=args.metrics_sheet_name
         )
 
     elif args.metrics_csv:
