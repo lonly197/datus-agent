@@ -101,41 +101,41 @@ class SchemaValidationNode(Node, LLMMixin):
                 yield await self._handle_no_schemas_failure(task)
                 return
 
-        # Step 2-4: Validate schemas and check coverage
-        validation_result = await self._validate_schema_coverage(task, context)
+            # Step 2-4: Validate schemas and check coverage
+            validation_result = await self._validate_schema_coverage(task, context)
 
-        # Set result based on validation
-        hard_block = not validation_result["is_sufficient"] and (
-            validation_result["coverage_score"] < 0.2
-            or len(validation_result.get("critical_terms_uncovered", [])) > 0
-        )
-        self.last_action_status = (
-            ActionStatus.SUCCESS
-            if validation_result["is_sufficient"]
-            else (ActionStatus.FAILED if hard_block else ActionStatus.SOFT_FAILED)
-        )
+            # Set result based on validation
+            hard_block = not validation_result["is_sufficient"] and (
+                validation_result["coverage_score"] < 0.2
+                or len(validation_result.get("critical_terms_uncovered", [])) > 0
+            )
+            self.last_action_status = (
+                ActionStatus.SUCCESS
+                if validation_result["is_sufficient"]
+                else (ActionStatus.FAILED if hard_block else ActionStatus.SOFT_FAILED)
+            )
 
-        self.result = BaseResult(
-            success=validation_result["is_sufficient"],
-            error=None
-            if validation_result["is_sufficient"]
-            else "Schema validation failed: Insufficient coverage",
-            data=validation_result,
-        )
+            self.result = BaseResult(
+                success=validation_result["is_sufficient"],
+                error=None
+                if validation_result["is_sufficient"]
+                else "Schema validation failed: Insufficient coverage",
+                data=validation_result,
+            )
 
-        # Persist validation snapshot for downstream nodes / reflection
-        if self.workflow is not None:
-            if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
-                self.workflow.metadata = {}
-            self.workflow.metadata["schema_validation"] = validation_result
-            if hard_block:
-                from datus.agent.workflow_status import WorkflowTerminationStatus
+            # Persist validation snapshot for downstream nodes / reflection
+            if self.workflow is not None:
+                if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
+                    self.workflow.metadata = {}
+                self.workflow.metadata["schema_validation"] = validation_result
+                if hard_block:
+                    from datus.agent.workflow_status import WorkflowTerminationStatus
 
-                self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
-                self.workflow.metadata["termination_reason"] = "schema_insufficient_coverage"
+                    self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
+                    self.workflow.metadata["termination_reason"] = "schema_insufficient_coverage"
 
-        # Emit validation result
-        yield self._create_validation_action(validation_result, task, hard_block)
+            # Emit validation result
+            yield self._create_validation_action(validation_result, task, hard_block)
 
             logger.info(
                 f"Schema validation completed: is_sufficient={validation_result['is_sufficient']}, "
