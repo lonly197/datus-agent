@@ -324,16 +324,19 @@ class BusinessConfigGenerator:
 
         stats = {"total_metrics": 0, "valid_metrics": 0, "tables_added": set()}
 
-        # 智能检测表头：指标清单CSV前7行是说明，第8行是列名
+        # 智能检测表头：指标清单CSV结构复杂，需要检测真正的列名行
         with open(csv_path, "r", encoding="utf-8-sig") as f:
             lines = f.readlines()
         
-        # 找到包含"指标编码"、"指标名称"的行作为表头
+        # 找到包含关键列名（业务活动、指标编码、指标名称）的行作为表头
         header_row_idx = 7  # 默认第8行
-        for i, line in enumerate(lines[:15]):  # 检查前15行
-            if "指标编码" in line and "指标名称" in line:
+        expected_cols = ["业务活动", "指标编码", "指标名称"]
+        for i, line in enumerate(lines[:20]):  # 检查前20行
+            # 检查是否包含至少2个关键列名
+            match_count = sum(1 for col in expected_cols if col in line)
+            if match_count >= 2:
                 header_row_idx = i
-                logger.info(f"[CSV解析] 指标清单表头在第 {i+1} 行")
+                logger.info(f"[CSV解析] 指标清单表头在第 {i+1} 行: {line[:80]}...")
                 break
         
         # 从表头行开始读取
@@ -347,44 +350,44 @@ class BusinessConfigGenerator:
             logger.debug(f"[CSV解析] 完整列名详情: {reader.fieldnames}")
         
         for row in reader:
-                stats["total_metrics"] += 1
+            stats["total_metrics"] += 1
 
-                # 尝试多种可能的列名
-                metric_code = self._extract_field(row, ["指标编码", "metric_code", "编码"])
-                metric_name = self._extract_field(row, ["指标名称", "metric_name", "指标"])
-                biz_def = self._extract_field(row, ["业务定义及说明", "业务定义", "定义"])
-                calc_logic = self._extract_field(row, ["计算公式/业务逻辑", "计算公式", "业务逻辑"])
-                source_model = self._extract_field(row, ["来源dws模型", "来源表", "source_table"])
-                biz_activity = self._extract_field(row, ["业务活动", "activity"])
+            # 尝试多种可能的列名
+            metric_code = self._extract_field(row, ["指标编码", "metric_code", "编码"])
+            metric_name = self._extract_field(row, ["指标名称", "metric_name", "指标"])
+            biz_def = self._extract_field(row, ["业务定义及说明", "业务定义", "定义"])
+            calc_logic = self._extract_field(row, ["计算公式/业务逻辑", "计算公式", "业务逻辑"])
+            source_model = self._extract_field(row, ["来源dws模型", "来源表", "source_table"])
+            biz_activity = self._extract_field(row, ["业务活动", "activity"])
 
-                if not metric_name:
-                    continue
+            if not metric_name:
+                continue
 
-                stats["valid_metrics"] += 1
+            stats["valid_metrics"] += 1
 
-                # 1. 指标名称 -> 来源表映射（验证表名有效性）
-                if source_model and self._is_valid_table_name(source_model):
-                    if len(metric_name) >= min_term_length and self._is_meaningful_term(metric_name):
-                        term_to_table[metric_name].add(source_model)
-                        stats["tables_added"].add(source_model)
+            # 1. 指标名称 -> 来源表映射（验证表名有效性）
+            if source_model and self._is_valid_table_name(source_model):
+                if len(metric_name) >= min_term_length and self._is_meaningful_term(metric_name):
+                    term_to_table[metric_name].add(source_model)
+                    stats["tables_added"].add(source_model)
 
-                        # 添加业务活动分类映射
-                        if biz_activity and self._is_meaningful_term(biz_activity):
-                            term_to_table[f"{biz_activity}_{metric_name}"].add(source_model)
+                    # 添加业务活动分类映射
+                    if biz_activity and self._is_meaningful_term(biz_activity):
+                        term_to_table[f"{biz_activity}_{metric_name}"].add(source_model)
 
-                # 2. 从业务定义提取有意义的关键词
-                if biz_def:
-                    keywords = self._extract_meaningful_keywords(biz_def, min_term_length)
-                    for kw in keywords:
-                        if source_model and self._is_valid_table_name(source_model):
-                            term_to_table[kw].add(source_model)
+            # 2. 从业务定义提取有意义的关键词
+            if biz_def:
+                keywords = self._extract_meaningful_keywords(biz_def, min_term_length)
+                for kw in keywords:
+                    if source_model and self._is_valid_table_name(source_model):
+                        term_to_table[kw].add(source_model)
 
-                # 3. 从计算公式提取表名引用
-                if calc_logic:
-                    table_refs = self._extract_table_refs(calc_logic)
-                    for ref in table_refs:
-                        if self._is_valid_table_name(ref):
-                            term_to_schema[metric_name].add(ref)
+            # 3. 从计算公式提取表名引用
+            if calc_logic:
+                table_refs = self._extract_table_refs(calc_logic)
+                for ref in table_refs:
+                    if self._is_valid_table_name(ref):
+                        term_to_schema[metric_name].add(ref)
 
         logger.info(
             f"[CSV解析] 指标清单处理完成: {stats['valid_metrics']}/{stats['total_metrics']} 有效指标, "
