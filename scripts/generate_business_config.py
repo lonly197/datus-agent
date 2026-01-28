@@ -869,6 +869,10 @@ class BusinessConfigGenerator:
                 "来源dws模型", "dws模型", "来源模型", 
                 "模型", "source_model", "来源表"
             ])
+            
+            # 提取分类字段（用于业务术语提取）
+            category1 = self._extract_field(row, ["分类1", "分类一", "一级分类"])
+            category2 = self._extract_field(row, ["分类2", "分类二", "二级分类"])
 
             if not metric_name:
                 continue
@@ -951,6 +955,22 @@ class BusinessConfigGenerator:
                         # 同时加入table_keywords（用于表排序）
                         if len(kw) >= 4:  # 较长关键词更可靠
                             table_keywords[kw] = list(source_tables)[0]
+                
+                # === 核心输出4: 从分类字段提取业务术语 -> 表名 ===
+                # 分类1、分类2包含关键业务术语（如"订单"、"试驾"、"线索"等）
+                for category in [category1, category2]:
+                    if category and len(category) >= min_term_length and self._is_meaningful_term(category):
+                        clean_cat = category.strip()
+                        if clean_cat and clean_cat.lower() not in ['nan', 'none', 'null', '']:
+                            for table_name in source_tables:
+                                term_to_table[clean_cat].add(table_name)
+                            # 同时加入table_keywords（用于表排序）
+                            if len(clean_cat) >= 2:
+                                table_keywords[clean_cat] = list(source_tables)[0]
+                            # 调试输出前几个分类术语
+                            if stats.get('category_terms_added', 0) < 5:
+                                logger.info(f"[分类术语] '{clean_cat}' -> {source_tables[0]} (来自: {metric_name})")
+                            stats["category_terms_added"] = stats.get("category_terms_added", 0) + 1
             
             else:
                 # 未匹配到表，尝试从业务定义提取关键词，并通过其他方式关联表
