@@ -38,6 +38,7 @@ from datus.utils.error_handler import LLMMixin, NodeExecutionResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.constants import DBType
+from datus.utils.query_utils import rewrite_fts_query_with_llm
 from datus.utils.sql_utils import (
     ddl_has_missing_commas,
     extract_table_names,
@@ -175,27 +176,15 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         return 0
 
     def _rewrite_fts_query_with_llm(self, query_text: str) -> str:
+        """Rewrite FTS query using shared LLM-based query rewriting utility."""
         if not query_text or not self.model:
             return query_text
-        try:
-            prompt = (
-                "You are a data analyst. Rewrite the user query into short Chinese keywords for schema search.\n"
-                "Return ONLY JSON: {\"query\": \"<keywords>\"}.\n"
-                "Constraints:\n"
-                "- Use 3-8 concise keywords\n"
-                "- Keep product or model names as-is (e.g., 铂智3X)\n"
-                "- Remove filler words\n"
-                f"User query: {query_text}\n"
-            )
-            response = self.call_llm(prompt, operation_name="schema_discovery_fts_rewrite")
-        except Exception as exc:
-            logger.debug(f"LLM rewrite failed: {exc}")
-            return query_text
-        if isinstance(response, dict):
-            rewritten = response.get("query", "")
-            if isinstance(rewritten, str) and rewritten.strip():
-                return rewritten.strip()
-        return query_text
+        # Use shared utility with agent_config from self
+        return rewrite_fts_query_with_llm(
+            query=query_text,
+            agent_config=self.agent_config,
+            model_name="",
+        )
 
     def _check_rerank_resources(
         self, model_path: str, min_cpu_count: int, min_memory_gb: float

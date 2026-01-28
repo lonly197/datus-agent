@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from datus.configuration.agent_config_loader import load_agent_config
-from datus.models.base import LLMBaseModel
+from datus.utils.query_utils import rewrite_fts_query_with_llm
 from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata.store import SchemaStorage
 
@@ -90,31 +90,12 @@ def _build_db_path(args: argparse.Namespace) -> str:
 def _rewrite_query_with_llm(
     query: str, agent_config, model_name: str = ""
 ) -> str:
-    if not query or not agent_config:
-        return query
-    try:
-        llm_model = LLMBaseModel.create_model(agent_config=agent_config, model_name=model_name or None)
-    except Exception:
-        return query
-
-    prompt = (
-        "You are a data analyst. Rewrite the user query into short Chinese keywords for schema search.\n"
-        "Return ONLY JSON: {\"query\": \"<keywords>\"}.\n"
-        "Constraints:\n"
-        "- Use 3-8 concise keywords\n"
-        "- Keep product or model names as-is (e.g., 铂智3X)\n"
-        "- Remove filler words\n"
-        f"User query: {query}\n"
+    """Wrapper for shared FTS query rewrite utility."""
+    return rewrite_fts_query_with_llm(
+        query=query,
+        agent_config=agent_config,
+        model_name=model_name,
     )
-    try:
-        response = llm_model.generate_with_json_output(prompt)
-    except Exception:
-        return query
-    if isinstance(response, dict):
-        rewritten = response.get("query", "")
-        if isinstance(rewritten, str) and rewritten.strip():
-            return rewritten.strip()
-    return query
 
 
 def main() -> int:

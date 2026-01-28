@@ -20,6 +20,7 @@ from datus.storage.lancedb_conditions import Node, and_, build_where, eq, or_
 from datus.utils.constants import DBType
 from datus.utils.json_utils import json2csv
 from datus.utils.loggings import get_logger
+from datus.utils.query_utils import FTS_BUSINESS_TERMS, FTS_MAX_TOKENS, FTS_STOP_CHARS
 from datus.utils.sql_utils import extract_enum_values_from_comment, is_likely_truncated_ddl, sanitize_ddl_for_storage
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -187,6 +188,29 @@ class BaseMetadataStorage(BaseEmbeddingStore):
         top_n: int = 5,
         select_fields: Optional[List[str]] = None,
     ) -> pa.Table:
+        """
+        Search schema metadata using Full-Text Search (FTS).
+
+        This method implements a two-stage search strategy:
+        1. Primary: Direct FTS search with sanitized query
+        2. Fallback: Simplified query (Chinese bigrams) if primary returns no results
+
+        Note: table_type is passed to the post-filter stage rather than the initial WHERE clause
+        because the LanceDB FTS index may not support efficient filtering on non-indexed columns.
+        We query all table types first, then filter in-memory for better performance.
+
+        Args:
+            query_text: Search query text
+            catalog_name: Filter by catalog name
+            database_name: Filter by database name
+            schema_name: Filter by schema name
+            table_type: Filter table type (table, view, mv) - applied post-query
+            top_n: Maximum number of results to return
+            select_fields: Fields to include in results (optional)
+
+        Returns:
+            Arrow table with matching schema records
+        """
         self._ensure_table_ready()
         available_fields = set(self.table.schema.names)
         if select_fields:
@@ -195,6 +219,9 @@ class BaseMetadataStorage(BaseEmbeddingStore):
         if not sanitized_query:
             logger.warning("FTS query is empty after sanitization; skipping FTS search")
             return pa.table({})
+
+        # Query all table types initially, filter post-query for FTS performance
+        # See docstring note above for rationale
         where = _build_where_clause(
             catalog_name=catalog_name,
             database_name=database_name,
@@ -221,11 +248,16 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             return results.slice(0, top_n)
 
         try:
+            # Primary search with sanitized query
             results = _run_query(sanitized_query, where_clause)
+            # Fallback: simplified query if no results
             if results.num_rows == 0:
                 simplified = self._simplify_fts_query(query_text)
                 if simplified and simplified != sanitized_query:
+                    logger.debug(f"FTS fallback: '{sanitized_query}' -> '{simplified}'")
                     results = _run_query(simplified, where_clause)
+                else:
+                    logger.debug("FTS fallback skipped: simplification produced no new tokens")
             return _post_filter(results)
         except Exception as exc:
             logger.warning(f"FTS search failed: {exc}")
@@ -233,9 +265,28 @@ class BaseMetadataStorage(BaseEmbeddingStore):
 
     @staticmethod
     def _simplify_fts_query(query_text: str) -> str:
+        """
+        Simplify FTS query for Chinese text by extracting key tokens.
+
+        This method implements a three-stage tokenization strategy for Chinese text:
+
+        1. **Mixed tokens**: Preserve alphanumeric patterns like "铂智3X" or "3X"
+        2. **Business terms**: Extract known domain-specific terms (e.g., "线索", "订单")
+        3. **Bigram fallback**: Generate character bigrams for remaining Chinese text
+
+        The result is a space-separated token string optimized for FTS matching.
+
+        Args:
+            query_text: Raw query text in natural language
+
+        Returns:
+            Simplified query string with space-separated tokens,
+            or original sanitized text if tokenization yields nothing,
+            or empty string if input is invalid.
+        """
         if not query_text:
             return ""
-        sanitized = SchemaStorage._sanitize_fts_query(query_text)
+        sanitized = BaseMetadataStorage._sanitize_fts_query(query_text)
         if not sanitized:
             return ""
         has_chinese = any("\u4e00" <= ch <= "\u9fff" for ch in sanitized)
@@ -243,9 +294,10 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             return sanitized
 
         tokens: List[str] = []
-        seen = set()
+        seen: set[str] = set()
 
         def _add(token: str) -> None:
+            """Add unique non-empty token to results."""
             if not token:
                 return
             token = token.strip()
@@ -254,53 +306,62 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             seen.add(token)
             tokens.append(token)
 
-        # Preserve mixed tokens like "铂智3X" or "3X"
+        # Stage 1: Extract mixed alphanumeric tokens (e.g., "铂智3X", "3X")
         mixed_tokens = re.findall(r"[\u4e00-\u9fff]+[A-Za-z0-9]+|[A-Za-z0-9]+", sanitized)
         for token in mixed_tokens:
             _add(token)
 
-        # Extract Chinese sequences
+        # Stage 2: Extract common business terms from Chinese segments
         chinese_segments = re.findall(r"[\u4e00-\u9fff]+", sanitized)
-
-        # Common business terms to preserve
-        common_terms = [
-            "线索",
-            "试驾",
-            "订单",
-            "漏斗",
-            "到店",
-            "转化",
-            "统计",
-            "渠道",
-            "有效",
-            "意向",
-            "车型",
-            "车种",
-        ]
         for segment in chinese_segments:
-            for term in common_terms:
+            for term in FTS_BUSINESS_TERMS:
                 if term in segment:
                     _add(term)
 
-        # Fallback: generate bigrams for longer Chinese segments
-        stop_chars = {"的", "和", "与", "及", "或", "按", "对", "在", "中", "以", "于", "为"}
+        # Stage 3: Generate bigrams for remaining Chinese segments
         for segment in chinese_segments:
-            if len(segment) <= 2:
-                _add(segment)
-                continue
-            for i in range(len(segment) - 1):
-                token = segment[i : i + 2]
-                if any(ch in stop_chars for ch in token):
-                    continue
-                _add(token)
-                if len(tokens) >= 6:
-                    break
-            if len(tokens) >= 6:
+            BaseMetadataStorage._extract_chinese_bigrams(
+                segment, FTS_STOP_CHARS, FTS_MAX_TOKENS, _add, tokens
+            )
+            if len(tokens) >= FTS_MAX_TOKENS:
                 break
 
         if not tokens:
             return sanitized
-        return " ".join(tokens[:6])
+        return " ".join(tokens[:FTS_MAX_TOKENS])
+
+    @staticmethod
+    def _extract_chinese_bigrams(
+        segment: str,
+        stop_chars: set[str],
+        max_tokens: int,
+        add_func: callable,
+        tokens: List[str],
+    ) -> None:
+        """
+        Extract character bigrams from a Chinese text segment.
+
+        Generates overlapping 2-character tokens while skipping stop characters.
+        Short segments (<=2 chars) are preserved as-is.
+
+        Args:
+            segment: Chinese text segment
+            stop_chars: Characters to skip during bigram generation
+            max_tokens: Maximum tokens to collect
+            add_func: Callback function to add valid tokens
+            tokens: Token list reference for length checking
+        """
+        if len(segment) <= 2:
+            add_func(segment)
+            return
+
+        for i in range(len(segment) - 1):
+            token = segment[i : i + 2]
+            if any(ch in stop_chars for ch in token):
+                continue
+            add_func(token)
+            if len(tokens) >= max_tokens:
+                break
 
 
 class SchemaStorage(BaseMetadataStorage):
