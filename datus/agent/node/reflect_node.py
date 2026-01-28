@@ -73,6 +73,12 @@ class ReflectNode(Node):
             # TODO: Add a manual evaluation function
             raise ValueError("Model is required for reflection")
 
+        # Check if input is None - this can happen if setup_input was not called properly
+        if self.input is None:
+            error_msg = "Reflection input is not initialized"
+            logger.error(error_msg)
+            return ReflectionResult(success=False, error=error_msg, strategy="UNKNOWN", details={})
+
         task = self.input.task_description
 
         # Check if sql_context is None or empty
