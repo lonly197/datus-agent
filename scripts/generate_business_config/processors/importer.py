@@ -5,6 +5,9 @@
 
 """
 ExtKnowledge importer for business configuration.
+
+This module provides functionality to import metrics catalog into 
+LanceDB's ext_knowledge table with batch processing and error handling.
 """
 
 from typing import Dict, List
@@ -18,7 +21,11 @@ logger = get_logger(__name__)
 
 
 class ExtKnowledgeImporter:
-    """ExtKnowledge表导入器"""
+    """ExtKnowledge表导入器
+    
+    负责将指标目录导入到 LanceDB 的 ext_knowledge 表中，
+    支持批量导入、schema 自动检测和重建、错误降级处理。
+    """
 
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -81,21 +88,21 @@ class ExtKnowledgeImporter:
                     ext_store.batch_store_knowledge(batch)
                     imported_count += len(batch)
                     logger.info(f"[ExtKnowledge] 已导入 {imported_count}/{len(metrics_catalog)} 个指标")
-                except Exception as batch_e:
+                except (lancedb.errors.LanceError, OSError, ValueError) as batch_e:
                     logger.error(f"[ExtKnowledge] 批次 {i // batch_size + 1} 导入失败: {batch_e}")
                     for j, entry in enumerate(batch):
                         try:
                             ext_store.batch_store_knowledge([entry])
                             imported_count += 1
-                        except Exception as entry_e:
-                            logger.error(f"[ExtKnowledge] 条目 {i + j} 导入失败")
+                        except (lancedb.errors.LanceError, OSError, ValueError) as entry_e:
+                            logger.error(f"[ExtKnowledge] 条目 {i + j} 导入失败: {entry_e}")
                             break
                     break
 
             logger.info(f"[ExtKnowledge] 成功导入 {imported_count} 个指标")
             return imported_count
 
-        except Exception as e:
+        except (lancedb.errors.LanceError, OSError) as e:
             logger.error(f"[ExtKnowledge] 导入失败: {e}")
             import traceback
             logger.error(f"[ExtKnowledge] 错误详情: {traceback.format_exc()}")

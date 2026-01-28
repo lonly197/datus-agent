@@ -5,6 +5,10 @@
 
 """
 DDL merger for business configuration.
+
+This module provides functionality to merge business terms extracted from CSV
+with DDL comments from LanceDB, supporting multiple merge strategies to enhance
+the completeness of business term configurations.
 """
 
 import json
@@ -19,7 +23,16 @@ logger = get_logger(__name__)
 
 
 class DdlMerger:
-    """DDL注释合并器"""
+    """DDL注释合并器
+    
+    将CSV提取的术语与LanceDB中的DDL comments进行合并，
+    支持多种合并策略，增强业务术语配置的完整性。
+    
+    Attributes:
+        schema_storage: LanceDB schema storage instance
+        keyword_extractor: Keyword extraction utility
+        term_extractor: Term extraction utility
+    """
 
     def __init__(self, schema_storage, min_term_length: int = 2):
         self.schema_storage = schema_storage
@@ -85,8 +98,8 @@ class DdlMerger:
                             if self._is_meaningful_comment(kw):
                                 term_to_schema[kw].add(col_name)
 
-        except Exception as e:
-            logger.warning(f"Failed to merge DDL comments: {e}")
+        except (AttributeError, KeyError, json.JSONDecodeError, TypeError) as e:
+            logger.warning(f"Failed to merge DDL comments: {type(e).__name__}: {e}")
 
         logger.info(
             f"[DDL合并] 完成: {ddl_stats['tables_checked']} 表检查, "
@@ -105,7 +118,20 @@ class DdlMerger:
         }
 
     def _is_meaningful_comment(self, comment: str) -> bool:
-        """判断注释是否有业务意义"""
+        """判断注释是否有业务意义
+        
+        过滤掉纯技术性的注释，如：
+        - 纯数字
+        - 纯小写字母（如字段名）
+        - 日期格式
+        - 数据库关键词（主键、外键等）
+        
+        Args:
+            comment: 待判断的注释文本
+            
+        Returns:
+            bool: 如果有业务意义返回 True，否则返回 False
+        """
         import re
 
         if not comment:

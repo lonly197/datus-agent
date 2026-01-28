@@ -5,7 +5,10 @@
 
 """
 Excel reader for business configuration generation.
-Handles multi-row headers and complex Excel structures.
+
+This module provides functionality to read Excel files with support for
+multi-row headers and complex Excel structures commonly found in 
+data architecture design documents.
 """
 
 import re
@@ -24,7 +27,13 @@ logger = get_logger(__name__)
 
 
 class ExcelReader:
-    """Excel文件读取器，支持多行表头智能处理"""
+    """Excel文件读取器，支持多行表头智能处理
+    
+    处理复杂表头结构的数据架构设计文档：
+    - 第1行：分组标题
+    - 第2行：实际列名（物理表名、字段名等）
+    - 第3行：列说明/注释
+    """
 
     def __init__(self):
         if not PANDAS_AVAILABLE:
@@ -75,8 +84,9 @@ class ExcelReader:
             logger.info(f"[Excel读取] 有效数据行: {len(records)}")
             return records
 
-        except Exception as e:
-            logger.error(f"[Excel读取] 失败: {e}")
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, FileNotFoundError, 
+                PermissionError, OSError, ValueError) as e:
+            logger.error(f"[Excel读取] 失败: {type(e).__name__}: {e}")
             return []
 
     def _resolve_sheet_name(
