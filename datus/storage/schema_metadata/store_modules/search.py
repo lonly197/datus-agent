@@ -287,12 +287,15 @@ class SearchMixin:
             return pa.table({})
 
         # Query all table types initially, filter post-query for FTS performance
+        # Fix: Use select_fields (if specified) to determine which fields can be used in WHERE clause
+        # This prevents "column not found" errors when select_fields doesn't include filter columns
+        where_clause_fields = set(select_fields) if select_fields else available_fields
         where = _build_where_clause(
             catalog_name=catalog_name,
             database_name=database_name,
             schema_name=schema_name,
             table_type="full",
-            available_fields=available_fields,
+            available_fields=where_clause_fields,
         )
         where_clause = build_where(where)
 
