@@ -47,7 +47,7 @@ from .readers import ExcelReader, CsvReader, HeaderParser
 from .extractors import TermExtractor, KeywordExtractor, BusinessTermMapping
 
 # Generators
-from .generators import BusinessTermsGenerator, MetricsCatalogGenerator
+from .generators import BusinessTermsGenerator, MetricsCatalogGenerator, LLMEnhancedBusinessTermsGenerator
 
 # Processors
 from .processors import DdlMerger, ExtKnowledgeImporter
@@ -72,6 +72,7 @@ __all__ = [
     # Generators
     'BusinessTermsGenerator',
     'MetricsCatalogGenerator',
+    'LLMEnhancedBusinessTermsGenerator',
     # Processors
     'DdlMerger',
     'ExtKnowledgeImporter',

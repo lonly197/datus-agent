@@ -45,3 +45,30 @@ METRIC_SUFFIXES: List[str] = [
 TECHNICAL_KEYWORDS: Set[str] = {
     '明细', '汇总', '统计', '计算', '结果', '数据', '信息', '字段', '表名',
 }
+
+
+def is_meaningful_term(term: str, min_length: int = 2) -> bool:
+    """判断术语是否有业务意义
+    
+    Args:
+        term: 待判断的术语
+        min_length: 最小长度要求，默认2
+        
+    Returns:
+        bool: 如果有业务意义返回 True，否则返回 False
+    """
+    import re
+
+    if not term or len(term) < min_length:
+        return False
+
+    if term.lower() in TECHNICAL_TERMS:
+        return False
+
+    if re.match(r'^\d+$', term):
+        return False
+
+    if term.startswith('_'):
+        return False
+
+    return True

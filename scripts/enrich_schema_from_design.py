@@ -633,7 +633,7 @@ class SchemaEnricher:
         elif isinstance(existing_tags, str):
             try:
                 existing_tags = json.loads(existing_tags)
-            except:
+            except (json.JSONDecodeError, TypeError):
                 existing_tags = []
         elif hasattr(existing_tags, 'tolist'):  # numpy array or Arrow array
             existing_tags = existing_tags.tolist()
@@ -996,13 +996,34 @@ class SchemaEnricher:
         
         return total, enriched_count, stats
     
+    def _build_safe_where_clause(self, field: str, value: str) -> str:
+        """构建安全的 LanceDB 查询条件
+        
+        Args:
+            field: 字段名，必须是预定义的安全字段
+            value: 字段值，会被安全转义
+            
+        Returns:
+            安全的查询条件字符串
+            
+        Raises:
+            ValueError: 如果字段名不在允许的列表中
+        """
+        allowed_fields = {"table_name", "identifier", "catalog_name", "database_name", "schema_name"}
+        if field not in allowed_fields:
+            raise ValueError(f"Invalid field for where clause: {field}")
+        
+        # 安全的值转义：先转义反斜杠，再转义双引号
+        safe_value = value.replace('\\', '\\\\').replace('"', '\\"')
+        return f'{field} = "{safe_value}"'
+
     def _apply_enrichment(self, result: EnrichmentResult):
         """将增强结果应用到 LanceDB"""
         try:
             # 获取现有记录
-            escaped_identifier = result.table_name.replace('"', '\\"')
+            where_clause = self._build_safe_where_clause("table_name", result.table_name)
             existing = self.schema_storage.table.search()\
-                .where(f'table_name = "{escaped_identifier}"')\
+                .where(where_clause)\
                 .limit(1).to_arrow()
             
             if len(existing) == 0:
@@ -1054,8 +1075,8 @@ class SchemaEnricher:
             update_data["last_updated"] = int(pd.Timestamp.now().timestamp())
             
             # 删除旧记录并插入新记录
-            escaped_id = record["identifier"].replace('"', '\\"')
-            self.schema_storage.table.delete(f'identifier = "{escaped_id}"')
+            delete_where = self._build_safe_where_clause("identifier", record["identifier"])
+            self.schema_storage.table.delete(delete_where)
             self.schema_storage.table.add([update_data])
             
             logger.debug(f"Applied enrichment to {result.table_name}")

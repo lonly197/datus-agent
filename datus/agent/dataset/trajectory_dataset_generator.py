@@ -9,6 +9,7 @@ Generates training datasets from workflow trajectory files
 for fine-tuning and evaluation purposes.
 """
 
+import argparse
 import glob
 import json
 import os

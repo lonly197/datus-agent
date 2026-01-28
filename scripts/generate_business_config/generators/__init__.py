@@ -9,5 +9,6 @@ Generators package for business configuration generation.
 
 from .metrics_catalog import MetricsCatalogGenerator
 from .business_terms import BusinessTermsGenerator
+from .llm_enhanced_terms import LLMEnhancedBusinessTermsGenerator
 
-__all__ = ['MetricsCatalogGenerator', 'BusinessTermsGenerator']
+__all__ = ['MetricsCatalogGenerator', 'BusinessTermsGenerator', 'LLMEnhancedBusinessTermsGenerator']

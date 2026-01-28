@@ -9,6 +9,7 @@ Handles benchmark execution for evaluating agent performance
 on various SQL generation and semantic layer tasks.
 """
 
+import argparse
 import csv
 import os
 import shutil

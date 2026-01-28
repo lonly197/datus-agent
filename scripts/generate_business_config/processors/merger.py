@@ -106,6 +106,8 @@ class DdlMerger:
 
     def _is_meaningful_comment(self, comment: str) -> bool:
         """判断注释是否有业务意义"""
+        import re
+
         if not comment:
             return False
 
@@ -117,7 +119,7 @@ class DdlMerger:
         ]
 
         for pattern in technical_patterns:
-            if pattern.match(comment.strip(), re.IGNORECASE):
+            if re.match(pattern, comment.strip(), re.IGNORECASE):
                 return False
 
         return len(comment) >= 4

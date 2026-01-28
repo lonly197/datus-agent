@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 
 from datus.utils.loggings import get_logger
 
-from ..shared import STOP_WORDS, SYNONYM_MAP
+from ..shared import STOP_WORDS, SYNONYM_MAP, is_meaningful_term
 
 logger = get_logger(__name__)
 
@@ -105,24 +105,5 @@ class HeaderParser:
 
     @staticmethod
     def is_meaningful_term(term: str) -> bool:
-        """判断术语是否有业务意义"""
-        if not term or len(term) < 2:
-            return False
-
-        technical_terms = {
-            'id', 'code', 'name', 'status', 'type', 'flag', 'time', 'date',
-            'create', 'update', 'delete', 'insert', 'select', 'from', 'where',
-            'table', 'column', 'field', 'index', 'key', 'value',
-            'dealer_clue_code', 'original_clue_code', 'customer_id',
-        }
-
-        if term.lower() in technical_terms:
-            return False
-
-        if re.match(r'^\d+$', term):
-            return False
-
-        if term.startswith('_'):
-            return False
-
-        return True
+        """判断术语是否有业务意义（委托给 shared 模块的统一实现）"""
+        return is_meaningful_term(term)

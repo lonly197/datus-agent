@@ -13,6 +13,7 @@ Handles initialization of knowledge base storage components including:
 - Reference SQL storage
 """
 
+import argparse
 import os
 from typing import Any, Dict, Optional
 
@@ -59,11 +60,10 @@ class KnowledgeBaseBootstrapper:
         self.metrics_store: Optional[SemanticMetricsRAG] = None
         self.ext_knowledge_store: Optional[ExtKnowledgeStore] = None
         self.reference_sql_store: Optional[ReferenceSqlRAG] = None
+        self.storage_modules: Dict[str, Any] = {}
 
     def _safe_delete_directory(self, dir_path: str, context: str = "") -> None:
         """Safely delete a directory with path validation."""
-        from datus.agent.bootstrap.sub_agent_refresher import refresh_scoped_agents
-
         abs_path = os.path.abspath(dir_path)
         project_root = os.path.abspath(self.global_config.rag_storage_path())
 
