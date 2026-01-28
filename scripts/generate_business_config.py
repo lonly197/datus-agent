@@ -92,6 +92,8 @@ class BusinessConfigGenerator:
         """
         从数据架构CSV生成业务术语映射
 
+        处理多行表头CSV（前5行为说明/标题行）
+
         Args:
             csv_path: 数据架构详细设计CSV文件路径
             min_term_length: 最小术语长度，过滤单字术语
@@ -113,63 +115,74 @@ class BusinessConfigGenerator:
             "terms_extracted": 0,
         }
 
+        # 读取前10行来确定实际的列名（处理多行表头）
         with open(csv_path, "r", encoding="utf-8-sig") as f:
+            # 跳过前5行的标题/说明行
+            for _ in range(5):
+                next(f, None)
+            
             reader = csv.DictReader(f)
+            
+            # 打印实际的列名用于调试
+            if reader.fieldnames:
+                logger.debug(f"CSV columns: {reader.fieldnames}")
+            
             for row in reader:
                 stats["total_rows"] += 1
 
-                # 提取关键字段
-                table_name = self._clean_string(row.get("物理表名", ""))
-                column_name = self._clean_string(row.get("字段名", ""))
-                attr_def = self._clean_string(row.get("属性业务定义", ""))
-                attr_cn = self._clean_string(row.get("属性（中文）", ""))
-                obj_name = self._clean_string(row.get("分析对象（中文）", ""))
-                obj_en = self._clean_string(row.get("分析对象（英文）", ""))
-                logic_entity = self._clean_string(row.get("逻辑实体（中文）", ""))
-                logic_entity_def = self._clean_string(row.get("逻辑实体业务含义", ""))
+                # 提取关键字段（使用实际的列名，兼容不同版本）
+                # 尝试多种可能的列名
+                table_name = self._extract_field(row, ["物理表名", "table_name", "表名"])
+                column_name = self._extract_field(row, ["字段名", "column_name", "列名"])
+                attr_def = self._extract_field(row, ["属性业务定义", "业务定义", "注释", "comment"])
+                attr_cn = self._extract_field(row, ["属性（中文）", "属性", "column_cn", "字段中文名"])
+                obj_name = self._extract_field(row, ["分析对象（中文）", "分析对象", "object_cn"])
+                obj_en = self._extract_field(row, ["分析对象（英文）", "object_en"])
+                logic_entity = self._extract_field(row, ["逻辑实体（中文）", "逻辑实体", "entity_cn", "逻辑表名"])
+                logic_entity_def = self._extract_field(row, ["逻辑实体业务含义", "实体业务含义", "entity_def"])
 
-                if not table_name or not column_name:
+                # 验证表名和字段名 - 必须是以字母开头的有效标识符
+                if not self._is_valid_table_name(table_name) or not self._is_valid_column_name(column_name):
                     continue
 
                 stats["valid_rows"] += 1
                 stats["tables_found"].add(table_name)
 
-                # 1. 分析对象 -> 表映射
-                if obj_name and len(obj_name) >= min_term_length:
+                # 1. 分析对象 -> 表映射（业务对象粒度）
+                if obj_name and len(obj_name) >= min_term_length and self._is_meaningful_term(obj_name):
                     term_to_table[obj_name].add(table_name)
-                    # 同时添加英文映射（如果存在）
-                    if obj_en:
+                    # 同时添加英文映射（如果存在且有效）
+                    if obj_en and self._is_meaningful_term(obj_en):
                         term_to_table[obj_en.lower()].add(table_name)
 
                 # 2. 逻辑实体 -> 表映射（作为表关键词）
-                if logic_entity and len(logic_entity) >= min_term_length:
+                if logic_entity and len(logic_entity) >= min_term_length and self._is_meaningful_term(logic_entity):
                     term_to_table[logic_entity].add(table_name)
                     table_keywords[logic_entity] = table_name
 
-                    # 从逻辑实体业务含义提取关键词
+                    # 从逻辑实体业务含义提取关键词（仅提取有意义的关键词）
                     if logic_entity_def:
-                        keywords = self._extract_keywords(logic_entity_def, min_term_length)
+                        keywords = self._extract_meaningful_keywords(logic_entity_def, min_term_length)
                         for kw in keywords:
                             table_keywords[kw] = table_name
                             term_to_table[kw].add(table_name)
 
                 # 3. 属性（中文）-> 字段映射
-                if attr_cn and len(attr_cn) >= min_term_length:
+                if attr_cn and len(attr_cn) >= min_term_length and self._is_meaningful_term(attr_cn):
                     term_to_schema[attr_cn].add(f"{table_name}.{column_name}")
                     # 也添加纯字段名映射
                     term_to_schema[attr_cn].add(column_name)
 
-                # 4. 属性业务定义 -> 提取关键词映射到字段
+                # 4. 属性业务定义 -> 提取有意义的关键词映射到字段
                 if attr_def and len(attr_def) >= min_term_length:
-                    # 完整定义映射
-                    term_to_schema[attr_def[:50]].add(f"{table_name}.{column_name}")
-
-                    # 提取关键词
-                    keywords = self._extract_keywords(attr_def, min_term_length)
+                    # 提取有意义的关键词（避免提取技术词汇）
+                    keywords = self._extract_meaningful_keywords(attr_def, min_term_length)
                     for kw in keywords:
-                        term_to_schema[kw].add(column_name)
-                        term_to_schema[kw].add(f"{table_name}.{column_name}")
-                        stats["terms_extracted"] += 1
+                        # 限制关键词长度，避免过长的短语
+                        if len(kw) <= 50:
+                            term_to_schema[kw].add(column_name)
+                            term_to_schema[kw].add(f"{table_name}.{column_name}")
+                            stats["terms_extracted"] += 1
 
         logger.info(
             f"Architecture CSV processed: {stats['valid_rows']}/{stats['total_rows']} valid rows, "
@@ -198,6 +211,8 @@ class BusinessConfigGenerator:
         """
         从指标清单CSV补充业务术语映射
 
+        处理多行表头CSV（前7行为说明/标题行）
+
         Args:
             csv_path: 指标清单CSV文件路径
             existing_terms: 已有的术语映射（从数据架构生成）
@@ -215,48 +230,55 @@ class BusinessConfigGenerator:
         stats = {"total_metrics": 0, "valid_metrics": 0, "tables_added": set()}
 
         with open(csv_path, "r", encoding="utf-8-sig") as f:
+            # 跳过前7行的说明行
+            for _ in range(7):
+                next(f, None)
+            
             reader = csv.DictReader(f)
-            # 跳过前7行的表头说明
-            for i, row in enumerate(reader):
-                if i < 5:  # 跳过前面的说明行
-                    continue
-
+            
+            # 打印列名用于调试
+            if reader.fieldnames:
+                logger.debug(f"Metrics CSV columns: {reader.fieldnames}")
+            
+            for row in reader:
                 stats["total_metrics"] += 1
 
-                metric_code = self._clean_string(row.get("指标编码", ""))
-                metric_name = self._clean_string(row.get("指标名称", ""))
-                biz_def = row.get("业务定义及说明", "").strip()
-                calc_logic = row.get("计算公式/业务逻辑", "").strip()
-                source_model = self._clean_string(row.get("来源dws模型", ""))
-                biz_activity = self._clean_string(row.get("业务活动", ""))
+                # 尝试多种可能的列名
+                metric_code = self._extract_field(row, ["指标编码", "metric_code", "编码"])
+                metric_name = self._extract_field(row, ["指标名称", "metric_name", "指标"])
+                biz_def = self._extract_field(row, ["业务定义及说明", "业务定义", "定义"])
+                calc_logic = self._extract_field(row, ["计算公式/业务逻辑", "计算公式", "业务逻辑"])
+                source_model = self._extract_field(row, ["来源dws模型", "来源表", "source_table"])
+                biz_activity = self._extract_field(row, ["业务活动", "activity"])
 
                 if not metric_name:
                     continue
 
                 stats["valid_metrics"] += 1
 
-                # 1. 指标名称 -> 来源表映射
-                if source_model and len(metric_name) >= min_term_length:
-                    term_to_table[metric_name].add(source_model)
-                    stats["tables_added"].add(source_model)
+                # 1. 指标名称 -> 来源表映射（验证表名有效性）
+                if source_model and self._is_valid_table_name(source_model):
+                    if len(metric_name) >= min_term_length and self._is_meaningful_term(metric_name):
+                        term_to_table[metric_name].add(source_model)
+                        stats["tables_added"].add(source_model)
 
-                    # 添加业务活动分类映射
-                    if biz_activity:
-                        term_to_table[f"{biz_activity}_{metric_name}"].add(source_model)
+                        # 添加业务活动分类映射
+                        if biz_activity and self._is_meaningful_term(biz_activity):
+                            term_to_table[f"{biz_activity}_{metric_name}"].add(source_model)
 
-                # 2. 从业务定义提取关键词
+                # 2. 从业务定义提取有意义的关键词
                 if biz_def:
-                    keywords = self._extract_keywords(biz_def, min_term_length)
+                    keywords = self._extract_meaningful_keywords(biz_def, min_term_length)
                     for kw in keywords:
-                        if source_model:
+                        if source_model and self._is_valid_table_name(source_model):
                             term_to_table[kw].add(source_model)
 
-                # 3. 从计算公式提取字段名
+                # 3. 从计算公式提取表名引用
                 if calc_logic:
-                    # 尝试提取表名和字段名
                     table_refs = self._extract_table_refs(calc_logic)
                     for ref in table_refs:
-                        term_to_schema[metric_name].add(ref)
+                        if self._is_valid_table_name(ref):
+                            term_to_schema[metric_name].add(ref)
 
         logger.info(
             f"Metrics CSV processed: {stats['valid_metrics']}/{stats['total_metrics']} valid metrics, "
@@ -352,6 +374,104 @@ class BusinessConfigGenerator:
                 "ddl_terms": ddl_stats["terms_added"],
             }},
         }
+
+    def _extract_field(self, row: Dict, possible_names: List[str]) -> str:
+        """从行中提取字段值，尝试多个可能的列名"""
+        for name in possible_names:
+            # 尝试精确匹配
+            if name in row and row[name]:
+                return self._clean_string(row[name])
+            # 尝试大小写不敏感匹配
+            for key in row.keys():
+                if key and key.lower() == name.lower():
+                    return self._clean_string(row[key])
+        return ""
+
+    def _is_valid_table_name(self, name: str) -> bool:
+        """验证是否为有效的表名（以字母开头，只包含字母数字下划线）"""
+        if not name or len(name) < 2:
+            return False
+        # 必须以字母开头
+        if not re.match(r'^[a-zA-Z]', name):
+            return False
+        # 只能包含字母、数字、下划线
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+            return False
+        # 排除常见技术关键词
+        technical_keywords = {'engine', 'key', 'duplicate', 'distributed', 'random', 'min', 'max', 'properties'}
+        if name.lower() in technical_keywords:
+            return False
+        return True
+
+    def _is_valid_column_name(self, name: str) -> bool:
+        """验证是否为有效的字段名"""
+        if not name or len(name) < 1:
+            return False
+        # 必须以字母开头
+        if not re.match(r'^[a-zA-Z_]', name):
+            return False
+        # 只能包含字母、数字、下划线
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+            return False
+        return True
+
+    def _is_meaningful_term(self, term: str) -> bool:
+        """判断术语是否有业务意义（过滤技术词汇）"""
+        if not term or len(term) < 2:
+            return False
+        
+        # 排除纯技术词汇
+        technical_terms = {
+            'id', 'code', 'name', 'status', 'type', 'flag', 'time', 'date',
+            'create', 'update', 'delete', 'insert', 'select', 'from', 'where',
+            'table', 'column', 'field', 'index', 'key', 'value',
+            'dealer_clue_code', 'original_clue_code', 'customer_id',  # 字段名本身
+        }
+        
+        if term.lower() in technical_terms:
+            return False
+        
+        # 排除纯数字
+        if re.match(r'^\d+$', term):
+            return False
+        
+        # 排除下划线开头的（通常是临时/内部字段）
+        if term.startswith('_'):
+            return False
+        
+        return True
+
+    def _extract_meaningful_keywords(self, text: str, min_length: int = 2) -> List[str]:
+        """提取有意义的关键词（过滤技术词汇和停用词）"""
+        if not text:
+            return []
+
+        keywords = []
+        
+        # 1. 提取中文短语（2-10字）
+        for match in re.finditer(r"[\u4e00-\u9fa5]{%d,10}" % min_length, text):
+            kw = match.group()
+            # 过滤停用词和纯技术词汇
+            if kw not in STOP_WORDS and self._is_meaningful_term(kw):
+                keywords.append(kw)
+        
+        # 2. 提取英文/数字混合的业务词汇（如 is_valid_clue, test_drive）
+        # 排除纯技术字段名（如 id, code, flag）
+        for match in re.finditer(r"[a-z_][a-z0-9_]{%d,}" % (min_length - 1), text.lower()):
+            kw = match.group()
+            # 过滤太短或太长的
+            if len(kw) < min_length or len(kw) > 40:
+                continue
+            # 过滤纯技术词汇
+            if self._is_meaningful_term(kw):
+                keywords.append(kw)
+        
+        # 3. 同义词替换
+        normalized = []
+        for kw in keywords:
+            normalized.append(SYNONYM_MAP.get(kw, kw))
+        
+        return list(set(normalized))  # 去重
 
     def _clean_string(self, s: str) -> str:
         """清理字符串，去除空白和特殊字符"""
