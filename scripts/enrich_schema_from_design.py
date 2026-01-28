@@ -108,6 +108,7 @@ class EnrichmentResult:
     enriched_columns: Dict[str, str] = field(default_factory=dict)
     enriched_tags: List[str] = field(default_factory=list)
     enriched_enums: Dict[str, List[Dict[str, str]]] = field(default_factory=dict)
+    match_source: str = ""  # 匹配来源：exact, fuzzy, none
     
     @property
     def has_changes(self) -> bool:
