@@ -177,6 +177,11 @@ class WorkflowExecutor:
             elif termination_status == WorkflowTerminationStatus.SKIP_TO_REFLECT:
                 is_soft_failure = True
                 jump_to_reflect = True
+            elif termination_status == WorkflowTerminationStatus.PROCEED_TO_OUTPUT:
+                # Reflect node or other critical node failed, jump to output for report generation
+                logger.info(f"Proceeding to output node for report generation after {current_node.description} failure")
+                navigator = WorkflowNavigator(self.workflow)
+                navigator.jump_to_output_node()
 
         return is_soft_failure, jump_to_reflect, False
 

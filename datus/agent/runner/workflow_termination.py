@@ -16,6 +16,7 @@ from datus.agent.evaluate import setup_node_input
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
 from datus.agent.workflow_status import WorkflowTerminationStatus
+from datus.configuration.node_type import NodeType
 from datus.schemas.action_history import ActionHistory
 from datus.utils.error_handler import check_reflect_node_reachable
 from datus.utils.loggings import get_logger
@@ -63,6 +64,14 @@ class WorkflowTerminationManager:
                 return WorkflowTerminationStatus.SKIP_TO_REFLECT
 
             elif last_status == ActionStatus.FAILED:
+                # Special case: if the reflect node itself failed, proceed to output for report generation
+                if current_node.type == NodeType.TYPE_REFLECT:
+                    logger.info(
+                        f"Reflect node failed, proceeding to output node for report generation: "
+                        f"{current_node.description}"
+                    )
+                    return WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+
                 # Check if reflect node is reachable for recovery
                 has_reflect = check_reflect_node_reachable(self.workflow)
 
@@ -91,6 +100,14 @@ class WorkflowTerminationManager:
                     return WorkflowTerminationStatus.TERMINATE_WITH_ERROR
             else:
                 # Unknown status - default to checking for reflect
+                # Special case: if the reflect node itself failed, proceed to output for report generation
+                if current_node.type == NodeType.TYPE_REFLECT:
+                    logger.info(
+                        f"Reflect node failed with unknown status, proceeding to output node for report generation: "
+                        f"{current_node.description}"
+                    )
+                    return WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+
                 has_reflect = check_reflect_node_reachable(self.workflow)
                 if has_reflect:
                     return WorkflowTerminationStatus.SKIP_TO_REFLECT
@@ -98,6 +115,14 @@ class WorkflowTerminationManager:
                     return WorkflowTerminationStatus.TERMINATE_WITH_ERROR
         else:
             # Fallback to old logic if last_action_status not available
+            # Special case: if the reflect node itself failed, proceed to output for report generation
+            if current_node.type == NodeType.TYPE_REFLECT:
+                logger.info(
+                    f"Reflect node failed (no action status), proceeding to output node for report generation: "
+                    f"{current_node.description}"
+                )
+                return WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+
             has_reflect = check_reflect_node_reachable(self.workflow)
             if has_reflect:
                 logger.info(
