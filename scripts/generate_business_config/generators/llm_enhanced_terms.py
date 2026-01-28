@@ -162,10 +162,10 @@ class LLMEnhancedBusinessTermsGenerator:
             "term_to_schema": dict(term_to_schema),
             "table_keywords": table_keywords,
             "_stats": {
-                "total_rows": stats["total_rows"],
-                "valid_rows": stats["valid_rows"],
-                "tables_count": len(stats["tables_found"]),
-                "terms_count": stats["terms_extracted"],
+                "total_rows": stats.get("total_rows", 0),
+                "valid_rows": stats.get("valid_rows", 0),
+                "tables_count": len(stats.get("tables_found", set())),
+                "terms_count": stats.get("terms_extracted", 0),
             },
         }
 
@@ -190,7 +190,7 @@ class LLMEnhancedBusinessTermsGenerator:
         enhanced_count = 0
         for term, tables in ambiguous_terms.items():
             enhancement = self._llm_enhance_term_extraction(term, list(tables))
-            if enhancement.get("enhanced") and enhancement.get("confidence", 0) > 0.6:
+            if enhancement and enhancement.get("enhanced") and enhancement.get("confidence", 0) > 0.6:
                 primary_table = enhancement.get("primary_table", "")
                 if primary_table and primary_table in tables:
                     # 重新排序，将primary表放在首位
@@ -205,10 +205,45 @@ class LLMEnhancedBusinessTermsGenerator:
         self,
         term: str,
         table_candidates: List[str]
-    ) -> Dict:
+    ) -> Optional[Dict]:
         """使用LLM增强术语理解"""
         if not self.use_llm or not self.llm_model:
             return {"enhanced": False, "confidence": 0.0}
+
+        prompt = f"""You are a data warehouse business analyst. Analyze the business term and determine the most relevant tables.
+
+## Input
+Business Term: {term}
+Candidate Tables: {table_candidates}
+
+## Task
+1. Analyze the semantic meaning of the business term
+2. Evaluate relevance of each candidate table (score 0-1)
+3. Identify if this term has ambiguity
+
+## Output Format
+Return ONLY a JSON object:
+{{
+  "primary_table": "most relevant table name",
+  "primary_confidence": 0.0-1.0,
+  "ambiguity": true/false,
+  "confidence": 0.0-1.0
+}}
+"""
+        try:
+            response = self.llm_model.generate_with_json_output(prompt)
+            if isinstance(response, dict):
+                return {
+                    "enhanced": True,
+                    "primary_table": response.get("primary_table", ""),
+                    "primary_confidence": response.get("primary_confidence", 0.0),
+                    "ambiguity": response.get("ambiguity", False),
+                    "confidence": response.get("confidence", 0.0),
+                }
+        except Exception as e:
+            logger.debug(f"LLM enhancement failed for term '{term}': {e}")
+
+        return {"enhanced": False, "confidence": 0.0}
 
     def generate_from_metrics_xlsx(
         self,
@@ -291,38 +326,3 @@ class LLMEnhancedBusinessTermsGenerator:
                         term_to_table[clean_cat].add(source_model)
                         if len(clean_cat) >= 2:
                             table_keywords[clean_cat] = source_model
-
-        prompt = f"""You are a data warehouse business analyst. Analyze the business term and determine the most relevant tables.
-
-## Input
-Business Term: {term}
-Candidate Tables: {table_candidates}
-
-## Task
-1. Analyze the semantic meaning of the business term
-2. Evaluate relevance of each candidate table (score 0-1)
-3. Identify if this term has ambiguity
-
-## Output Format
-Return ONLY a JSON object:
-{{
-  "primary_table": "most relevant table name",
-  "primary_confidence": 0.0-1.0,
-  "ambiguity": true/false,
-  "confidence": 0.0-1.0
-}}
-"""
-        try:
-            response = self.llm_model.generate_with_json_output(prompt)
-            if isinstance(response, dict):
-                return {
-                    "enhanced": True,
-                    "primary_table": response.get("primary_table", ""),
-                    "primary_confidence": response.get("primary_confidence", 0.0),
-                    "ambiguity": response.get("ambiguity", False),
-                    "confidence": response.get("confidence", 0.0),
-                }
-        except Exception as e:
-            logger.debug(f"LLM enhancement failed for term '{term}': {e}")
-
-        return {"enhanced": False, "confidence": 0.0}
