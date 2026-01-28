@@ -819,6 +819,7 @@ class BusinessConfigGenerator:
             "entity_matched": 0,        # 通过数据架构逻辑实体匹配的数量
             "sheet2_chinese_matched": 0,  # 通过Sheet2中文描述匹配的数量
             "lancedb_matched": 0,       # 通过LanceDB table_comment匹配的数量
+            "keyword_matched": 0,       # 通过关键词弱匹配的数量
         }
 
         # 步骤1: 从Sheet2加载编码->表名映射，同时构建中文描述->表名映射
@@ -923,41 +924,74 @@ class BusinessConfigGenerator:
                         match_source = "lancedb_comment"
                         stats["lancedb_matched"] = stats.get("lancedb_matched", 0) + 1
             
-            if not source_tables:
-                continue  # 没有表名关联，跳过（避免低质量映射）
+            # === 修改：无论是否匹配到表，都提取业务术语 ===
             
-            stats["with_tables"] += 1
-
-            # === 核心输出1: 指标名称 -> 表名 ===
-            for table_name in source_tables:
-                term_to_table[metric_name].add(table_name)
-                stats["tables_added"].add(table_name)
-
-            # === 核心输出2: 业务活动+指标名 -> 表名（增加上下文）===
-            if biz_activity:
-                composite_term = f"{biz_activity}_{metric_name}"
+            if source_tables:
+                # 成功匹配到表，建立指标名称->表名映射
+                stats["with_tables"] += 1
+                
+                # === 核心输出1: 指标名称 -> 表名 ===
                 for table_name in source_tables:
-                    term_to_table[composite_term].add(table_name)
+                    term_to_table[metric_name].add(table_name)
+                    stats["tables_added"].add(table_name)
 
-            # === 核心输出3: 从业务定义提取关键词 -> 表名 ===
-            if biz_def:
-                # 提取业务关键词（如"首触"、"有效线索"）
-                keywords = self._extract_business_keywords(biz_def, min_term_length)
-                for kw in keywords:
+                # === 核心输出2: 业务活动+指标名 -> 表名（增加上下文）===
+                if biz_activity:
+                    composite_term = f"{biz_activity}_{metric_name}"
                     for table_name in source_tables:
-                        term_to_table[kw].add(table_name)
-                    # 同时加入table_keywords（用于表排序）
-                    if len(kw) >= 4:  # 较长关键词更可靠
-                        table_keywords[kw] = list(source_tables)[0]
+                        term_to_table[composite_term].add(table_name)
+
+                # === 核心输出3: 从业务定义提取关键词 -> 表名 ===
+                if biz_def:
+                    # 提取业务关键词（如"首触"、"有效线索"）
+                    keywords = self._extract_business_keywords(biz_def, min_term_length)
+                    for kw in keywords:
+                        for table_name in source_tables:
+                            term_to_table[kw].add(table_name)
+                        # 同时加入table_keywords（用于表排序）
+                        if len(kw) >= 4:  # 较长关键词更可靠
+                            table_keywords[kw] = list(source_tables)[0]
+            
+            else:
+                # 未匹配到表，尝试从业务定义提取关键词，并通过其他方式关联表
+                if biz_def:
+                    keywords = self._extract_business_keywords(biz_def, min_term_length)
+                    
+                    # 尝试通过关键词匹配数据架构中的表
+                    for kw in keywords:
+                        if len(kw) < 4:  # 太短的关键词跳过
+                            continue
+                            
+                        # 在数据架构的逻辑实体中查找匹配的表
+                        matched_tables = []
+                        for entity, tables in entity_to_tables.items():
+                            if kw in entity:
+                                matched_tables.extend(tables)
+                        
+                        # 去重并限制数量
+                        matched_tables = list(set(matched_tables))[:3]
+                        
+                        if matched_tables:
+                            for table_name in matched_tables:
+                                term_to_table[kw].add(table_name)
+                            # 记录这种弱关联
+                            if len(kw) >= 4:
+                                table_keywords[kw] = matched_tables[0]
+                            
+                            if stats.get('keyword_matched', 0) < 5:
+                                logger.info(f"[关键词弱匹配] '{kw}' -> {matched_tables[:2]} (来自: {metric_name})")
+                            stats["keyword_matched"] = stats.get("keyword_matched", 0) + 1
 
         # 统计各种匹配来源
         sheet2_chinese_matched = stats.get('sheet2_chinese_matched', 0)
         lancedb_matched = stats.get('lancedb_matched', 0)
         entity_matched = stats.get('entity_matched', 0)
+        keyword_matched = stats.get('keyword_matched', 0)
         
         logger.info(
             f"[指标清单] text2sql映射生成: {stats['with_tables']}/{stats['valid_metrics']} 指标关联表, "
-            f"{len(stats['tables_added'])} 个物理表"
+            f"{len(stats['tables_added'])} 个物理表, "
+            f"{keyword_matched}个关键词弱匹配"
         )
         logger.info(
             f"[指标清单] 匹配来源: {stats['sheet2_matched']}个编码精确匹配, "
