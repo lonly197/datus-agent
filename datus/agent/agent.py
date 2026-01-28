@@ -4,41 +4,17 @@
 
 import argparse
 import asyncio
-import csv
 import os
-import shutil
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Optional, Set
-
-from pydantic import ValidationError
+from typing import Any, AsyncGenerator, Dict, Optional
 
 from datus.agent.workflow_runner import WorkflowRunner
-from datus.configuration.agent_config import AgentConfig, BenchmarkConfig
+from datus.configuration.agent_config import AgentConfig
 from datus.models.base import LLMBaseModel
-
-# Import model implementations
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
-from datus.schemas.agent_models import SubAgentConfig
 from datus.schemas.node_models import SqlTask
-from datus.storage.ext_knowledge.ext_knowledge_init import init_ext_knowledge
-from datus.storage.ext_knowledge.store import ExtKnowledgeStore
-from datus.storage.metric.metrics_init import init_semantic_yaml_metrics, init_success_story_metrics
-from datus.storage.metric.store import SemanticMetricsRAG
-from datus.storage.schema_metadata import SchemaWithValueRAG
-from datus.storage.schema_metadata.benchmark_init import init_snowflake_schema
-from datus.storage.schema_metadata.benchmark_init_bird import init_dev_schema
-from datus.storage.schema_metadata.local_init import init_local_schema
-from datus.storage.sub_agent_kb_bootstrap import SUPPORTED_COMPONENTS as SUB_AGENT_COMPONENTS
-from datus.storage.sub_agent_kb_bootstrap import SubAgentBootstrapper
 from datus.tools.db_tools.db_manager import DBManager, get_db_manager
 from datus.utils.async_utils import ensure_not_cancelled
-from datus.utils.benchmark_utils import load_benchmark_tasks
-from datus.utils.constants import SYS_SUB_AGENTS
-from datus.utils.exceptions import DatusException, ErrorCode
-from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
-from datus.utils.time_utils import format_duration_human
 
 logger = get_logger(__name__)
 
@@ -46,7 +22,7 @@ logger = get_logger(__name__)
 class Agent:
     """
     Main entry point for the SQL Agent system.
-    Handles initialization, workflow management, and execution loop.
+    Handles initialization, workflow management, and execution coordination.
     """
 
     def __init__(
@@ -72,72 +48,26 @@ class Agent:
 
         self.tools: Dict[str, Any] = {}
         self.storage_modules: Dict[str, bool] = {}
-        self.metadata_store: Optional[SchemaWithValueRAG] = None
-        self.metrics_store: Optional[SemanticMetricsRAG] = None
+        self.metadata_store = None
+        self.metrics_store = None
         self._check_storage_modules()
 
     def _initialize_model(self) -> LLMBaseModel:
         llm_model = LLMBaseModel.create_model(model_name="default", agent_config=self.global_config)
         logger.info(f"Using model type: {llm_model.model_config.type}, model name: {llm_model.model_config.model}")
-
         return llm_model
 
     def _check_storage_modules(self):
-        """
-        Check if storage modules exist and initialize them if needed.
-        """
-        # Check and initialize lineage graph
+        """Check if storage modules exist and initialize them if needed."""
         if os.path.exists(os.path.join("storage", "schema_metadata")):
-            # Initialize lineage graph storage
-
             self.storage_modules["schema_metadata"] = True
-
-        # Check and initialize metrics store
         if os.path.exists(os.path.join("storage", "metric_store")):
-            # Initialize metrics store
             self.storage_modules["metric_store"] = True
-
-        # Check and initialize document storage
         if os.path.exists(os.path.join("storage", "document")):
-            # Initialize document storage
             self.storage_modules["document"] = True
-
-        # Check and initialize success story storage
         if os.path.exists(os.path.join("storage", "success_story")):
-            # Initialize success story storage
             self.storage_modules["success_story"] = True
-
         logger.info(f"Storage modules initialized: {list(self.storage_modules.keys())}")
-
-    def _safe_delete_directory(self, dir_path: str, context: str = "") -> None:
-        """
-        Safely delete a directory with path validation.
-
-        Args:
-            dir_path: Path to directory to delete
-            context: Description of what is being deleted (for logging)
-
-        Raises:
-            ValueError: If path is outside project root
-            OSError: If deletion fails
-        """
-        # Validate path is within project directory
-        abs_path = os.path.abspath(dir_path)
-        project_root = os.path.abspath(self.global_config.rag_storage_path())
-
-        if not abs_path.startswith(project_root):
-            raise ValueError(f"Refusing to delete directory outside project root: {abs_path}")
-
-        if not os.path.exists(abs_path):
-            logger.debug(f"Directory does not exist, skipping deletion: {abs_path}")
-            return
-
-        try:
-            shutil.rmtree(abs_path)
-            logger.info(f"Deleted directory: {context} ({abs_path})")
-        except Exception as e:
-            logger.error(f"Failed to delete directory {abs_path}: {e}")
-            raise
 
     def create_workflow_runner(
         self, check_db: bool = True, run_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None
@@ -158,9 +88,7 @@ class Agent:
         check_db: bool = True,
         run_id: Optional[str] = None,
     ) -> dict:
-        """
-        Execute a workflow synchronously via a dedicated runner.
-        """
+        """Execute a workflow synchronously via a dedicated runner."""
         runner = self.create_workflow_runner(check_db=check_db, run_id=run_id)
         return runner.run(sql_task=sql_task, check_storage=check_storage)
 
@@ -185,19 +113,11 @@ class Agent:
         self, sql_task: SqlTask, metadata: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[ActionHistory, None]:
         """Execute workflow with streaming and custom metadata."""
-
         try:
-            # Create workflow runner with metadata
             runner = self.create_workflow_runner(metadata=metadata)
-
-            # Check for cancellation before starting workflow execution
             ensure_not_cancelled()
-
-            # Execute with streaming
             async for action in runner.run_stream(sql_task=sql_task):
                 yield action
-
-                # Check for cancellation
                 ensure_not_cancelled()
         except asyncio.CancelledError:
             logger.info("Agent stream execution was cancelled")
@@ -232,7 +152,6 @@ class Agent:
             logger.info(
                 f"Using model type: {llm_model.model_config.type}, " f"model name: {llm_model.model_config.model}"
             )
-
             response = llm_model.generate("Hello, can you hear me?")
             logger.info("LLM model test successful")
             return {
@@ -244,490 +163,24 @@ class Agent:
             logger.error(f"LLM model test failed: {str(e)}")
             return {"status": "error", "message": str(e)}
 
-    def _refresh_scoped_agents(self, component: str, kb_strategy: str):
-        """Rebuild scoped knowledge bases for sub-agents after global bootstrap."""
-        if component not in SUB_AGENT_COMPONENTS:
-            return
-        if kb_strategy not in {"overwrite", "incremental"}:
-            return
-
-        agent_nodes = getattr(self.global_config, "agentic_nodes", {}) or {}
-        if not agent_nodes:
-            return
-        current_namespace = self.global_config.current_namespace
-        for name, raw_config in agent_nodes.items():
-            if name in SYS_SUB_AGENTS:
-                continue
-            try:
-                sub_config = SubAgentConfig.model_validate(raw_config)
-            except ValidationError as exc:
-                logger.warning(f"Skipping sub-agent '{name}' due to invalid configuration: {exc}")
-                continue
-            if not sub_config.is_in_namespace(current_namespace):
-                logger.debug(
-                    f"Skipping sub-agent '{name}' for component '{component}' "
-                    f" because there is no corresponding scope context configured under namespace {current_namespace}"
-                )
-                continue
-
-            try:
-                bootstrapper = SubAgentBootstrapper(
-                    sub_agent=sub_config,
-                    agent_config=self.global_config,
-                )
-                logger.info(
-                    f"Running SubAgentBootstrapper for sub-agent '{name}' (component={component}, "
-                    f"strategy=overwrite, storage={bootstrapper.storage_path})"
-                )
-                result = bootstrapper.run([component], "overwrite")
-                if not result.should_bootstrap:
-                    reason = result.reason or "No scoped context provided"
-                    logger.info(f"SubAgentBootstrapper skipped for sub-agent '{name}': {reason}")
-                else:
-                    component_summaries = []
-                    for comp_result in result.results:
-                        summary = f"{comp_result.component}:{comp_result.status}"
-                        if comp_result.message:
-                            summary = f"{summary} ({comp_result.message})"
-                        component_summaries.append(summary)
-                    component_summaries_str = (
-                        ", ".join(component_summaries) if component_summaries else "no component results"
-                    )
-                    logger.info(
-                        f"Bootstrap finished for sub-agent '{name}' (storage={result.storage_path}): "
-                        f"{component_summaries_str}"
-                    )
-            except Exception as exc:
-                logger.warning(f"Failed to refresh scoped KB for sub-agent '{name}': {exc}")
-
-    def bootstrap_kb(self):
+    def bootstrap_kb(self) -> Dict[str, Any]:
         """Initialize knowledge base storage components."""
+        from datus.agent.bootstrap import KnowledgeBaseBootstrapper
+
         logger.info("Initializing knowledge base components")
-        results = {}
-        # Get selected components from args
-        selected_components = self.args.components
+        bootstrapper = KnowledgeBaseBootstrapper(self.global_config, self.args)
+        return bootstrapper.bootstrap()
 
-        # Validate component names
-        valid_components = {"metadata", "metrics", "document", "ext_knowledge", "reference_sql"}
-        invalid = set(selected_components) - valid_components
-        if invalid:
-            raise ValueError(
-                f"Invalid bootstrap components: {invalid}. " f"Valid components: {sorted(valid_components)}"
-            )
+    def benchmark(self) -> Dict[str, Any]:
+        """Run benchmark tasks."""
+        from datus.agent.benchmark import BenchmarkEngine
 
-        kb_update_strategy = self.args.kb_update_strategy
-        benchmark_platform = self.args.benchmark
-        pool_size = 4 if not self.args.pool_size else self.args.pool_size
-        dir_path = self.global_config.rag_storage_path()
-
-        # Parse subject_tree from command line if provided
-        subject_tree = None
-        if hasattr(self.args, "subject_tree") and self.args.subject_tree:
-            # Parse comma-separated string into list
-            subject_tree = [s.strip() for s in self.args.subject_tree.split(",") if s.strip()]
-            logger.info(f"Using predefined subject_tree categories: {subject_tree}")
-
-        for component in selected_components:
-            # db_name = component_dirs[component]``
-            # Initialize corresponding stores
-            if component == "metadata":
-                if kb_update_strategy == "check":
-                    if not os.path.exists(dir_path):
-                        raise ValueError("metadata is not built, please run bootstrap_kb with overwrite strategy first")
-                    else:
-                        self.global_config.check_init_storage_config("database")
-
-                        self.metadata_store = SchemaWithValueRAG(self.global_config)
-                        return {
-                            "status": "success",
-                            "message": f"current metadata is already built, "
-                            f"dir_path={dir_path},"
-                            f"schema_size={self.metadata_store.get_schema_size()}, "
-                            f"value_size={self.metadata_store.get_value_size()}",
-                        }
-
-                if kb_update_strategy == "overwrite":
-                    self.global_config.save_storage_config("database")
-                    schema_metadata_path = os.path.join(dir_path, "schema_metadata.lance")
-                    self._safe_delete_directory(schema_metadata_path, "schema_metadata")
-                    schema_value_path = os.path.join(dir_path, "schema_value.lance")
-                    self._safe_delete_directory(schema_value_path, "schema_value")
-                else:
-                    self.global_config.check_init_storage_config("database")
-                self.metadata_store = SchemaWithValueRAG(self.global_config)
-
-                if not benchmark_platform:
-                    self.check_db()
-                    init_local_schema(
-                        self.metadata_store,
-                        self.global_config,
-                        self.db_manager,
-                        kb_update_strategy,
-                        table_type=self.args.schema_linking_type,
-                        init_catalog_name=self.args.catalog or "",
-                        init_database_name=self.args.database_name or "",
-                        pool_size=pool_size,
-                    )
-                elif benchmark_platform == "spider2":
-                    benchmark_path = self.global_config.benchmark_path(benchmark_platform)
-
-                    init_snowflake_schema(
-                        self.metadata_store,
-                        benchmark_path,
-                        kb_update_strategy,
-                        pool_size=pool_size,
-                    )
-                elif benchmark_platform == "bird_dev":
-                    self.check_db()
-                    benchmark_path = self.global_config.benchmark_path(benchmark_platform)
-                    init_dev_schema(
-                        self.metadata_store,
-                        self.db_manager,
-                        self.global_config.current_namespace,
-                        benchmark_path,
-                        kb_update_strategy,
-                        pool_size=pool_size,
-                    )
-                elif benchmark_platform == "bird_critic":
-                    # TODO init bird_critic schema
-                    raise DatusException(
-                        ErrorCode.COMMON_VALIDATION_FAILED,
-                        message=f"Unsupported benchmark platform: {benchmark_platform}",
-                    )
-                else:
-                    raise DatusException(
-                        ErrorCode.COMMON_VALIDATION_FAILED, f"Unsupported benchmark platform: {benchmark_platform}"
-                    )
-
-                result = {
-                    "status": "success",
-                    "message": f"metadata bootstrap completed, "
-                    f"schema_size={self.metadata_store.get_schema_size()}, "
-                    f"value_size={self.metadata_store.get_value_size()}",
-                }
-                self._refresh_scoped_agents("metadata", kb_update_strategy)
-                return result
-
-            elif component == "metrics":
-                semantic_model_path = os.path.join(dir_path, "semantic_model.lance")
-                metrics_path = os.path.join(dir_path, "metrics.lance")
-                if kb_update_strategy == "overwrite":
-                    self._safe_delete_directory(semantic_model_path, "semantic_model")
-                    self._safe_delete_directory(metrics_path, "metrics")
-                    self.global_config.save_storage_config("metric")
-                else:
-                    self.global_config.check_init_storage_config("metric")
-                # Initialize metrics using unified SemanticAgenticNode approach
-                if hasattr(self.args, "semantic_yaml") and self.args.semantic_yaml:
-                    successful, error_message = init_semantic_yaml_metrics(self.args.semantic_yaml, self.global_config)
-                else:
-                    successful, error_message = init_success_story_metrics(self.args, self.global_config, subject_tree)
-
-                # Create metrics_store for statistics
-                if successful:
-                    self.metrics_store = SemanticMetricsRAG(self.global_config)
-                    result = {
-                        "status": "success",
-                        "message": f"metrics bootstrap completed,"
-                        f"semantic_model_size={self.metrics_store.get_semantic_model_size()}, "
-                        f"metrics_size={self.metrics_store.get_metrics_size()}",
-                        "error": error_message,
-                    }
-                    self._refresh_scoped_agents("metrics", kb_update_strategy)
-                else:
-                    result = {
-                        "status": "failed",
-                        "message": error_message,
-                    }
-                return result
-            elif component == "document":
-                from datus.storage.document.store import document_store
-
-                self.storage_modules["document_store"] = document_store(self.global_config.rag_storage_path())
-                # self.global_config.check_init_storage_config("document")
-            elif component == "ext_knowledge":
-                ext_knowledge_path = os.path.join(dir_path, "ext_knowledge.lance")
-                if kb_update_strategy == "overwrite":
-                    self._safe_delete_directory(ext_knowledge_path, "ext_knowledge")
-                    self.global_config.save_storage_config("ext_knowledge")
-                else:
-                    self.global_config.check_init_storage_config("ext_knowledge")
-                self.ext_knowledge_store = ExtKnowledgeStore(dir_path)
-                init_ext_knowledge(
-                    self.ext_knowledge_store, self.args, build_mode=kb_update_strategy, pool_size=pool_size
-                )
-                return {
-                    "status": "success",
-                    "message": f"ext_knowledge bootstrap completed, "
-                    f"knowledge_size={self.ext_knowledge_store.table_size()}",
-                }
-            elif component == "reference_sql":
-                reference_sql_path = os.path.join(dir_path, "reference_sql.lance")
-                if kb_update_strategy == "overwrite":
-                    self._safe_delete_directory(reference_sql_path, "reference_sql")
-                    self.global_config.save_storage_config("reference_sql")
-                else:
-                    self.global_config.check_init_storage_config("reference_sql")
-
-                # Initialize reference SQL storage
-                from datus.storage.reference_sql import ReferenceSqlRAG
-                from datus.storage.reference_sql.reference_sql_init import init_reference_sql
-
-                self.reference_sql_store = ReferenceSqlRAG(self.global_config)
-                result = init_reference_sql(
-                    self.reference_sql_store,
-                    self.args,
-                    self.global_config,
-                    build_mode=kb_update_strategy,
-                    pool_size=pool_size,
-                    subject_tree=subject_tree,
-                )
-                if isinstance(result, dict) and result.get("status") != "error":
-                    self._refresh_scoped_agents("reference_sql", kb_update_strategy)
-                return result
-            results[component] = True
-
-        # Initialize success story storage (always created)
-        success_story_path = os.path.join("storage", "success_story")
-        if not os.path.exists(success_story_path):
-            os.makedirs(success_story_path)
-        results["success_story"] = True
-
-        logger.info("Knowledge base components initialized successfully: " f"{', '.join(selected_components)}")
-        return {
-            "status": "success",
-            "message": "Knowledge base initialized",
-            "components": results,
-        }
-
-    def benchmark(self):
         logger.info("Benchmarking begins")
-        benchmark_platform = self.args.benchmark
-        benchmark_path = self.global_config.benchmark_path(benchmark_platform)
-
-        if not os.path.exists(benchmark_path):
-            raise FileNotFoundError(f"Benchmark_path not found: {benchmark_path}")
-
-        target_task_ids = getattr(self.args, "benchmark_task_ids", [])
-        target_task_ids = set(target_task_ids) if target_task_ids else None
-        import time
-        from datetime import datetime
-
-        # Generate a shared run_id for this benchmark run
-        benchmark_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        logger.info(f"Benchmark run_id: {benchmark_run_id}")
-
-        start = time.perf_counter()
-        if benchmark_platform == "semantic_layer":
-            self.global_config.check_init_storage_config("metric")
-            result = self.benchmark_semantic_layer(benchmark_path, target_task_ids, run_id=benchmark_run_id)
-        else:
-            self.global_config.check_init_storage_config("database")
-            self.global_config.check_init_storage_config("metric")
-            result = self.do_benchmark(benchmark_platform, target_task_ids, run_id=benchmark_run_id)
-        end = time.perf_counter()
-
-        time_spends = end - start
-        result["time_spends"] = format_duration_human(time_spends)
-        result["time_spends_seconds"] = str(time_spends)
-        result["run_id"] = benchmark_run_id
-        return result
-
-    def do_benchmark(
-        self, benchmark_platform: str, target_task_ids: Optional[Set[str]] = None, run_id: Optional[str] = None
-    ):
-        _, conn = get_db_manager(self.global_config.namespaces).first_conn_with_name(
-            self.global_config.current_namespace
-        )
-        self.check_db()
-
-        def run_single_task(task_id: str, benchmark_config: BenchmarkConfig, task_item: Dict[str, Any]):
-            """Execute a single benchmark task"""
-            task = task_item.get(benchmark_config.question_key)
-            if not task:
-                logger.warning(
-                    f"The question content was not obtained through {benchmark_config.question_key}, "
-                    "please check your benchmark configuration."
-                )
-                return task_id, ""
-            database_name = task_item.get(benchmark_config.db_key) or conn.database_name or ""
-            logger.info(f"start benchmark with {task_id}: {task}")
-            use_tables = None if not benchmark_config.use_tables_key else task_item.get(benchmark_config.use_tables_key)
-
-            # Use hierarchical save directory structure
-            output_dir = self.global_config.get_save_run_dir(run_id) if run_id else self.global_config.output_dir
-
-            result = self.run(
-                SqlTask(
-                    id=task_id,
-                    database_type=conn.dialect,
-                    task=task,
-                    database_name=database_name,
-                    output_dir=output_dir,
-                    current_date=self.args.current_date,
-                    tables=use_tables,
-                    external_knowledge=(
-                        ""
-                        if not benchmark_config.ext_knowledge_key
-                        else task_item.get(benchmark_config.ext_knowledge_key, "")
-                    ),
-                    schema_linking_type="full",
-                ),
-                check_storage=False,
-                check_db=False,
-                run_id=run_id,
-            )
-            logger.info(f"Finish benchmark with {task_id}, " f"file saved in {output_dir}/{task_id}.csv.")
-            return task_id, result
-
-        max_workers = getattr(self.args, "max_workers", 1) or 1
-        logger.info(f"Loaded tasks from {benchmark_platform} benchmark")
-        benchmark_config = self.global_config.benchmark_config(benchmark_platform)
-        task_id_key = benchmark_config.question_id_key or "_task_id"
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_task = {}
-            for task_item in load_benchmark_tasks(self.global_config, benchmark_platform):
-                raw_task_id = task_item.get(task_id_key)
-                if raw_task_id in (None, ""):
-                    logger.warning(f"Task id {raw_task_id} was not found, please check your benchmark configuration.")
-                    continue
-                else:
-                    task_id = str(raw_task_id)
-                task_item[task_id_key] = task_id
-                if not target_task_ids or task_id in target_task_ids:
-                    f = executor.submit(run_single_task, task_id, benchmark_config, task_item)
-                    future_to_task[f] = task_item
-
-            # Wait for completion
-            for future in as_completed(future_to_task):
-                task_item = future_to_task[future]
-                try:
-                    task_id, _ = future.result()
-                    logger.debug(f"Task {task_id} completed successfully")
-                except Exception as exc:
-                    task_id = task_item.get(task_id_key) or task_item.get("_task_id")
-                    if task_id is None:
-                        task_id = f"unknown_{len(future_to_task)}"
-                    logger.error(f"Task {task_id} generated an exception: {exc}")
-        logger.info("Benchmark execution completed.")
-        return {"status": "success", "message": "Benchmark tasks executed successfully"}
-
-    def benchmark_semantic_layer(
-        self, benchmark_path: str, target_task_ids: Optional[Set[str]] = None, run_id: Optional[str] = None
-    ):
-        task_file = self.args.testing_set
-        self._check_benchmark_file(task_file)
-
-        # Clean up previous execution results to avoid interference
-        self._cleanup_benchmark_output_paths(benchmark_path)
-
-        tasks = []
-        with open(task_file, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for line_no, row in enumerate(reader, 1):
-                logger.debug(f"line {line_no}: {row}")
-                if "question" in row and "sql" in row and row["question"].strip() and row["sql"].strip():
-                    task_data = {"question_id": line_no, "question": row["question"].strip(), "sql": row["sql"].strip()}
-                    # Check if ext_knowledge column exists and add it to task data
-                    if "external_knowledge" in row and row["external_knowledge"].strip():
-                        task_data["external_knowledge"] = row["external_knowledge"].strip()
-                    tasks.append(task_data)
-
-        logger.info(f"Loaded {len(tasks)} tasks from semantic_layer benchmark")
-
-        metric_meta = self.global_config.current_metric_meta(self.args.metric_meta)
-
-        for task in tasks:
-            task_id = str(task["question_id"])
-            if target_task_ids and task_id not in target_task_ids:
-                continue
-
-            question = task["question"]
-            logger.info(f"start benchmark with {task_id}: {question}")
-            current_db_config = self.global_config.current_db_config()
-
-            # Merge external knowledge from file with metric_meta
-            combined_ext_knowledge = metric_meta.ext_knowledge
-            if "external_knowledge" in task and task["external_knowledge"]:
-                if combined_ext_knowledge:
-                    # Combine both knowledge sources
-                    combined_ext_knowledge = f"{combined_ext_knowledge}\n\n{task['external_knowledge']}"
-                else:
-                    # Use only file knowledge if metric_meta doesn't have any
-                    combined_ext_knowledge = task["external_knowledge"]
-
-            # Use hierarchical save directory structure
-            output_dir = self.global_config.get_save_run_dir(run_id) if run_id else self.global_config.output_dir
-
-            if metric_meta.subject_path and metric_meta.subject_path.strip():
-                subject_path = [c.strip() for c in metric_meta.subject_path.split("/") if c.strip()]
-            else:
-                subject_path = None
-            self.run(
-                SqlTask(
-                    id=task_id,
-                    database_type=current_db_config.type,
-                    task=question,
-                    database_name=current_db_config.database,
-                    schema_name=current_db_config.schema,
-                    subject_path=subject_path,
-                    output_dir=output_dir,
-                    external_knowledge=combined_ext_knowledge,
-                    current_date=self.args.current_date,
-                ),
-                run_id=run_id,
-            )
-
-            logger.info(f"Finish benchmark with {task_id}, " f"file saved in {output_dir}/{task_id}.csv.")
-
-        return {"status": "success", "message": "Benchmark tasks executed successfully"}
-
-    def _check_benchmark_file(self, file_path: str):
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Benchmarking task file not found, file_path={file_path}")
-
-    def _cleanup_benchmark_output_paths(self, benchmark_path: str):
-        """Clean up previous benchmark execution results to avoid interference."""
-        current_namespace = self.global_config.current_namespace
-
-        # Clean up namespace directory in output directory
-        output_dir = self.global_config.output_dir
-        namespace_dir = os.path.join(output_dir, current_namespace)
-
-        # Safety check: ensure we're only deleting within output directory
-        if namespace_dir and os.path.exists(namespace_dir):
-            namespace_abs = os.path.abspath(namespace_dir)
-            output_abs = os.path.abspath(output_dir)
-            if not namespace_abs.startswith(output_abs):
-                raise ValueError(f"Namespace directory outside output root: {namespace_dir}")
-
-            logger.info(f"Cleaning up namespace directory: {namespace_dir}")
-            try:
-                shutil.rmtree(namespace_dir)
-                logger.info(f"Successfully removed namespace directory: {namespace_dir}")
-            except Exception as e:
-                logger.warning(f"Failed to clean namespace directory {namespace_dir}: {e}")
-
-        # Clean up gold directory (which contains exec_result)
-        gold_path = os.path.join(benchmark_path, "gold")
-        if gold_path and os.path.exists(gold_path):
-            gold_abs = os.path.abspath(gold_path)
-            benchmark_abs = os.path.abspath(benchmark_path)
-            if not gold_abs.startswith(benchmark_abs):
-                raise ValueError(f"Gold directory outside benchmark path: {gold_path}")
-
-            logger.info(f"Cleaning up gold directory: {gold_path}")
-            try:
-                shutil.rmtree(gold_path)
-                logger.info(f"Successfully removed gold directory: {gold_path}")
-            except Exception as e:
-                logger.warning(f"Failed to clean gold directory {gold_path}: {e}")
-
-    def benchmark_bird_critic(self):
-        pass
+        engine = BenchmarkEngine(self.global_config, self.args, check_db_fn=self.check_db)
+        return engine.run()
 
     def evaluation(self, log_summary: bool = True) -> Dict[str, Any]:
-        """Evaluate the benchmarking"""
+        """Evaluate the benchmarking."""
         benchmark_platform = self.args.benchmark
         if benchmark_platform in ("semantic_layer", "bird_critic"):
             return {
@@ -754,150 +207,14 @@ class Agent:
             "message": evaluation_result.get("error"),
         }
 
-    def generate_dataset(self):
+    def generate_dataset(self) -> Dict[str, Any]:
         """Generate dataset from trajectory files."""
+        from datus.agent.dataset import TrajectoryDatasetGenerator
+
         logger.info("Generating dataset from trajectory files")
+        generator = TrajectoryDatasetGenerator(self.global_config, self.args)
+        return generator.generate()
 
-        import glob
-        import json
-
-        import yaml
-
-        trajectory_dir = self.args.trajectory_dir
-        dataset_name = self.args.dataset_name
-        output_format = getattr(self.args, "format", "json")
-        benchmark_task_ids = getattr(self.args, "benchmark_task_ids", None)
-
-        if not os.path.exists(trajectory_dir):
-            raise FileNotFoundError(f"Trajectory directory not found: {trajectory_dir}")
-
-        # Parse benchmark_task_ids if provided
-        allowed_task_ids = None
-        if benchmark_task_ids:
-            allowed_task_ids = [task_id.strip() for task_id in benchmark_task_ids.split(",")]
-            logger.info(f"Filtering by task IDs: {allowed_task_ids}")
-
-        # Find all trajectory YAML files
-        trajectory_files = glob.glob(os.path.join(trajectory_dir, "*_*.yaml"))
-        logger.info(f"Found {len(trajectory_files)} trajectory files")
-
-        dataset_data = []
-
-        for trajectory_file in trajectory_files:
-            try:
-                # Extract task_id from filename (e.g., "0_1750662901.yaml" -> "0")
-                filename = os.path.basename(trajectory_file)
-                task_id = filename.split("_")[0]
-
-                # Filter by task_id if benchmark_task_ids is provided
-                if allowed_task_ids and task_id not in allowed_task_ids:
-                    logger.debug(f"Skipping trajectory file {filename} (task_id {task_id} not in allowed list)")
-                    continue
-
-                logger.info(f"Processing trajectory file: {filename}")
-
-                # Load trajectory YAML file
-                with open(trajectory_file, "r", encoding="utf-8") as f:
-                    trajectory_data = yaml.safe_load(f)
-
-                # Extract sql_contexts from the workflow
-                sql_contexts = None
-                first_sql_node_id = None
-
-                if "workflow" in trajectory_data and "nodes" in trajectory_data["workflow"]:
-                    for node in trajectory_data["workflow"]["nodes"]:
-                        if node.get("type") in ["reasoning", "generate_sql"]:
-                            if "result" in node and "sql_contexts" in node["result"]:
-                                sql_contexts = node["result"]["sql_contexts"]
-                                first_sql_node_id = node["id"]
-                                break
-
-                if not sql_contexts or not first_sql_node_id:
-                    logger.warning(f"No sql_contexts found in {filename}")
-                    continue
-
-                # Load node details from the corresponding node file
-                node_file = os.path.join(trajectory_dir, task_id, f"{first_sql_node_id}.yml")
-                if not os.path.exists(node_file):
-                    logger.warning(f"Node file not found: {node_file}")
-                    continue
-
-                with open(node_file, "r", encoding="utf-8") as f:
-                    node_data = yaml.safe_load(f)
-
-                # Extract required fields
-                user_prompt = node_data.get("user_prompt", "")
-                system_prompt = node_data.get("system_prompt", "")
-                reason_content = node_data.get("reason_content", [])
-                output_content = node_data.get("output_content", "")
-
-                # Create dataset entry
-                dataset_entry = {
-                    "task_id": task_id,
-                    "user_prompt": user_prompt,
-                    "system_prompt": system_prompt,
-                    "reason_content": reason_content,
-                    "sql_contexts": sql_contexts,
-                    "output_content": output_content,
-                }
-
-                dataset_data.append(dataset_entry)
-                logger.info(f"Successfully processed {filename}")
-
-            except Exception as e:
-                logger.error(f"Error processing {trajectory_file}: {str(e)}")
-                continue
-
-        # Save dataset to file based on format
-        # Validate dataset_name to prevent path traversal attacks
-        if dataset_name != Path(dataset_name).name:
-            raise ValueError(f"Invalid dataset_name '{dataset_name}': must be a simple filename without path separators")
-
-        if output_format == "json":
-            output_file = f"{dataset_name}.json"
-            with open(output_file, "w", encoding="utf-8") as f:
-                json.dump(dataset_data, f, ensure_ascii=False, indent=2)
-        elif output_format == "parquet":
-            try:
-                import pandas as pd
-
-                output_file = f"{dataset_name}.parquet"
-
-                # Convert the dataset to a pandas DataFrame
-                # For nested structures, we'll convert them to strings
-                df_data = []
-                for entry in dataset_data:
-                    df_entry = {
-                        "user_prompt": entry["user_prompt"],
-                        "system_prompt": entry["system_prompt"],
-                        "reason_content": to_str(entry["reason_content"]),
-                        "sql_contexts": to_str(entry["sql_contexts"]),
-                        "output_content": entry["output_content"],
-                    }
-                    df_data.append(df_entry)
-
-                df = pd.DataFrame(df_data)
-                df.to_parquet(output_file, index=False)
-
-            except ImportError:
-                logger.error(
-                    "pandas is required for parquet format. Please install it with: pip install pandas pyarrow"
-                )
-                return {
-                    "status": "error",
-                    "message": "pandas is required for parquet format. "
-                    "Please install it with: pip install pandas pyarrow",
-                }
-
-        filter_info = f" (filtered by task IDs: {allowed_task_ids})" if allowed_task_ids else ""
-        logger.info(f"Dataset generated successfully: {output_file}")
-        logger.info(f"Total entries: {len(dataset_data)}{filter_info}")
-
-        return {
-            "status": "success",
-            "message": f"Dataset generated successfully: {output_file}",
-            "total_entries": len(dataset_data),
-            "output_file": output_file,
-            "format": output_format,
-            "filtered_task_ids": allowed_task_ids,
-        }
+    def benchmark_bird_critic(self):
+        """Placeholder for BIRD critic benchmark."""
+        pass
