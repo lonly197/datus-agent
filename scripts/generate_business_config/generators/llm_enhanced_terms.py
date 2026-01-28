@@ -210,6 +210,88 @@ class LLMEnhancedBusinessTermsGenerator:
         if not self.use_llm or not self.llm_model:
             return {"enhanced": False, "confidence": 0.0}
 
+    def generate_from_metrics_xlsx(
+        self,
+        xlsx_path: Path,
+        existing_terms: Dict,
+        header_rows: int = 2,
+        sheet_name: Optional[str] = None
+    ) -> Dict:
+        """从指标清单Excel提取业务术语（LLM增强版）"""
+        logger.info(f"Processing metrics Excel with LLM: {xlsx_path}")
+
+        term_to_table = defaultdict(set, existing_terms.get("term_to_table", {}))
+        table_keywords = existing_terms.get("table_keywords", {})
+        term_to_schema = defaultdict(set, existing_terms.get("term_to_schema", {}))
+
+        records = self.excel_reader.read_with_header(xlsx_path, header_rows, sheet_name)
+
+        if not records:
+            logger.warning("[Excel读取] 指标清单未读取到有效数据")
+            return self._build_result(term_to_table, term_to_schema, table_keywords, {"valid_metrics": 0})
+
+        for row in records:
+            self._process_metrics_row(row, term_to_table, term_to_schema, table_keywords)
+
+        # LLM增强：对指标术语进行消歧
+        if self.use_llm and self.llm_model:
+            logger.info("Starting LLM enhancement for metrics term disambiguation...")
+            term_to_table, term_to_schema = self._llm_enhance_terms(term_to_table, term_to_schema)
+
+        logger.info(f"[Excel解析] 指标清单处理完成: {len(records)} 个指标")
+
+        return self._build_result(term_to_table, term_to_schema, table_keywords, {"valid_metrics": len(records)})
+
+    def _process_metrics_row(
+        self,
+        row: Dict,
+        term_to_table: Dict[str, Set[str]],
+        term_to_schema: Dict[str, Set[str]],
+        table_keywords: Dict[str, str]
+    ):
+        """处理单行指标数据"""
+        metric_name = HeaderParser.extract_field(row, ["指标名称"])
+        biz_def = HeaderParser.extract_field(row, ["业务定义及说明", "业务定义"])
+        biz_activity = HeaderParser.extract_field(row, ["业务活动"])
+        category1 = HeaderParser.extract_field(row, ["分类1", "分类一", "一级分类"])
+        category2 = HeaderParser.extract_field(row, ["分类2", "分类二", "二级分类"])
+        source_model = HeaderParser.extract_field(row, ["来源dws模型", "dws模型", "来源模型", "来源表"])
+
+        if not metric_name:
+            return
+
+        if source_model and HeaderParser.is_valid_table_name(source_model):
+            term_to_table[metric_name].add(source_model)
+
+            if biz_activity:
+                composite_term = f"{biz_activity}_{metric_name}"
+                term_to_table[composite_term].add(source_model)
+
+        if biz_def:
+            keywords = self.term_extractor.extract_business_keywords(biz_def)
+            for kw in keywords:
+                if source_model and HeaderParser.is_valid_table_name(source_model):
+                    term_to_table[kw].add(source_model)
+                    if len(kw) >= 4:
+                        table_keywords[kw] = source_model
+
+        if metric_name:
+            metric_terms = self.term_extractor.extract_metric_terms(metric_name)
+            for term in metric_terms:
+                if source_model and HeaderParser.is_valid_table_name(source_model):
+                    term_to_table[term].add(source_model)
+                    if len(term) >= 2:
+                        table_keywords[term] = source_model
+
+        for category in [category1, category2]:
+            if category and len(category) >= self.min_term_length and HeaderParser.is_meaningful_term(category):
+                clean_cat = category.strip()
+                if clean_cat and clean_cat.lower() not in ['nan', 'none', 'null', '']:
+                    if source_model and HeaderParser.is_valid_table_name(source_model):
+                        term_to_table[clean_cat].add(source_model)
+                        if len(clean_cat) >= 2:
+                            table_keywords[clean_cat] = source_model
+
         prompt = f"""You are a data warehouse business analyst. Analyze the business term and determine the most relevant tables.
 
 ## Input
