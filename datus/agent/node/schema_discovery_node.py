@@ -8,6 +8,7 @@ SchemaDiscoveryNode implementation for discovering relevant schema and tables.
 
 import os
 import sys
+import time
 import subprocess
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
@@ -53,6 +54,16 @@ from datus.utils.chinese_query_utils import (
     extract_chinese_keywords,
     ChineseQueryAnalysis,
     QueryComplexity,
+)
+
+# Import metrics tracking
+from datus.utils.schema_discovery_metrics import (
+    SchemaDiscoveryMetrics,
+    StageMetrics,
+    SearchStage,
+    ExternalKnowledgeMetrics,
+    SemanticSearchMetrics,
+    global_metrics_collector,
 )
 
 logger = get_logger(__name__)
@@ -467,6 +478,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         """
         Discover candidate tables based on task and intent.
 
+        ✅ Enhanced v2.6: Added comprehensive metrics tracking for all search stages.
+
         Args:
             task: The SQL task
             intent: Detected intent type
@@ -474,8 +487,12 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         Returns:
             List of candidate table names
         """
-        # For now, use a simple heuristic approach
-        # In production, this could use semantic search or LLM-based table discovery
+        # Initialize metrics collector for this discovery
+        self._metrics = SchemaDiscoveryMetrics(
+            workflow_id=getattr(self.workflow, 'id', '') if self.workflow else '',
+            query_id=getattr(task, 'id', '') if task else '',
+        )
+        self._metrics.start_discovery(getattr(task, 'task', ''))
 
         candidate_details: Dict[str, Dict[str, Any]] = {}
         candidate_order: List[str] = []
@@ -507,11 +524,18 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         entry["matched_terms"].append(term)
 
         # 1. If tables are explicitly mentioned in the task, use those (Highest Priority)
+        self._metrics.start_stage(SearchStage.EXPLICIT)
         if hasattr(task, "tables") and task.tables:
             for table_name in task.tables:
                 record_candidate(table_name, "explicit")
             logger.info(f"Using explicitly specified tables: {task.tables}")
             discovery_stats["explicit_tables"] = len(task.tables)
+        self._metrics.end_stage(
+            SearchStage.EXPLICIT,
+            success=bool(hasattr(task, "tables") and task.tables),
+            tables_found=len(task.tables) if hasattr(task, "tables") and task.tables else 0,
+            tables_returned=len(task.tables) if hasattr(task, "tables") and task.tables else 0,
+        )
 
         # If intent is text2sql or sql (from intent analysis), try to discover tables
         if intent in ["text2sql", "sql"] and hasattr(task, "task"):
@@ -524,20 +548,50 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 base_matching_rate = "fast"  # Default for backward compatibility
             final_matching_rate = self._apply_progressive_matching(base_matching_rate)
 
-            # ✅ NEW: External knowledge enhancement (from SchemaLinkingNode)
+            # ✅ NEW: External knowledge enhancement (from SchemaLinkingNode) with metrics
+            self._metrics.start_stage(SearchStage.EXTERNAL_KNOWLEDGE)
+            ek_start_time = time.time()
             if self.workflow and hasattr(self.workflow, "task"):
-                enhanced_knowledge = await self._search_and_enhance_external_knowledge(
-                    self.workflow.task.task,
-                    getattr(self.workflow.task, "subject_path", None),
-                )
+                try:
+                    enhanced_knowledge = await self._search_and_enhance_external_knowledge(
+                        self.workflow.task.task,
+                        getattr(self.workflow.task, "subject_path", None),
+                    )
 
-                if enhanced_knowledge:
-                    original_knowledge = getattr(self.workflow.task, "external_knowledge", "")
-                    combined_knowledge = self._combine_knowledge(original_knowledge, enhanced_knowledge)
-                    self.workflow.task.external_knowledge = combined_knowledge
-                    logger.info(f"Enhanced external knowledge with {len(enhanced_knowledge.split(chr(10)))} entries")
+                    if enhanced_knowledge:
+                        original_knowledge = getattr(self.workflow.task, "external_knowledge", "")
+                        combined_knowledge = self._combine_knowledge(original_knowledge, enhanced_knowledge)
+                        self.workflow.task.external_knowledge = combined_knowledge
+                        logger.info(f"Enhanced external knowledge with {len(enhanced_knowledge.split(chr(10)))} entries")
+                        
+                        # Record external knowledge metrics
+                        ek_metrics = ExternalKnowledgeMetrics(
+                            attempted=True,
+                            success=True,
+                            entries_found=len(enhanced_knowledge.split(chr(10))),
+                            entries_used=len(enhanced_knowledge.split(chr(10))),
+                            duration_ms=(time.time() - ek_start_time) * 1000,
+                            query_text=task.task,
+                        )
+                        self._metrics.record_external_knowledge(ek_metrics)
+                        self._metrics.end_stage(SearchStage.EXTERNAL_KNOWLEDGE, success=True, tables_found=0)
+                    else:
+                        self._metrics.end_stage(SearchStage.EXTERNAL_KNOWLEDGE, success=True, tables_found=0)
+                except Exception as e:
+                    ek_metrics = ExternalKnowledgeMetrics(
+                        attempted=True,
+                        success=False,
+                        error_type=type(e).__name__,
+                        error_message=str(e),
+                    )
+                    self._metrics.record_external_knowledge(ek_metrics)
+                    self._metrics.end_stage(SearchStage.EXTERNAL_KNOWLEDGE, success=False, tables_found=0)
+                    logger.warning(f"External knowledge enhancement failed: {e}")
+            else:
+                self._metrics.end_stage(SearchStage.EXTERNAL_KNOWLEDGE, success=False, tables_found=0)
 
             # ✅ NEW: Check if LLM matching should be used (from SchemaLinkingNode)
+            self._metrics.start_stage(SearchStage.LLM_MATCHING)
             if final_matching_rate == "from_llm":
                 logger.info(f"[LLM Matching] Using LLM-based schema matching for large datasets")
                 llm_tables = await self._llm_based_schema_matching(task.task, final_matching_rate)
@@ -546,12 +600,20 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         record_candidate(table_name, "llm_schema_matching")
                     logger.info(f"[LLM Matching] Found {len(llm_tables)} tables via LLM inference")
                 discovery_stats["llm_schema_matching_tables"] = len(llm_tables or [])
+                self._metrics.end_stage(
+                    SearchStage.LLM_MATCHING,
+                    success=bool(llm_tables),
+                    tables_found=len(llm_tables or []),
+                )
+            else:
+                self._metrics.end_stage(SearchStage.LLM_MATCHING, success=True, tables_found=0)
 
             # --- Stage 1: Fast Cache/Keyword & Semantic (Hybrid Search) ---
             # Align with design: semantic search uses top_n=20 by default.
             top_n = 20
 
-            # 1. Semantic Search (High Priority)
+            # 1. Semantic Search (High Priority) with detailed metrics
+            self._metrics.start_stage(SearchStage.SEMANTIC)
             semantic_tables, semantic_stats = await self._semantic_table_discovery(task.task, top_n=top_n)
             if semantic_tables:
                 for result in semantic_tables:
@@ -560,15 +622,26 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     f"[Stage 1] Found {len(semantic_tables)} tables via semantic search (top_n={top_n})"
                 )
             discovery_stats.update(semantic_stats)
+            self._metrics.end_stage(
+                SearchStage.SEMANTIC,
+                success=bool(semantic_tables),
+                tables_found=len(semantic_tables),
+                metadata=semantic_stats,
+            )
 
-            # 2. Keyword Matching (Medium Priority)
-            # Optimization: Always run keyword search to improve recall (Hybrid Search)
+            # 2. Keyword Matching (Medium Priority) with metrics
+            self._metrics.start_stage(SearchStage.KEYWORD)
             keyword_tables = self._keyword_table_discovery(task_text)
             if keyword_tables:
                 for table_name, matched_terms in keyword_tables.items():
                     record_candidate(table_name, "keyword", matched_terms=matched_terms)
                 logger.info(f"[Stage 1] Found {len(keyword_tables)} tables via keyword matching")
             discovery_stats["keyword_tables"] = len(keyword_tables)
+            self._metrics.end_stage(
+                SearchStage.KEYWORD,
+                success=bool(keyword_tables),
+                tables_found=len(keyword_tables),
+            )
 
             # 3. LLM Inference (Stage 1.5) - Enhance recall for Chinese/Ambiguous queries
             llm_tables = await self._llm_based_table_discovery(task.task)
@@ -580,7 +653,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
 
             candidate_tables = candidate_order[:]
 
-            # --- Stage 2: Deep Metadata Scan (Context Search) ---
+            # --- Stage 2: Deep Metadata Scan (Context Search) with metrics ---
+            self._metrics.start_stage(SearchStage.CONTEXT_SEARCH)
             # ✅ Optimized: More aggressive trigger condition (was <3, now <10)
             # This ensures better recall by using context search more frequently
             context_threshold = 10
@@ -611,13 +685,19 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         record_candidate(table_name, "context_search")
                     logger.info(f"[Stage 2] Found {len(context_tables)} tables via context search")
                 discovery_stats["context_tables"] = len(context_tables or [])
+                self._metrics.end_stage(
+                    SearchStage.CONTEXT_SEARCH,
+                    success=bool(context_tables),
+                    tables_found=len(context_tables or []),
+                )
             else:
                 discovery_stats["context_tables"] = 0
+                self._metrics.end_stage(SearchStage.CONTEXT_SEARCH, success=True, tables_found=0)
 
             candidate_tables = candidate_order[:]
 
-            # 4. Fallback: Get All Tables (Low Priority)
-            # Only if absolutely no tables found from previous stages
+            # 4. Fallback: Get All Tables (Low Priority) with metrics
+            self._metrics.start_stage(SearchStage.FALLBACK)
             if not candidate_tables:
                 logger.info("[Stage 3] No tables found, attempting Fallback (Get All Tables)...")
                 fallback_tables = await self._fallback_get_all_tables(task)
@@ -626,8 +706,14 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                         record_candidate(table_name, "fallback")
                     logger.warning(f"[Stage 3] Used fallback: {len(fallback_tables)} tables")
                 discovery_stats["fallback_tables"] = len(fallback_tables or [])
+                self._metrics.end_stage(
+                    SearchStage.FALLBACK,
+                    success=bool(fallback_tables),
+                    tables_found=len(fallback_tables or []),
+                )
             else:
                 discovery_stats["fallback_tables"] = 0
+                self._metrics.end_stage(SearchStage.FALLBACK, success=True, tables_found=0)
 
         max_tables = None
         if self.agent_config and hasattr(self.agent_config, "schema_discovery_config"):
@@ -642,6 +728,18 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         discovery_stats["pre_limit_count"] = len(candidate_details)
         discovery_stats["max_candidate_tables"] = max_tables
         discovery_stats["final_table_count"] = len(candidate_tables)
+        
+        # ✅ Record final results and log metrics summary
+        self._metrics.end_discovery(candidate_tables)
+        self._metrics.total_candidate_tables = len(candidate_details)
+        discovery_stats["metrics"] = self._metrics.to_dict()
+        
+        # Log detailed metrics summary
+        self._metrics.log_summary(logger)
+        
+        # Add to global collector for aggregation
+        global_metrics_collector.record(self._metrics)
+        
         logger.info(
             "Schema discovery summary: "
             f"explicit={discovery_stats.get('explicit_tables', 0)}, "
@@ -650,7 +748,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             f"llm={discovery_stats.get('llm_tables', 0)}, "
             f"context={discovery_stats.get('context_tables', 0)}, "
             f"fallback={discovery_stats.get('fallback_tables', 0)}, "
-            f"final={discovery_stats.get('final_table_count', 0)}"
+            f"final={discovery_stats.get('final_table_count', 0)}, "
+            f"overall_hit_rate={self._metrics.overall_hit_rate:.1%}"
         )
         return candidate_tables, candidate_details_list, discovery_stats
 
