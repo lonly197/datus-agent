@@ -7,9 +7,9 @@
 Business Configuration Generator
 
 结合数据架构设计文档和DDL元数据，生成/更新业务术语配置文件 business_terms.yml。
-支持两种输入：
-1. 数据架构详细设计CSV - 生成表/字段的业务术语映射
-2. 指标清单CSV - 生成指标相关的业务术语（可选）
+支持两种输入格式：
+1. Excel文件 (.xlsx) - 推荐，支持多行表头（原始格式）
+2. CSV文件 (.csv) - 兼容，需确保表头正确
 
 使用示例：
     # 仅从数据架构生成
@@ -45,6 +45,14 @@ try:
 except ImportError:
     print("Error: PyYAML is required. Install with: pip install pyyaml")
     sys.exit(1)
+
+# Optional: pandas for Excel support
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    print("Warning: pandas not available. Install with: pip install pandas openpyxl")
 
 from datus.configuration.agent_config_loader import load_agent_config
 from datus.models.base import LLMBaseModel
@@ -148,6 +156,291 @@ class BusinessConfigGenerator:
         self._term_mappings: Dict[str, BusinessTermMapping] = {}
         
         logger.info(f"Initialized generator for namespace: {namespace}, db_path: {self.db_path}, use_llm: {use_llm}")
+
+    def _read_excel_with_header(self, xlsx_path: Path, header_rows: int, sheet_name: int = 0) -> List[Dict]:
+        """
+        读取Excel文件，处理多行表头
+        
+        Args:
+            xlsx_path: Excel文件路径
+            header_rows: 表头行数（如3表示前3行是表头）
+            sheet_name: 工作表索引，默认第一个
+            
+        Returns:
+            List[Dict]: 数据行列表
+        """
+        if not PANDAS_AVAILABLE:
+            logger.error("pandas not available. Install with: pip install pandas openpyxl")
+            return []
+        
+        try:
+            # 读取Excel，指定多行表头
+            df = pd.read_excel(xlsx_path, sheet_name=sheet_name, header=list(range(header_rows)))
+            logger.info(f"[Excel读取] 读取 {xlsx_path.name}, 表头行数: {header_rows}, 数据行数: {len(df)}")
+            
+            # 展平多级列名（如 ('物理表名', 'Unnamed: 13_level_1') -> '物理表名'）
+            def flatten_col(col):
+                if isinstance(col, tuple):
+                    # 返回第一个非空的值
+                    for c in col:
+                        if pd.notna(c) and str(c).strip() and not str(c).startswith('Unnamed'):
+                            return str(c).strip()
+                    return str(col[0]).strip()
+                return str(col).strip()
+            
+            df.columns = [flatten_col(col) for col in df.columns]
+            logger.debug(f"[Excel读取] 展平后的列名: {df.columns.tolist()}")
+            
+            # 转换为字典列表，跳过空行
+            records = []
+            for idx, row in df.iterrows():
+                # 检查关键字段是否都为空
+                if row.isna().all() or all(str(v).strip() == '' for v in row.values if pd.notna(v)):
+                    continue
+                    
+                record = {}
+                for col in df.columns:
+                    val = row[col]
+                    # 处理NaN和空值
+                    if pd.isna(val):
+                        record[col] = ""
+                    else:
+                        record[col] = str(val).strip()
+                records.append(record)
+            
+            logger.info(f"[Excel读取] 有效数据行: {len(records)}")
+            return records
+            
+        except Exception as e:
+            logger.error(f"[Excel读取] 失败: {e}")
+            return []
+
+    def generate_from_architecture_xlsx(
+        self,
+        xlsx_path: Path,
+        header_rows: int = 3,
+        min_term_length: int = 2
+    ) -> Dict:
+        """
+        从数据架构Excel生成业务术语映射（支持多行表头）
+        
+        Args:
+            xlsx_path: Excel文件路径
+            header_rows: 表头行数（数据架构设计文档为3行）
+            min_term_length: 最小术语长度
+        """
+        logger.info(f"Processing architecture Excel: {xlsx_path}")
+
+        term_to_table: Dict[str, Set[str]] = defaultdict(set)
+        term_to_schema: Dict[str, Set[str]] = defaultdict(set)
+        table_keywords: Dict[str, str] = {}
+
+        stats = {
+            "total_rows": 0,
+            "valid_rows": 0,
+            "tables_found": set(),
+            "terms_extracted": 0,
+        }
+
+        records = self._read_excel_with_header(xlsx_path, header_rows)
+        
+        if not records:
+            logger.warning("[Excel读取] 未读取到有效数据")
+            return {
+                "term_to_table": {},
+                "term_to_schema": {},
+                "table_keywords": {},
+                "_stats": stats,
+            }
+
+        for row in records:
+            stats["total_rows"] += 1
+
+            # 提取关键字段
+            table_name = self._clean_string(row.get("物理表名", ""))
+            column_name = self._clean_string(row.get("字段名", ""))
+            attr_def = self._clean_string(row.get("属性业务定义", ""))
+            attr_cn = self._clean_string(row.get("属性（中文）", ""))
+            obj_name = self._clean_string(row.get("分析对象（中文）", ""))
+            obj_en = self._clean_string(row.get("分析对象（英文）", ""))
+            logic_entity = self._clean_string(row.get("逻辑实体（中文）", ""))
+            logic_entity_def = self._clean_string(row.get("逻辑实体业务含义", ""))
+
+            # 验证表名和字段名
+            table_valid = self._is_valid_table_name(table_name, verbose=(stats['total_rows'] <= 10))
+            column_valid = self._is_valid_column_name(column_name)
+            if not table_valid or not column_valid:
+                if stats['total_rows'] <= 20:
+                    logger.debug(f"[过滤] 表 '{table_name}' 或字段 '{column_name}' 验证失败 (表:{table_valid}, 字段:{column_valid})")
+                continue
+
+            stats["valid_rows"] += 1
+            stats["tables_found"].add(table_name)
+
+            # 1. 分析对象 -> 表映射（业务对象粒度）
+            if obj_name and len(obj_name) >= min_term_length and self._is_meaningful_term(obj_name):
+                term_to_table[obj_name].add(table_name)
+                if obj_en and self._is_meaningful_term(obj_en):
+                    term_to_table[obj_en.lower()].add(table_name)
+
+            # 2. 逻辑实体 -> 表映射（作为表关键词）
+            if logic_entity and len(logic_entity) >= min_term_length and self._is_meaningful_term(logic_entity):
+                term_to_table[logic_entity].add(table_name)
+                table_keywords[logic_entity] = table_name
+
+                # 从逻辑实体业务含义提取关键词
+                if logic_entity_def:
+                    keywords = self._extract_meaningful_keywords(logic_entity_def, min_term_length)
+                    for kw in keywords:
+                        table_keywords[kw] = table_name
+                        term_to_table[kw].add(table_name)
+
+            # 3. 属性（中文）-> 字段映射
+            if attr_cn and len(attr_cn) >= min_term_length and self._is_meaningful_term(attr_cn):
+                term_to_schema[attr_cn].add(f"{table_name}.{column_name}")
+                term_to_schema[attr_cn].add(column_name)
+
+            # 4. 属性业务定义 -> 提取有意义的关键词映射到字段
+            if attr_def and len(attr_def) >= min_term_length:
+                keywords = self._extract_meaningful_keywords(attr_def, min_term_length)
+                for kw in keywords:
+                    if len(kw) <= 50:
+                        term_to_schema[kw].add(column_name)
+                        term_to_schema[kw].add(f"{table_name}.{column_name}")
+                        stats["terms_extracted"] += 1
+
+        logger.info(
+            f"[Excel解析] 数据架构处理完成: {stats['valid_rows']}/{stats['total_rows']} 有效行, "
+            f"{len(stats['tables_found'])} 个表, "
+            f"{stats['terms_extracted']} 个术语提取"
+        )
+        
+        # 详细调试信息
+        if stats['tables_found']:
+            sample_tables = list(stats['tables_found'])[:5]
+            logger.info(f"[Excel解析] 样本表名: {sample_tables}")
+        
+        if term_to_table:
+            sample_terms = list(term_to_table.keys())[:10]
+            logger.info(f"[术语提取] 样本术语(前10): {sample_terms}")
+            logger.debug(f"[术语提取] 全部术语({len(term_to_table)}): {list(term_to_table.keys())}")
+        
+        if table_keywords:
+            sample_keywords = list(table_keywords.keys())[:5]
+            logger.info(f"[关键词] 样本表关键词(前5): {sample_keywords}")
+
+        return {
+            "term_to_table": dict(term_to_table),
+            "term_to_schema": dict(term_to_schema),
+            "table_keywords": table_keywords,
+            "_stats": {
+                "total_rows": stats["total_rows"],
+                "valid_rows": stats["valid_rows"],
+                "tables_count": len(stats["tables_found"]),
+                "terms_count": stats["terms_extracted"],
+            },
+        }
+
+    def generate_from_metrics_xlsx(
+        self,
+        xlsx_path: Path,
+        existing_terms: Dict,
+        header_rows: int = 2,
+        min_term_length: int = 2
+    ) -> Dict:
+        """
+        从指标清单Excel补充业务术语映射（支持多行表头）
+        
+        Args:
+            xlsx_path: Excel文件路径
+            existing_terms: 已有的术语映射
+            header_rows: 表头行数（指标清单为2行）
+            min_term_length: 最小术语长度
+        """
+        logger.info(f"Processing metrics Excel: {xlsx_path}")
+
+        term_to_table = defaultdict(set, existing_terms.get("term_to_table", {}))
+        term_to_schema = defaultdict(set, existing_terms.get("term_to_schema", {}))
+        table_keywords = existing_terms.get("table_keywords", {})
+
+        stats = {"total_metrics": 0, "valid_metrics": 0, "tables_added": set()}
+
+        records = self._read_excel_with_header(xlsx_path, header_rows)
+        
+        if not records:
+            logger.warning("[Excel读取] 指标清单未读取到有效数据")
+            return {
+                "term_to_table": dict(term_to_table),
+                "term_to_schema": dict(term_to_schema),
+                "table_keywords": table_keywords,
+                "_stats": {**existing_terms.get("_stats", {}), **{
+                    "metrics_count": 0,
+                    "metrics_tables": 0,
+                }},
+            }
+
+        for row in records:
+            stats["total_metrics"] += 1
+
+            metric_code = self._clean_string(row.get("指标编码", ""))
+            metric_name = self._clean_string(row.get("指标名称", ""))
+            biz_def = self._clean_string(row.get("业务定义及说明", ""))
+            calc_logic = self._clean_string(row.get("计算公式/业务逻辑", ""))
+            source_model = self._clean_string(row.get("来源dws模型", ""))
+            biz_activity = self._clean_string(row.get("业务活动", ""))
+
+            if not metric_name:
+                continue
+
+            stats["valid_metrics"] += 1
+
+            # 1. 指标名称 -> 来源表映射（验证表名有效性）
+            if source_model and self._is_valid_table_name(source_model):
+                if len(metric_name) >= min_term_length and self._is_meaningful_term(metric_name):
+                    term_to_table[metric_name].add(source_model)
+                    stats["tables_added"].add(source_model)
+
+                    # 添加业务活动分类映射
+                    if biz_activity and self._is_meaningful_term(biz_activity):
+                        term_to_table[f"{biz_activity}_{metric_name}"].add(source_model)
+
+            # 2. 从业务定义提取有意义的关键词
+            if biz_def:
+                keywords = self._extract_meaningful_keywords(biz_def, min_term_length)
+                for kw in keywords:
+                    if source_model and self._is_valid_table_name(source_model):
+                        term_to_table[kw].add(source_model)
+
+            # 3. 从计算公式提取表名引用
+            if calc_logic:
+                table_refs = self._extract_table_refs(calc_logic)
+                for ref in table_refs:
+                    if self._is_valid_table_name(ref):
+                        term_to_schema[metric_name].add(ref)
+
+        logger.info(
+            f"[Excel解析] 指标清单处理完成: {stats['valid_metrics']}/{stats['total_metrics']} 有效指标, "
+            f"{len(stats['tables_added'])} 个来源表"
+        )
+        
+        # 详细调试信息
+        if stats['tables_added']:
+            logger.info(f"[指标提取] 来源表示例: {list(stats['tables_added'])[:5]}")
+        
+        # 显示新增的关键术语映射
+        new_terms = set(term_to_table.keys()) - set(existing_terms.get("term_to_table", {}).keys())
+        if new_terms:
+            logger.info(f"[术语合并] 指标清单新增术语({len(new_terms)}个): {list(new_terms)[:10]}")
+
+        return {
+            "term_to_table": dict(term_to_table),
+            "term_to_schema": dict(term_to_schema),
+            "table_keywords": table_keywords,
+            "_stats": {**existing_terms.get("_stats", {}), **{
+                "metrics_count": stats["valid_metrics"],
+                "metrics_tables": len(stats["tables_added"]),
+            }},
+        }
 
     def generate_from_architecture_csv(
         self,
@@ -915,27 +1208,27 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic generation from architecture CSV
+  # [推荐] 从Excel生成（支持多行表头）
   python scripts/generate_business_config.py \\
       --config=conf/agent.yml \\
       --namespace=test \\
-      --arch-csv=/path/to/数据架构详细设计v2.3.csv
+      --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \\
+      --metrics-xlsx=/path/to/指标清单v2.4.xlsx \\
+      --merge-ddl \\
+      --verbose
 
-  # Generate with LLM enhancement (recommended)
+  # [兼容] 从CSV生成（需确保表头正确）
   python scripts/generate_business_config.py \\
       --config=conf/agent.yml \\
       --namespace=test \\
       --arch-csv=/path/to/数据架构详细设计v2.3.csv \\
-      --metrics-csv=/path/to/指标清单v2.4.csv \\
-      --merge-ddl \\
-      --use-llm \\
-      --include-confidence
+      --metrics-csv=/path/to/指标清单v2.4.csv
 
   # Debug mode with confidence scores
   python scripts/generate_business_config.py \\
       --config=conf/agent.yml \\
       --namespace=test \\
-      --arch-csv=/path/to/数据架构详细设计v2.3.csv \\
+      --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \\
       --use-llm \\
       --include-confidence \\
       --output=conf/business_terms_debug.yml
@@ -944,8 +1237,10 @@ Examples:
 
     parser.add_argument("--config", required=True, help="Path to agent configuration file")
     parser.add_argument("--namespace", required=True, help="Target namespace")
-    parser.add_argument("--arch-csv", help="Path to 数据架构详细设计 CSV file")
-    parser.add_argument("--metrics-csv", help="Path to 指标清单 CSV file (optional)")
+    parser.add_argument("--arch-csv", help="Path to 数据架构详细设计 CSV file (legacy)")
+    parser.add_argument("--metrics-csv", help="Path to 指标清单 CSV file (legacy, optional)")
+    parser.add_argument("--arch-xlsx", help="Path to 数据架构详细设计 Excel file (推荐, 支持多行表头)")
+    parser.add_argument("--metrics-xlsx", help="Path to 指标清单 Excel file (推荐, 支持多行表头)")
     parser.add_argument(
         "--output",
         default="conf/business_terms.yml",
@@ -1006,7 +1301,22 @@ Examples:
     # 生成业务术语
     business_terms = None
 
-    if args.arch_csv:
+    # 优先处理Excel文件（推荐方式）
+    if args.arch_xlsx:
+        if not PANDAS_AVAILABLE:
+            logger.error("pandas is required for Excel support. Install with: pip install pandas openpyxl")
+            sys.exit(1)
+        
+        arch_path = Path(args.arch_xlsx)
+        if not arch_path.exists():
+            logger.error(f"Architecture Excel not found: {arch_path}")
+            sys.exit(1)
+
+        business_terms = generator.generate_from_architecture_xlsx(
+            arch_path, header_rows=3, min_term_length=args.min_term_length
+        )
+
+    elif args.arch_csv:
         arch_path = Path(args.arch_csv)
         if not arch_path.exists():
             logger.error(f"Architecture CSV not found: {arch_path}")
@@ -1016,7 +1326,29 @@ Examples:
             arch_path, min_term_length=args.min_term_length
         )
 
-    if args.metrics_csv:
+    # 优先处理Excel文件（推荐方式）
+    if args.metrics_xlsx:
+        if not PANDAS_AVAILABLE:
+            logger.error("pandas is required for Excel support. Install with: pip install pandas openpyxl")
+            sys.exit(1)
+        
+        metrics_path = Path(args.metrics_xlsx)
+        if not metrics_path.exists():
+            logger.error(f"Metrics Excel not found: {metrics_path}")
+            sys.exit(1)
+
+        if business_terms is None:
+            business_terms = {
+                "term_to_table": {},
+                "term_to_schema": {},
+                "table_keywords": {},
+            }
+
+        business_terms = generator.generate_from_metrics_xlsx(
+            metrics_path, business_terms, header_rows=2, min_term_length=args.min_term_length
+        )
+
+    elif args.metrics_csv:
         metrics_path = Path(args.metrics_csv)
         if not metrics_path.exists():
             logger.error(f"Metrics CSV not found: {metrics_path}")
@@ -1034,7 +1366,7 @@ Examples:
         )
 
     if business_terms is None:
-        logger.error("No input CSV files provided. Use --arch-csv or --metrics-csv")
+        logger.error("No input files provided. Use --arch-xlsx/--metrics-xlsx (recommended) or --arch-csv/--metrics-csv")
         sys.exit(1)
 
     # 合并DDL注释
