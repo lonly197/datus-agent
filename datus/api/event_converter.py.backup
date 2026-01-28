@@ -1,0 +1,2390 @@
+# Copyright 2025-present DatusAI, Inc.
+# Licensed under the Apache License, Version 2.0.
+# See http://www.apache.org/licenses/LICENSE-2.0 for details.
+
+"""
+Event converter for mapping ActionHistory to DeepResearchEvent format.
+"""
+
+import asyncio
+import hashlib
+import json
+import re
+import time
+import uuid
+from collections import deque
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
+
+import sqlglot
+from sqlglot import exp
+
+from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+from datus.utils.loggings import get_logger
+from datus.utils.plan_id import PlanIdManager
+from datus.utils.constants import DBType
+from datus.utils.sql_utils import (
+    extract_enhanced_metadata_from_ddl,
+    parse_dialect,
+    sanitize_ddl_for_storage,
+)
+
+if TYPE_CHECKING:
+    from datus.schemas.node_models import TableSchema
+
+from .models import (
+    ChatEvent,
+    CompleteEvent,
+    DeepResearchEvent,
+    ErrorEvent,
+    PlanUpdateEvent,
+    ReportEvent,
+    TodoItem,
+    TodoStatus,
+    ToolCallEvent,
+    ToolCallResultEvent,
+)
+
+
+class DeepResearchEventConverter:
+    """Converts ActionHistory events to DeepResearchEvent format."""
+
+    # Define virtual steps for non-agentic workflows (Text2SQL)
+    VIRTUAL_STEPS = [
+        {
+            "id": "step_intent",
+            "content": "分析查询意图",
+            "node_types": ["intent_analysis", "intent_clarification"],
+        },
+        {
+            "id": "step_schema",
+            "content": "发现数据库模式",
+            "node_types": [
+                "schema_discovery",
+                "schema_validation",
+                # Preflight tools for schema discovery
+                "preflight_search_table",
+                "preflight_describe_table",
+                "preflight_get_table_ddl",
+                "preflight_search_reference_sql",
+                "preflight_parse_temporal_expressions",
+                "preflight_check_table_exists",
+            ],
+        },
+        {"id": "step_sql", "content": "生成SQL查询", "node_types": ["generate_sql", "sql_generation"]},
+        {
+            "id": "step_exec",
+            "content": "执行SQL并验证结果",
+            "node_types": [
+                "execute_sql",
+                "sql_execution",
+                "sql_validate",
+                "result_validation",
+                # Preflight tools for SQL execution and validation
+                "preflight_validate_sql_syntax",
+                "preflight_analyze_query_plan",
+                "preflight_check_table_conflicts",
+                "preflight_validate_partitioning",
+            ],
+        },
+        {"id": "step_reflect", "content": "自我纠正与优化", "node_types": ["reflect", "reflection_analysis"]},
+        {"id": "step_output", "content": "生成结果报告", "node_types": ["output", "output_generation"]},
+    ]
+
+    def __init__(self):
+        self.tool_call_map: Dict[str, str] = {}  # action_id -> tool_call_id
+        self.logger = get_logger(__name__)
+        # small rolling cache to deduplicate near-identical assistant messages
+        self._recent_assistant_hashes: "deque[str]" = deque(maxlen=50)
+
+        # State for virtual plan management
+        self.virtual_plan_emitted = False
+        self.active_virtual_step_id = None
+        self.completed_virtual_steps: set[str] = set()
+        # Track failed virtual steps for proper ERROR status in PlanUpdateEvent
+        self.failed_virtual_steps: set[str] = set()
+
+        # Fixed virtual plan ID for all PlanUpdateEvents (fixes event association issue)
+        self.virtual_plan_id = PlanIdManager.new_plan_id()
+
+        # State for agentic workflow TodoItem tracking
+        # Tracks the currently executing TodoItem ID for proper event binding
+        self.active_todo_item_id: Optional[str] = None
+        # Maps action_id to todo_id for tracking which TodoItem each action belongs to
+        self.todo_item_action_map: Dict[str, str] = {}
+        # Cached plan todos for emitting full PlanUpdateEvent payloads
+        self._todo_state: Dict[str, TodoItem] = {}
+        self._todo_order: List[str] = []
+
+    def _normalize_node_type(self, node_type: Optional[str]) -> str:
+        """Normalize action/node type for virtual step matching.
+
+        - Strips common prefixes added by execution wrappers (tool_, llm_, workflow_, execution_)
+        - Strips common suffixes used for result/error markers (_result, _error, _failed, _success)
+        """
+        if not node_type:
+            return ""
+
+        normalized = str(node_type)
+
+        # Remove known prefixes
+        for prefix in ("tool_", "llm_", "workflow_", "execution_"):
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix):]
+                break
+
+        # Remove known suffixes
+        for suffix in ("_result", "_error", "_failed", "_success"):
+            if normalized.endswith(suffix):
+                normalized = normalized[: -len(suffix)]
+                break
+
+        return normalized
+
+    def _normalize_tool_name(self, action_type: str) -> str:
+        """Normalize tool name for ToolCallEvent/toolCallResultEvent."""
+        normalized = self._normalize_node_type(action_type)
+        if normalized.startswith("preflight_"):
+            normalized = normalized.replace("preflight_", "", 1)
+        return normalized
+
+    def _normalize_todo_status(self, status: Optional[str]) -> str:
+        """Normalize TodoStatus strings across legacy and frontend enums."""
+        if not status:
+            return "pending"
+        normalized = str(status).lower()
+        if normalized == "failed":
+            return "error"
+        return normalized
+
+    def _update_todo_state(self, todos: List[TodoItem], replace_order: bool = False) -> None:
+        """Update cached todo state for full PlanUpdateEvent emission."""
+        if replace_order:
+            self._todo_order = [todo.id for todo in todos]
+        for todo in todos:
+            if todo.id not in self._todo_order:
+                self._todo_order.append(todo.id)
+            self._todo_state[todo.id] = todo
+
+    def _get_todo_state_list(self) -> List[TodoItem]:
+        """Return todos in cached order when available."""
+        if not self._todo_state:
+            return []
+        if not self._todo_order:
+            return list(self._todo_state.values())
+        return [self._todo_state[todo_id] for todo_id in self._todo_order if todo_id in self._todo_state]
+
+    def _get_virtual_step_id(self, node_type: str) -> Optional[str]:
+        """Map node type to virtual step ID."""
+        normalized_type = self._normalize_node_type(node_type)
+        for step in self.VIRTUAL_STEPS:
+            if normalized_type in step["node_types"]:
+                return str(step["id"])
+        return None
+
+    def _generate_virtual_plan_update(self, current_node_type: Optional[str] = None) -> Optional[PlanUpdateEvent]:
+        """Generate PlanUpdateEvent based on current progress.
+
+        Status priority: ERROR > COMPLETED > IN_PROGRESS > PENDING
+        This ensures failed steps are never incorrectly marked as COMPLETED.
+        """
+        current_step_id = self._get_virtual_step_id(current_node_type) if current_node_type else None
+        if current_step_id:
+            self.active_virtual_step_id = current_step_id
+
+        # Find active step index
+        active_index = -1
+        if self.active_virtual_step_id:
+            active_index = next(
+                (i for i, step in enumerate(self.VIRTUAL_STEPS)
+                 if str(step["id"]) == self.active_virtual_step_id),
+                -1
+            )
+
+        # Build todos with status priority
+        todos = []
+        for i, step in enumerate(self.VIRTUAL_STEPS):
+            step_id = str(step["id"])
+
+            if step_id in self.failed_virtual_steps:
+                status = TodoStatus.ERROR
+            elif step_id in self.completed_virtual_steps:
+                status = TodoStatus.COMPLETED
+            elif active_index != -1:
+                status = (
+                    TodoStatus.COMPLETED if i < active_index else
+                    TodoStatus.IN_PROGRESS if i == active_index else
+                    TodoStatus.PENDING
+                )
+            else:
+                status = TodoStatus.PENDING
+
+            todos.append(TodoItem(
+                id=step_id,
+                content=str(step["content"]),
+                status=status
+            ))
+
+        return PlanUpdateEvent(
+            id=self.virtual_plan_id,
+            planId=None,
+            timestamp=int(time.time() * 1000),
+            todos=todos
+        )
+
+    def _hash_text(self, s: str) -> str:
+        try:
+            return hashlib.sha1(s.strip().encode("utf-8")).hexdigest()
+        except Exception:
+            return ""
+
+    def _generate_sql_summary(self, sql: str, result: str, row_count: int) -> str:
+        """Generate a markdown summary report for SQL execution results.
+
+        Args:
+            sql: The SQL query that was executed
+            result: The CSV result string from SQL execution
+            row_count: Number of rows returned
+
+        Returns:
+            Markdown formatted summary report
+        """
+        lines = []
+
+        # Header
+        lines.append("## 📊 SQL执行结果摘要\n")
+
+        # SQL overview
+        lines.append("### SQL查询")
+        lines.append(f"- **行数**: {row_count}")
+        lines.append("- **状态**: ✅ 执行成功\n")
+
+        # Result preview (first 5 rows if available)
+        if result and result.strip():
+            lines.append("### 结果预览")
+            try:
+                import pandas as pd
+                from io import StringIO
+
+                df = pd.read_csv(StringIO(result))
+                preview = df.head(5).to_markdown(index=False)
+                lines.append(preview)
+
+                if len(df) > 5:
+                    lines.append(f"\n*...还有 {len(df) - 5} 行数据*\n")
+            except Exception:
+                # If parsing fails, show raw result preview
+                result_lines = result.strip().split("\n")[:6]
+                lines.append("```")
+                lines.extend(result_lines)
+                lines.append("```")
+                if len(result.strip().split("\n")) > 6:
+                    lines.append("*...更多数据*\n")
+
+        return "\n".join(lines)
+
+    def _format_diagnostic_report(self, report: Dict[str, Any]) -> str:
+        """Format schema discovery failure report for user display.
+
+        Args:
+            report: Diagnostic report dictionary from schema_validation_node
+
+        Returns:
+            Markdown formatted diagnostic report
+        """
+        lines = []
+
+        # Header
+        lines.append("## ❌ Schema Discovery Failure Report\n")
+        lines.append(f"**Report Type**: {report.get('report_type', 'Unknown')}\n")
+        lines.append(f"**Timestamp**: {report.get('timestamp', 'Unknown')}\n")
+        lines.append(f"**Database**: {report.get('database_name', 'Unknown')}\n")
+        lines.append(f"**Namespace**: {report.get('namespace', 'Unknown')}\n")
+        lines.append(f"**Task**: {report.get('task', 'Unknown')[:100]}...\n")
+
+        # Format sections
+        sections = report.get("sections", [])
+        for section in sections:
+            lines.append(f"### {section.get('title', 'Unknown Section')}\n")
+
+            # Handle different section types
+            if "findings" in section:
+                findings = section["findings"]
+                lines.append("**Findings**:")
+                for key, value in findings.items():
+                    lines.append(f"- **{key}**: {value}")
+                lines.append("")
+
+            elif "possible_causes" in section:
+                causes = section["possible_causes"]
+                lines.append("**Possible Causes**:")
+                for i, cause in enumerate(causes, 1):
+                    lines.append(f"{i}. {cause}")
+                lines.append("")
+
+            elif "steps" in section:
+                steps = section["steps"]
+                lines.append("**Steps**:")
+                for step in steps:
+                    lines.append(f"- {step}")
+                lines.append("")
+
+            elif "commands" in section:
+                commands = section["commands"]
+                lines.append("**Commands**:")
+                for cmd in commands:
+                    lines.append(f"```bash")
+                    lines.append(cmd)
+                    lines.append("```")
+                lines.append("")
+
+            elif "sql_query" in section:
+                lines.append(f"**SQL Query**: `{section.get('sql_query', 'No SQL generated')[:100]}`")
+                if "warning" in section:
+                    lines.append(f"\n⚠️ **Warning**: {section['warning']}")
+                lines.append("")
+
+            elif "recommendations" in section:
+                recommendations = section["recommendations"]
+                lines.append("**Recommendations**:")
+                for rec in recommendations:
+                    lines.append(f"- {rec}")
+                lines.append("")
+
+            else:
+                # Generic section handling
+                for key, value in section.items():
+                    if key != "title":
+                        lines.append(f"**{key}**: {value}")
+                lines.append("")
+
+        return "\n".join(lines)
+
+    def _escape_markdown_table_cell(self, text: Any) -> str:
+        """Escape text for use in a Markdown table cell.
+
+        Args:
+            text: Input text (will be converted to string)
+
+        Returns:
+            Escaped string safe for Markdown table
+        """
+        if text is None:
+            return "-"
+        s = str(text)
+        # Replace pipes with broken bar or escaped pipe
+        s = s.replace("|", "&#124;")
+        # Replace newlines with space
+        s = s.replace("\n", " ")
+        return s.strip()
+
+    def _generate_sql_generation_report(
+        self,
+        sql_query: str,
+        sql_result: str,
+        row_count: int,
+        metadata: Optional[Dict[str, Any]] = None,
+        table_schemas: Optional[List[Any]] = None,
+    ) -> str:
+        """Generate comprehensive SQL generation report for data warehouse developers.
+
+        New 6-section structure (v2.8):
+        1. SQL Design Overview - Task understanding, design logic, data scale
+        2. Tables and Fields Details - Table/field details with comments from DDL
+        3. Annotated SQL with Comments - SQL with business logic annotations
+        4. SQL Validation Results - Enhanced validation display
+        5. Execution Verification Results - Clarifying 0 rows vs SQL error
+        6. Optimization Suggestions - Performance and quality recommendations
+
+        Args:
+            sql_query: The final SQL query that was generated
+            sql_result: The CSV result string from SQL execution
+            row_count: Number of rows returned
+            metadata: Workflow metadata containing validation, intent, and reflection results
+            table_schemas: List of TableSchema objects with DDL definitions
+
+        Returns:
+            Markdown formatted comprehensive report
+        """
+        lines = []
+
+        # Header
+        lines.append("## 📋 SQL生成报告（数仓开发版）\n")
+
+        # ============================================================
+        # Section 1: SQL Design Overview
+        # ============================================================
+        lines.append("### 1. SQL设计概述")
+
+        # Extract clarified task for design understanding
+        clarified_task = ""
+        if metadata and metadata.get("clarified_task"):
+            clarified_task = metadata["clarified_task"]
+        elif metadata and metadata.get("intent_clarification"):
+            clarified_task = metadata["intent_clarification"].get("clarified_task", "")
+
+        if clarified_task:
+            lines.append(f"**任务理解**: {clarified_task}")
+        else:
+            lines.append("**任务理解**: 生成SQL查询以满足数据分析需求")
+
+        # Extract table info for scale analysis
+        table_count = 0
+        field_count = 0
+        table_info = None
+        if table_schemas:
+            table_info = self._extract_table_info(table_schemas, sql_query)
+            table_count = len(table_info.get("tables", []))
+            field_count = len(table_info.get("fields", []))
+
+        lines.append(f"**数据规模**: 涉及 {table_count} 张表、{field_count} 个字段")
+
+        # Generate design logic summary
+        design_logic = []
+        try:
+            parsed = self._parse_sql_structure(sql_query)
+            if parsed:
+                # Check for CTE usage
+                if parsed.find(exp.With):
+                    design_logic.append("使用CTE组织查询逻辑")
+
+                # Check for JOIN operations
+                join_count = len(list(parsed.find_all(exp.Join)))
+                if join_count > 0:
+                    design_logic.append(f"包含{join_count}个表关联")
+
+                # Check for aggregation
+                if parsed.find(exp.Agg):
+                    design_logic.append("包含聚合计算")
+
+                # Check for window functions
+                if parsed.find(exp.Window):
+                    design_logic.append("使用窗口函数")
+
+                # Check for filtering
+                if parsed.find(exp.Where):
+                    design_logic.append("包含筛选条件")
+
+        except Exception:
+            pass
+
+        if design_logic:
+            lines.append("**设计思路**: " + "、".join(design_logic))
+        else:
+            lines.append("**设计思路**: 基于业务需求生成查询SQL")
+
+        # Validation status summary
+        validation_summary = []
+        if metadata and metadata.get("sql_validation"):
+            validation = metadata["sql_validation"]
+            if validation.get("syntax_valid"):
+                validation_summary.append("语法验证通过")
+            if validation.get("tables_exist"):
+                validation_summary.append("表存在性验证通过")
+            if validation.get("columns_exist"):
+                validation_summary.append("列存在性验证通过")
+            if not validation.get("has_dangerous_ops"):
+                validation_summary.append("无危险操作")
+
+        if validation_summary:
+            lines.append(f"**验证状态**: {'、'.join(validation_summary)}")
+        else:
+            lines.append("**验证状态**: SQL已生成，待执行验证")
+
+        lines.append("")
+
+        # ============================================================
+        # Section 2: Tables and Fields Details
+        # ============================================================
+        lines.append("### 2. 使用的表和字段详情")
+
+        if table_schemas:
+            if table_info is None:
+                table_info = self._extract_table_info(table_schemas, sql_query)
+
+            # Table list
+            tables = table_info.get("tables", [])
+            if tables:
+                lines.append(f"**表清单** ({len(tables)}张表):")
+                lines.append("")
+                lines.append("| 表名 | 表备注 | 表类型 | 数据库 | 是否使用 |")
+                lines.append("|------|--------|--------|--------|----------|")
+                for t in tables:
+                    table_name = t["table_name"]
+                    table_comment = t["table_comment"] or "-"
+                    table_type = t["table_type"]
+                    database = t["database"] or "-"
+                    is_used = "✅" if t["is_used"] else "-"
+                    lines.append(f"| {table_name} | {table_comment} | {table_type} | {database} | {is_used} |")
+                lines.append("")
+
+            # Field list (only used fields)
+            fields = table_info.get("fields", [])
+            used_fields = [f for f in fields if f["is_used"]]
+            if used_fields:
+                lines.append(f"**字段清单** ({len(used_fields)}个字段):")
+                lines.append("")
+                lines.append("| 表名 | 字段名 | 字段注释 | 用途 |")
+                lines.append("|------|--------|----------|------|")
+                for f in used_fields:
+                    table_name = f["table_name"]
+                    column_name = f["column_name"]
+                    column_comment = f["column_comment"] or "-"
+                    usage = self._infer_field_usage(sql_query, f)
+                    lines.append(f"| {table_name} | {column_name} | {column_comment} | {usage} |")
+                lines.append("")
+
+            # Relationships
+            relationships = table_info.get("relationships", [])
+            if relationships:
+                lines.append("**表关联关系**:")
+                for rel in relationships:
+                    left = rel["left_table"]
+                    right = rel["right_table"]
+                    key = rel["join_key"]
+                    join_type = rel["join_type"]
+                    lines.append(f"- {left} ← {key} → {right} ({join_type} JOIN)")
+                lines.append("")
+        else:
+            lines.append("*表结构信息不可用*")
+            lines.append("")
+
+        # ============================================================
+        # Section 3: Annotated SQL with Comments
+        # ============================================================
+        lines.append("### 3. 带注释的SQL")
+
+        annotated_sql = self._generate_sql_with_comments(sql_query, table_schemas or [], metadata)
+        lines.append("```sql")
+        lines.append(annotated_sql)
+        lines.append("```")
+        lines.append("")
+
+        # ============================================================
+        # Section 4: SQL Validation Results
+        # ============================================================
+        lines.append("### 4. SQL验证结果")
+
+        if metadata and metadata.get("sql_validation"):
+            validation = metadata["sql_validation"]
+
+            lines.append("| 验证项 | 状态 | 说明 |")
+            lines.append("|--------|------|------|")
+
+            # Syntax validation
+            syntax_valid = validation.get("syntax_valid", True)
+            syntax_status = "✅ 通过" if syntax_valid else "❌ 失败"
+            syntax_desc = "SQL语法正确，符合SQL方言规范" if syntax_valid else "SQL语法错误，请检查语句"
+            lines.append(f"| 语法验证 | {syntax_status} | {syntax_desc} |")
+
+            # Table existence
+            tables_exist = validation.get("tables_exist", True)
+            table_status = "✅ 通过" if tables_exist else "❌ 失败"
+            table_desc = "所有表都在Schema中存在" if tables_exist else "部分表不存在，请检查表名"
+            lines.append(f"| 表存在性 | {table_status} | {table_desc} |")
+
+            # Column existence
+            columns_exist = validation.get("columns_exist", True)
+            column_status = "✅ 通过" if columns_exist else "❌ 失败"
+            column_desc = "所有列都在对应表中存在" if columns_exist else "部分列不存在，请检查列名"
+            lines.append(f"| 列存在性 | {column_status} | {column_desc} |")
+
+            # Dangerous operations
+            has_dangerous = validation.get("has_dangerous_ops", False)
+            dangerous_status = "⚠️ 检测到" if has_dangerous else "✅ 无危险操作"
+            dangerous_desc = "检测到DELETE/DROP/TRUNCATE等操作，请谨慎执行" if has_dangerous else "未检测到危险操作，可安全执行"
+            lines.append(f"| 危险操作 | {dangerous_status} | {dangerous_desc} |")
+
+            lines.append("")
+
+            # Show warnings if any
+            warnings = validation.get("warnings", [])
+            if warnings:
+                lines.append("**验证警告**:")
+                for warning in warnings[:5]:
+                    lines.append(f"- {warning}")
+                if len(warnings) > 5:
+                    lines.append(f"- ...还有 {len(warnings) - 5} 个警告")
+                lines.append("")
+
+        else:
+            lines.append("*未进行SQL验证或验证结果不可用*")
+            lines.append("")
+
+        # ============================================================
+        # Section 5: Execution Verification Results
+        # ============================================================
+        lines.append("### 5. 执行验证结果")
+
+        execution_report = self._generate_execution_report(row_count, metadata)
+        lines.append(execution_report)
+
+        # ============================================================
+        # Section 6: Optimization Suggestions
+        # ============================================================
+        lines.append("### 6. 优化建议")
+
+        optimization = self._generate_optimization_suggestions(sql_query, table_schemas or [], metadata)
+        if optimization:
+            lines.append(optimization)
+        else:
+            lines.append("*无优化建议*")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    # ============================================================
+    # SQL Report Enhancement Helper Methods (Developer-Centric)
+    # ============================================================
+
+    def _parse_ddl_comments(self, ddl: str, dialect: str = "snowflake") -> Dict[str, Any]:
+        """Parse DDL to extract table and column comments.
+
+        Args:
+            ddl: DDL statement (CREATE TABLE ...)
+            dialect: SQL dialect (snowflake, mysql, postgres, etc.)
+
+        Returns:
+            Dict with table_comment and columns dict mapping name->comment
+        """
+        result = {
+            "table_comment": "",
+            "columns": {},
+        }
+
+        if not ddl:
+            return result
+
+        cleaned = sanitize_ddl_for_storage(ddl)
+        tried_dialects = []
+
+        if dialect:
+            tried_dialects.append(parse_dialect(dialect))
+        tried_dialects.extend([DBType.STARROCKS, DBType.MYSQL, DBType.SNOWFLAKE])
+        tried_dialects = [d for d in tried_dialects if d]
+
+        last_error = None
+        for candidate in tried_dialects:
+            try:
+                metadata = extract_enhanced_metadata_from_ddl(
+                    cleaned,
+                    dialect=candidate,
+                    warn_on_invalid=False,
+                )
+                table_comment = metadata.get("table", {}).get("comment", "") if metadata else ""
+                columns = metadata.get("columns", []) if metadata else []
+                if table_comment or columns:
+                    result["table_comment"] = table_comment or ""
+                    for col in columns:
+                        col_name = col.get("name")
+                        if col_name:
+                            result["columns"][col_name] = col.get("comment", "")
+                    return result
+            except Exception as e:
+                last_error = e
+
+        if last_error:
+            self.logger.warning(f"Failed to parse DDL comments: {last_error}")
+
+        return result
+
+    def _extract_table_info(self, table_schemas: List[Any], sql_query: str) -> Dict[str, Any]:
+        """Extract table and field information from table_schemas and SQL.
+
+        Args:
+            table_schemas: List of TableSchema objects with DDL definitions
+            sql_query: SQL query to analyze for field usage
+
+        Returns:
+            Dict with tables list, fields list, and relationships
+        """
+        tables_info = []
+        fields_info = []
+        seen_tables = set()
+        seen_fields = set()
+
+        if not table_schemas:
+            return {"tables": tables_info, "fields": fields_info, "relationships": []}
+
+        # Parse SQL to extract used tables and columns
+        sql_tables = set()
+        sql_columns = set()
+        try:
+            parsed = sqlglot.parse_one(sql_query, error_level=sqlglot.ErrorLevel.IGNORE)
+            # Find all table references
+            for table in parsed.find_all(exp.Table):
+                sql_tables.add(table.name)
+            # Find all column references
+            for column in parsed.find_all(exp.Column):
+                sql_columns.add(column.name)
+        except Exception as e:
+            self.logger.warning(f"Failed to parse SQL for table/column extraction: {e}")
+
+        # Extract table information from DDLs
+        for schema in table_schemas:
+            table_name = getattr(schema, "table_name", "")
+            definition = getattr(schema, "definition", "")
+            database_name = getattr(schema, "database_name", "")
+            table_type = getattr(schema, "table_type", "table")
+            schema_name = getattr(schema, "schema_name", "")
+            catalog_name = getattr(schema, "catalog_name", "")
+            identifier = getattr(schema, "identifier", "")
+
+            if not table_name or not definition:
+                continue
+
+            # Parse DDL for comments
+            ddl_info = self._parse_ddl_comments(definition)
+
+            dedupe_key = identifier or (catalog_name, database_name, schema_name, table_name, table_type)
+            if dedupe_key in seen_tables:
+                continue
+            seen_tables.add(dedupe_key)
+
+            tables_info.append({
+                "table_name": table_name,
+                "table_comment": ddl_info["table_comment"],
+                "table_type": table_type,
+                "database": database_name,
+                "is_used": table_name in sql_tables
+            })
+
+            # Extract column information
+            column_comments = ddl_info["columns"]
+            for col_name, col_comment in column_comments.items():
+                field_key = (table_name, col_name)
+                if field_key in seen_fields:
+                    continue
+                seen_fields.add(field_key)
+                is_used = col_name in sql_columns
+                fields_info.append({
+                    "table_name": table_name,
+                    "column_name": col_name,
+                    "column_comment": col_comment,
+                    "is_used": is_used
+                })
+
+        # Analyze relationships (JOIN keys)
+        relationships = self._analyze_relationships(sql_query, tables_info)
+
+        return {
+            "tables": tables_info,
+            "fields": fields_info,
+            "relationships": relationships
+        }
+
+    def _analyze_relationships(self, sql_query: str, tables_info: List[Dict]) -> List[Dict[str, str]]:
+        """Analyze JOIN relationships from SQL query.
+
+        Args:
+            sql_query: SQL query string
+            tables_info: List of table information dicts
+
+        Returns:
+            List of relationship dicts with left_table, right_table, join_key
+        """
+        relationships = []
+
+        try:
+            parsed = sqlglot.parse_one(sql_query, error_level=sqlglot.ErrorLevel.IGNORE)
+
+            # Find JOIN conditions
+            for join in parsed.find_all(exp.Join):
+                join_table = ""
+                if isinstance(join.this, exp.Table):
+                    join_table = join.this.name
+
+                # Extract ON condition
+                on_clause = join.args.get("on")
+                if on_clause:
+                    # Simple join key extraction (left_table.key = right_table.key)
+                    if isinstance(on_clause, exp.EQ):
+                        left = on_clause.left
+                        right = on_clause.right
+                        if isinstance(left, exp.Column) and isinstance(right, exp.Column):
+                            left_table = left.table
+                            right_table = right.table
+                            join_key = left.name
+
+                            if join_table and (left_table or right_table):
+                                relationships.append({
+                                    "left_table": left_table or "",
+                                    "right_table": right_table or join_table,
+                                    "join_key": join_key,
+                                    "join_type": join.side if hasattr(join, "side") else "INNER"
+                                })
+        except Exception as e:
+            self.logger.warning(f"Failed to analyze relationships: {e}")
+
+        return relationships
+
+    def _infer_field_usage(self, sql_query: str, field_info: Dict) -> str:
+        """Infer field usage purpose based on SQL analysis.
+
+        Args:
+            sql_query: SQL query string
+            field_info: Field info dict with table_name and column_name
+
+        Returns:
+            Usage description: 关联键/筛选条件/输出字段
+        """
+        col_name = field_info["column_name"]
+        table_name = field_info["table_name"]
+
+        try:
+            parsed = sqlglot.parse_one(sql_query, error_level=sqlglot.ErrorLevel.IGNORE)
+
+            # Check if used in JOIN condition
+            for join in parsed.find_all(exp.Join):
+                on_clause = join.args.get("on")
+                if on_clause:
+                    for col in on_clause.find_all(exp.Column):
+                        if col.name == col_name:
+                            return "关联键"
+
+            # Check if used in WHERE condition
+            for where in parsed.find_all(exp.Where):
+                for col in where.find_all(exp.Column):
+                    if col.name == col_name:
+                        return "筛选条件"
+
+            # Check if used in GROUP BY
+            for group in parsed.find_all(exp.Group):
+                for col in group.find_all(exp.Column):
+                    if col.name == col_name:
+                        return "分组字段"
+
+            # Check if used in ORDER BY
+            for order in parsed.find_all(exp.Order):
+                for col in order.find_all(exp.Column):
+                    if col.name == col_name:
+                        return "排序字段"
+
+        except Exception:
+            pass
+
+        return "输出字段"
+
+    def _parse_sql_structure(self, sql_query: str, dialect: str = "snowflake") -> Optional[exp.Expression]:
+        """Parse SQL structure using sqlglot.
+
+        Args:
+            sql_query: SQL query string
+            dialect: SQL dialect
+
+        Returns:
+            Parsed SQL expression or None on error
+        """
+        try:
+            return sqlglot.parse_one(sql_query, dialect=dialect, error_level=sqlglot.ErrorLevel.IGNORE)
+        except Exception as e:
+            self.logger.warning(f"Failed to parse SQL structure: {e}")
+            return None
+
+    def _infer_cte_purpose(self, cte_name: str, cte_definition: str) -> str:
+        """Infer business purpose of a CTE from its name and definition.
+
+        Args:
+            cte_name: Name of the CTE
+            cte_definition: CTE SQL definition
+
+        Returns:
+            Business purpose description
+        """
+        # Common patterns
+        patterns = {
+            r"first|initial|earliest": "识别首次事件",
+            r"last|final|latest": "识别最后事件",
+            r"rank|row_number": "计算排名或序号",
+            r"agg|aggregate|sum|count|avg": "聚合计算",
+            r"filter|where": "筛选数据",
+            r"join|link|relate": "关联表数据",
+            r"dedup|distinct|unique": "去重或获取唯一值"
+        }
+
+        cte_lower = cte_name.lower()
+        for pattern, purpose in patterns.items():
+            if re.search(pattern, cte_lower):
+                return purpose
+
+        # Default purpose based on structure
+        if "SELECT" in cte_definition.upper():
+            return "中间查询结果"
+        return "通用表达式"
+
+    def _get_field_comment(self, table_schemas: List[Any], table_name: str, column_name: str) -> str:
+        """Get field comment from table schemas.
+
+        Args:
+            table_schemas: List of TableSchema objects
+            table_name: Table name
+            column_name: Column name
+
+        Returns:
+            Field comment or empty string
+        """
+        for schema in table_schemas:
+            if getattr(schema, "table_name", "") == table_name:
+                definition = getattr(schema, "definition", "")
+                ddl_info = self._parse_ddl_comments(definition)
+                return ddl_info["columns"].get(column_name, "")
+        return ""
+
+    def _add_field_comment(self, field_name: str, field_comment: str, sql_line: str) -> str:
+        """Add inline comment to a field in SQL.
+
+        Args:
+            field_name: Field/column name
+            field_comment: Comment text
+            sql_line: SQL line to annotate
+
+        Returns:
+            SQL line with inline comment added
+        """
+        if not field_comment or "--" in sql_line:
+            return sql_line
+
+        # Security limit: avoid regex processing on excessively long inputs
+        if len(field_name) > 256 or len(sql_line) > 4096:
+            return sql_line
+
+        # Add comment after field name
+        pattern = rf'\b{re.escape(field_name)}\b(?!\s*--)'
+        replacement = f'{field_name} -- {field_comment}'
+        return re.sub(pattern, replacement, sql_line, count=1)
+
+    def _explain_condition(self, condition: exp.Expression) -> str:
+        """Explain business meaning of a WHERE/JOIN condition.
+
+        Args:
+            condition: SQL condition expression
+
+        Returns:
+            Business meaning explanation
+        """
+        if isinstance(condition, exp.EQ):
+            left = condition.left
+            right = condition.right
+            if isinstance(left, exp.Column) and isinstance(right, exp.Literal):
+                return f"筛选 {left.name} 等于 {right.this}"
+        elif isinstance(condition, exp.In):
+            # Handle IN (...) conditions
+            col = condition.this
+            if isinstance(col, exp.Column):
+                return f"筛选 {col.name} 在指定值范围内"
+        elif isinstance(condition, exp.And):
+            return "同时满足多个条件"
+        elif isinstance(condition, exp.Or):
+            return "满足任一条件"
+
+        return "条件筛选"
+
+    def _add_condition_comments(self, sql_lines: List[str], parsed: exp.Expression) -> List[str]:
+        """Add business logic comments to WHERE/JOIN conditions.
+
+        Args:
+            sql_lines: List of SQL line strings
+            parsed: Parsed SQL expression
+
+        Returns:
+            SQL lines with added condition comments
+        """
+        result = sql_lines.copy()
+
+        # Add comments for WHERE clauses
+        for i, line in enumerate(result):
+            if "WHERE" in line.upper() or "AND" in line.upper() or "OR" in line.upper():
+                # Try to explain the condition
+                for where in parsed.find_all(exp.Where):
+                    explanation = self._explain_condition(where.this)
+                    if explanation and explanation != "条件筛选":
+                        # Add comment before the line
+                        result[i] = f"-- {explanation}\n{result[i]}"
+                        break
+
+        return result
+
+    def _generate_sql_with_comments(
+        self,
+        sql_query: str,
+        table_schemas: List[Any],
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Generate annotated SQL with business logic comments.
+
+        Args:
+            sql_query: Original SQL query
+            table_schemas: List of TableSchema objects
+            metadata: Workflow metadata for context
+
+        Returns:
+            SQL with business logic comments
+        """
+        lines = []
+        sql_lines = sql_query.strip().split("\n")
+
+        try:
+            parsed = self._parse_sql_structure(sql_query)
+            if not parsed:
+                return sql_query
+
+            # Add header comment explaining the query purpose
+            clarified_task = ""
+            if metadata and metadata.get("clarified_task"):
+                clarified_task = metadata["clarified_task"]
+            elif metadata and metadata.get("intent_clarification"):
+                clarified_task = metadata["intent_clarification"].get("clarified_task", "")
+
+            if clarified_task:
+                lines.append(f"-- SQL设计目的: {clarified_task}")
+                lines.append("")
+
+            # Process CTEs (WITH clauses)
+            with_expr = parsed.find(exp.With)
+            if with_expr:
+                lines.append("-- 使用公共表表达式(CTE)组织复杂查询逻辑")
+                for cte in with_expr.expressions:
+                    if isinstance(cte, exp.CTE):
+                        cte_name = cte.alias
+                        cte_purpose = self._infer_cte_purpose(cte_name, str(cte.this))
+                        lines.append(f"-- CTE: {cte_name} - {cte_purpose}")
+
+            # Process main query structure
+            line_idx = 0
+            for line in sql_lines:
+                stripped = line.strip()
+                annotated_line = line
+
+                # Add field comments for key columns
+                for table_schema in table_schemas:
+                    table_name = getattr(table_schema, "table_name", "")
+                    definition = getattr(table_schema, "definition", "")
+                    if table_name and definition:
+                        ddl_info = self._parse_ddl_comments(definition)
+                        for col_name, col_comment in ddl_info["columns"].items():
+                            if col_comment and col_name in line:
+                                # Add inline comment if not already present
+                                if "--" not in line:
+                                    annotated_line = self._add_field_comment(col_name, col_comment, line)
+
+                lines.append(annotated_line)
+                line_idx += 1
+
+            # Add business logic comments for key operations
+            lines = self._add_condition_comments(lines, parsed)
+
+        except Exception as e:
+            self.logger.warning(f"Failed to generate annotated SQL: {e}")
+            return sql_query
+
+        return "\n".join(lines)
+
+    def _generate_execution_report(
+        self,
+        row_count: int,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Generate execution verification report section.
+
+        Args:
+            row_count: Number of rows returned
+            metadata: Workflow metadata with validation results
+
+        Returns:
+            Markdown formatted execution report
+        """
+        lines = []
+
+        # Check validation results
+        syntax_valid = True
+        if metadata and metadata.get("sql_validation"):
+            validation = metadata["sql_validation"]
+            syntax_valid = validation.get("syntax_valid", True)
+
+        lines.append("**执行状态**: ✅ SQL已成功执行验证\n")
+        lines.append("**执行详情**:")
+        lines.append(f"- **语法正确**: {'✅ SQL语法验证通过，数据库成功解析' if syntax_valid else '❌ 语法验证失败'}")
+        lines.append(f"- **执行返回**: {row_count}行数据")
+        lines.append("")
+
+        lines.append("**数据情况说明**:")
+        if row_count == 0:
+            lines.append("当前数据库中没有匹配查询条件的数据。这表明:")
+            lines.append("- SQL逻辑正确（无语法错误，成功执行）")
+            lines.append("- 数据库中暂无满足条件的数据")
+            lines.append("")
+            lines.append("**后续验证建议**:")
+            lines.append("如需验证SQL逻辑，可以:")
+            lines.append("1. 检查表数据是否存在（如：SELECT COUNT(*) FROM table_name）")
+            lines.append("2. 确认筛选条件的时间范围或枚举值是否合理")
+            lines.append("3. 检查数据是否已加载到指定时间段")
+        else:
+            lines.append(f"查询成功返回 {row_count} 行数据，SQL逻辑正确且数据完整。")
+        lines.append("")
+
+        lines.append("**SQL适合生产使用**: ✅ 是")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    def _generate_optimization_suggestions(
+        self,
+        sql_query: str,
+        table_schemas: List[Any],
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Generate optimization suggestions based on SQL analysis.
+
+        Args:
+            sql_query: SQL query string
+            table_schemas: List of TableSchema objects
+            metadata: Workflow metadata
+
+        Returns:
+            Markdown formatted optimization suggestions
+        """
+        suggestions = []
+        lines = []
+
+        try:
+            parsed = self._parse_sql_structure(sql_query)
+            if not parsed:
+                return ""
+
+            # Check for CTE usage (good practice)
+            has_cte = parsed.find(exp.With) is not None
+            if has_cte:
+                suggestions.append("✅ 使用了CTE，提高了SQL可读性和维护性")
+
+            # Check for JOIN operations
+            join_count = len(list(parsed.find_all(exp.Join)))
+            if join_count > 0:
+                suggestions.append(f"✅ 包含{join_count}个表关联，建议确保关联字段有索引")
+
+            # Check for subqueries
+            subquery_count = len(list(parsed.find_all(exp.Subquery)))
+            if subquery_count > 2:
+                suggestions.append("💡 包含多个子查询，考虑使用CTE重构以提高可读性")
+
+            # Check for SELECT *
+            for select in parsed.find_all(exp.Select):
+                if hasattr(select, "expressions"):
+                    for expr in select.expressions:
+                        if isinstance(expr, exp.Star):
+                            suggestions.append("⚠️ 使用了SELECT *，建议明确指定所需字段以提高性能")
+                            break
+
+            # Check for missing WHERE clause in SELECT
+            for select in parsed.find_all(exp.Select):
+                has_where = select.find(exp.Where) is not None
+                if not has_where and join_count == 0:
+                    suggestions.append("💡 查询未包含WHERE条件，将扫描全表数据")
+
+            # Data quality suggestions based on validation
+            if metadata and metadata.get("sql_validation"):
+                validation = metadata["sql_validation"]
+                warnings = validation.get("warnings", [])
+                if warnings:
+                    suggestions.extend([f"⚠️ {w}" for w in warnings[:3]])
+
+        except Exception as e:
+            self.logger.warning(f"Failed to generate optimization suggestions: {e}")
+
+        if suggestions:
+            lines.append("**性能优化**:")
+            for s in suggestions:
+                if s.startswith("✅"):
+                    lines.append(f"- {s}")
+                elif s.startswith("⚠️"):
+                    lines.append(f"- {s}")
+                else:
+                    lines.append(f"- {s}")
+
+            lines.append("")
+            lines.append("**后续分析建议**:")
+            lines.append("- 根据实际数据量调整查询复杂度")
+            lines.append("- 定期检查查询执行计划，优化索引策略")
+            lines.append("- 对于大数据集查询，考虑添加时间范围限制")
+            lines.append("")
+
+        return "\n".join(lines) if lines else ""
+
+    def _extract_plan_from_output(self, output: Any) -> Dict[str, Any]:
+        """
+        Try to find plan-related fields ('todo_list' or 'updated_item') inside
+        a possibly nested output structure. Handles dicts and JSON strings and
+        returns the first matching dict with keys 'todo_list' or 'updated_item',
+        or {} if none found.
+        """
+
+        def try_parse(obj):
+            if isinstance(obj, dict):
+                return obj
+            if isinstance(obj, str):
+                try:
+                    return json.loads(obj)
+                except Exception:
+                    return None
+            return None
+
+        stack = [output]
+        visited = set()
+        max_depth = 6
+        depth = 0
+        while stack and depth < max_depth:
+            depth += 1
+            current = stack.pop()
+            if current is None:
+                continue
+            # avoid looping on same object (use id where possible)
+            try:
+                cid = id(current)
+            except Exception:
+                cid = None
+            if cid and cid in visited:
+                continue
+            if cid:
+                visited.add(cid)
+
+            parsed = try_parse(current)
+            if isinstance(parsed, dict):
+                # direct matches
+                if "todo_list" in parsed and isinstance(parsed["todo_list"], dict):
+                    return {"todo_list": parsed["todo_list"]}
+                if "updated_item" in parsed and isinstance(parsed["updated_item"], dict):
+                    return {"updated_item": parsed["updated_item"]}
+
+                # common wrapper keys
+                for k in ("raw_output", "result", "data", "output"):
+                    if k in parsed:
+                        child = try_parse(parsed[k])
+                        if isinstance(child, dict):
+                            stack.append(child)
+
+                # push dict values for further traversal
+                for v in parsed.values():
+                    child = try_parse(v)
+                    if isinstance(child, dict):
+                        stack.append(child)
+
+        return {}
+
+    def _extract_callid_from_output(self, output: Any) -> Optional[str]:
+        """
+        Search nested output for common call id fields (action_id, call_id, callId, tool_call_id, toolCallId).
+        Returns the first found string value or None.
+        """
+
+        def try_parse(obj):
+            if isinstance(obj, dict):
+                return obj
+            if isinstance(obj, str):
+                try:
+                    return json.loads(obj)
+                except Exception:
+                    return None
+            return None
+
+        keys_to_check = ("action_id", "call_id", "callId", "tool_call_id", "toolCallId", "id")
+        stack = [output]
+        visited = set()
+        max_depth = 6
+        depth = 0
+        while stack and depth < max_depth:
+            depth += 1
+            current = stack.pop()
+            if current is None:
+                continue
+            try:
+                cid = id(current)
+            except Exception:
+                cid = None
+            if cid and cid in visited:
+                continue
+            if cid:
+                visited.add(cid)
+
+            parsed = try_parse(current)
+            if isinstance(parsed, dict):
+                # check keys
+                for k in keys_to_check:
+                    if k in parsed:
+                        v = parsed.get(k)
+                        if isinstance(v, str) and v.strip():
+                            return v
+                # push wrapper keys and values
+                for k in ("raw_output", "result", "data", "output"):
+                    if k in parsed:
+                        child = try_parse(parsed[k])
+                        if isinstance(child, dict):
+                            stack.append(child)
+                for v in parsed.values():
+                    child = try_parse(v)
+                    if isinstance(child, dict):
+                        stack.append(child)
+
+        return None
+
+    def _try_parse_json_like(self, obj: Any) -> Optional[Dict[str, Any]]:
+        """
+        Try to parse an object that may be a dict or a JSON string into a dict.
+        Returns the dict if successful, otherwise None.
+        """
+        if isinstance(obj, dict):
+            return obj
+        if isinstance(obj, str):
+            try:
+                parsed = json.loads(obj)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return None
+        return None
+
+    def _extract_todo_id_from_action(self, action: ActionHistory) -> Optional[str]:
+        """
+        Extracts the todo_id from an ActionHistory object, looking in various places.
+        This is crucial for correctly setting the planId for events related to specific todos.
+        """
+        # Try to extract from input arguments first
+        if action.input and isinstance(action.input, dict):
+            # Check for 'plan_id' directly in input (for preflight tools created by PreflightOrchestrator)
+            if action.input.get("plan_id"):
+                return action.input["plan_id"]
+            # Check for 'todo_id' directly in input
+            if action.input.get("todo_id"):
+                return action.input["todo_id"]
+            # Check for 'plan_id' in nested "input" field (for execution_event_manager records)
+            if "input" in action.input and isinstance(action.input["input"], dict):
+                nested_input = action.input["input"]
+                if nested_input.get("plan_id"):
+                    return nested_input["plan_id"]
+                if nested_input.get("todo_id"):
+                    return nested_input["todo_id"]
+            # Check for 'arguments' field which might be a JSON string containing 'todo_id' or 'plan_id'
+            if "arguments" in action.input and isinstance(action.input["arguments"], str):
+                parsed_args = self._try_parse_json_like(action.input["arguments"])
+                if isinstance(parsed_args, dict):
+                    if parsed_args.get("plan_id"):
+                        return parsed_args["plan_id"]
+                    if parsed_args.get("todo_id"):
+                        return parsed_args["todo_id"]
+
+        # For plan_update actions, try to extract from output's 'updated_item' or 'todo_list'
+        if action.action_type == "plan_update" and action.output:
+            plan_data = self._extract_plan_from_output(action.output)
+            if "updated_item" in plan_data and isinstance(plan_data["updated_item"], dict):
+                return plan_data["updated_item"].get("id")
+            if "todo_list" in plan_data and isinstance(plan_data["todo_list"], dict):
+                # If it's a full todo_list, we might not have a single todo_id,
+                # but if there's only one item, we can use its ID.
+                items = plan_data["todo_list"].get("items")
+                if isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict):
+                    return items[0].get("id")
+
+        # For tool_call_result, try to find the original tool_call_id and then its todo_id
+        if action.action_type == "tool_call_result" and action.input and isinstance(action.input, dict):
+            original_action_id = action.input.get("action_id")
+            if original_action_id and original_action_id in self.tool_call_map:
+                # This is complex as we don't store todo_id in tool_call_map directly.
+                # This would require looking up the original ActionHistory for the tool call.
+                # For now, we rely on todo_id being in the tool call's input.
+                pass
+
+        return None
+
+    def _get_unified_plan_id(self, action: ActionHistory, force_associate: bool = False) -> Optional[str]:
+        """
+        Unified planId retrieval strategy to ensure consistent event association.
+
+        This method implements a clear ID responsibility separation:
+        - active_todo_item_id: Currently executing TodoItem in agentic workflows (highest priority)
+        - todo_id: Specific task identifier from action metadata
+        - virtual_plan_id: Stable event association identifier for Text2SQL workflow
+        - active_virtual_step_id: Internal state tracking only (never exposed as planId)
+
+        Args:
+            action: The action to get planId for
+            force_associate: If True, use virtual_plan_id when no todo_id exists
+                           (for events that need association like ToolCallEvent, ToolCallResultEvent)
+                           If False, return None when no todo_id exists
+                           (for general messages like ChatEvent that don't require association)
+
+        Returns:
+            planId priority: active_todo_item_id > todo_id > virtual_step_id > virtual_plan_id > None
+        """
+        # 1. Priority: Active TodoItem ID (agentic workflow execution)
+        # When a TodoItem is actively being executed, bind all events to it
+        if self.active_todo_item_id:
+            return self.active_todo_item_id
+
+        # 2. Priority: Extract todo_id from action metadata (explicit binding)
+        todo_id = self._extract_todo_id_from_action(action)
+        if todo_id:
+            return todo_id
+
+        # 3. Map Text2SQL action_type to virtual step ID for Tool event binding
+        # This ensures ToolCallEvents bind to their corresponding virtual steps
+        virtual_step_id = self._get_virtual_step_id(action.action_type)
+
+        # Special handling for node_execution: extract node_type from input
+        if not virtual_step_id and action.action_type == "node_execution":
+            if action.input and isinstance(action.input, dict):
+                node_type = action.input.get("node_type")
+                if node_type:
+                    virtual_step_id = self._get_virtual_step_id(node_type)
+
+        if virtual_step_id:
+            self.logger.debug(f"Mapped action_type '{action.action_type}' to virtual_step_id '{virtual_step_id}'")
+            return virtual_step_id
+
+        # 4. For events that require association, use virtual_plan_id (stable across workflow)
+        if force_associate:
+            return self.virtual_plan_id
+
+        # 5. For events that don't require association, return None
+        return None
+
+    def _find_tool_call_id(self, action: ActionHistory) -> Optional[str]:
+        """
+        Try to determine the tool_call_id for a given action by:
+          1) mapping action.action_id -> tool_call_id
+          2) checking common id keys in action.input (including parsing stringified 'arguments')
+          3) extracting call id from nested output
+        Returns the tool_call_id string if found, else None.
+        """
+        # direct mapping by action_id
+        if action.action_id in self.tool_call_map:
+            return self.tool_call_map[action.action_id]
+
+        # Normalize and inspect input for candidate ids
+        input_candidate = None
+        if action.input:
+            # If it's a dict, copy and try to parse common string fields like 'arguments'
+            if isinstance(action.input, dict):
+                input_candidate = dict(action.input)
+                # parse 'arguments' if it's a json string
+                if "arguments" in input_candidate and isinstance(input_candidate["arguments"], str):
+                    parsed_args = self._try_parse_json_like(input_candidate["arguments"])
+                    if isinstance(parsed_args, dict):
+                        input_candidate.update(parsed_args)
+            else:
+                # try to parse string input
+                parsed = self._try_parse_json_like(action.input)
+                if isinstance(parsed, dict):
+                    input_candidate = parsed
+
+        if input_candidate and isinstance(input_candidate, dict):
+            for k in ("tool_call_id", "toolCallId", "call_id", "callId", "action_id", "id", "todo_id", "todoId"):
+                v = input_candidate.get(k)
+                if isinstance(v, str) and v:
+                    # if value maps to our stored map, return mapped id
+                    if v in self.tool_call_map:
+                        return self.tool_call_map[v]
+                    # otherwise, return the candidate (best-effort)
+                    return v
+
+        # try to extract from nested output
+        if action.output:
+            candidate = self._extract_callid_from_output(action.output)
+            if candidate:
+                if candidate in self.tool_call_map:
+                    return self.tool_call_map[candidate]
+                return candidate
+
+        return None
+
+    def _is_internal_todo_update(self, action: ActionHistory) -> bool:
+        """
+        Check if this is an internal todo_update call from server executor that should be filtered.
+
+        Args:
+            action: The ActionHistory to check
+
+        Returns:
+            bool: True if this is an internal todo_update that should be filtered
+        """
+        # Internal todo_update calls from the server executor often have specific action_id patterns
+        # or messages. We want to filter these out as ToolCallEvents.
+        if action.action_type == "todo_update":
+            # Check if the action_id starts with "server_call_"
+            if action.action_id.startswith("server_call_"):
+                return True
+            # Additionally, check if the message indicates it's an internal update
+            if action.messages and (
+                "Server executor: starting todo" in action.messages
+                or "Server executor: todo_in_progress" in action.messages
+                or "Server executor: todo_completed" in action.messages
+                or "Server executor: todo_complete failed" in action.messages
+            ):
+                return True
+        return False
+
+    def validate_event_flow(self, action_type: str, events: List[DeepResearchEvent]) -> bool:
+        """Validate event flow completeness for critical actions.
+
+        Args:
+            action_type: The type of action being converted
+            events: The generated events list
+
+        Returns:
+            bool: True if event flow is valid, False otherwise
+        """
+        if action_type in ["schema_discovery", "sql_execution"]:
+            # Should have both ToolCallEvent and ToolCallResultEvent
+            has_call = any(e.event == "tool_call" for e in events)
+            has_result = any(e.event == "tool_call_result" for e in events)
+            if has_call and has_result:
+                return True
+            # Allow processing updates to emit only tool_call
+            if has_call and not has_result:
+                return True
+            # Result without call is unexpected
+            if has_result and not has_call:
+                self.logger.warning(f"Action {action_type} missing tool call/result events")
+                return False
+        return True
+
+    def _extract_node_type_from_action(self, action: ActionHistory) -> Optional[str]:
+        """Extract node_type from action for failure tracking.
+
+        Uses VIRTUAL_STEPS as single source of truth for valid node types.
+        """
+        # Case 1: node_execution wrapper - extract nested node_type
+        if action.action_type == "node_execution" and action.input:
+            return action.input.get("node_type")
+
+        # Case 2: Direct action_type - check if it's a valid virtual step node_type
+        normalized_type = self._normalize_node_type(action.action_type)
+        for step in self.VIRTUAL_STEPS:
+            if normalized_type in step["node_types"]:
+                return normalized_type
+
+        # Case 3: Not a recognized node type
+        return None
+
+    def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
+        """Convert ActionHistory to DeepResearchEvent list."""
+
+        timestamp = int(time.time() * 1000)
+        event_id = f"{action.action_id}_{seq_num}"
+        events: List[DeepResearchEvent] = []
+
+        # Debug logging: track action conversion
+        self.logger.debug(f"Converting action: {action.action_type}, role: {action.role}, status: {action.status}")
+
+        # Track failed virtual steps for proper ERROR status in PlanUpdateEvent
+        # When a node fails, mark its corresponding virtual step as failed
+        if action.status == ActionStatus.FAILED:
+            node_type = self._extract_node_type_from_action(action)
+            virtual_step_id = self._get_virtual_step_id(node_type) if node_type else None
+
+            if virtual_step_id:
+                # Check if already marked (avoid duplicates)
+                if virtual_step_id not in self.failed_virtual_steps:
+                    self.failed_virtual_steps.add(virtual_step_id)
+                    self.logger.warning(
+                        f"🚨 Marking virtual step as FAILED: {virtual_step_id} (from node_type: {node_type})"
+                    )
+
+                    # Immediately emit updated PlanUpdateEvent to notify frontend of status change
+                    plan_update = self._generate_virtual_plan_update()
+                    if plan_update:
+                        events.append(plan_update)
+
+        # Extract todo_id if present (for plan-related events)
+        # Note: _get_unified_plan_id() will handle fallback logic properly
+        todo_id = self._extract_todo_id_from_action(action)
+
+        # 0. Handle explicit plan updates early (avoid role-based short-circuiting)
+        if action.action_type == "plan_update" and action.output:
+            todos = []
+            if isinstance(action.output, dict):
+                # Handle both "todos" (legacy) and "todo_list" (new) formats
+                todo_data_source = None
+                if "todo_list" in action.output and isinstance(action.output["todo_list"], dict):
+                    todo_data_source = action.output["todo_list"].get("items", [])
+                elif "todos" in action.output and isinstance(action.output["todos"], list):
+                    todo_data_source = action.output["todos"]
+
+                if todo_data_source:
+                    for todo_data in todo_data_source:
+                        if isinstance(todo_data, dict):
+                            todo_id = todo_data.get("id")
+                            if not todo_id:
+                                self.logger.warning("Skipping plan_update todo without id: %s", todo_data)
+                                continue
+                            todos.append(
+                                TodoItem(
+                                    id=str(todo_id),
+                                    content=todo_data.get("content", ""),
+                                    status=TodoStatus(self._normalize_todo_status(todo_data.get("status", "pending"))),
+                                )
+                            )
+
+            if todos:
+                # Update cached todo state for full list emission
+                self._update_todo_state(todos, replace_order=True)
+                todos = self._get_todo_state_list() or todos
+
+            # For plan_update events from workflow nodes, use virtual_plan_id to maintain association
+            # For plan_update events from tools, use event_id to maintain unique plan identification
+            plan_event_id = self.virtual_plan_id if action.role == ActionRole.WORKFLOW else event_id
+            events.append(PlanUpdateEvent(id=plan_event_id, planId=None, timestamp=timestamp, todos=todos))
+            return events
+
+        # 1. Handle chat/assistant messages
+        if action.role == ActionRole.ASSISTANT:
+            # ChatEvent should only have planId when directly related to a specific todo item execution
+            # For general assistant messages (thinking, planning, etc.), planId should be None
+            chat_plan_id = self._get_unified_plan_id(action, force_associate=False)
+
+            # Emit streaming token chunks ("raw_stream") always.
+            # Emit intermediate "message" or "thinking" actions only when explicitly flagged
+            # by the producer via an `emit_chat` boolean in action.output or action.input.
+            emit_flag = False
+            if action.output and isinstance(action.output, dict):
+                emit_flag = bool(action.output.get("emit_chat"))
+            if not emit_flag and action.input and isinstance(action.input, dict):
+                emit_flag = bool(action.input.get("emit_chat"))
+
+            # Only allow raw_stream unconditionally; allow message/thinking when flagged.
+            if action.action_type == "raw_stream" or (action.action_type in ("message", "thinking") and emit_flag):
+                content = ""
+                if action.output and isinstance(action.output, dict):
+                    content = (
+                        action.output.get("content", "")
+                        or action.output.get("response", "")
+                        or action.output.get("raw_output", "")
+                        or action.messages
+                    )
+                # Only send chat events if they have actual content or are important messages
+                if content and content.strip():
+                    # dedupe near-identical assistant messages
+                    h = self._hash_text(content)
+                    if h and h in self._recent_assistant_hashes:
+                        # skip duplicate message
+                        return []
+                    if h:
+                        self._recent_assistant_hashes.append(h)
+                    events.append(ChatEvent(id=event_id, planId=chat_plan_id, timestamp=timestamp, content=content))
+
+            elif action.action_type == "chat_response":
+                content = ""
+                if action.output and isinstance(action.output, dict):
+                    content = action.output.get("response", "") or action.output.get("content", "")
+                # Always send chat_response events as they are final responses
+                if content or action.output:
+                    h = self._hash_text(content or str(action.output))
+                    if h and h in self._recent_assistant_hashes:
+                        return []
+                    if h:
+                        self._recent_assistant_hashes.append(h)
+                    events.append(ChatEvent(id=event_id, planId=chat_plan_id, timestamp=timestamp, content=content))
+
+        # Handle SQL generation events
+        elif action.action_type == "sql_generation" and action.status == ActionStatus.SUCCESS:
+            sql_content = ""
+            if action.output and isinstance(action.output, dict):
+                sql = action.output.get("sql_query", "")
+                if sql:
+                    # Wrap as Markdown SQL code block
+                    sql_content = f"```sql\n{sql}\n```"
+
+            if sql_content:
+                # Use unified planId strategy: maps sql_generation -> step_sql virtual step
+                sql_plan_id = self._get_unified_plan_id(action, force_associate=True)
+                events.append(
+                    ChatEvent(
+                        id=event_id,
+                        planId=sql_plan_id,
+                        timestamp=timestamp,
+                        content=sql_content,
+                    )
+                )
+
+        # Handle Intent Analysis (convert to ChatEvent for visibility)
+        elif action.action_type == "intent_analysis" and action.status == ActionStatus.SUCCESS:
+            intent = "Unknown"
+            confidence = 0.0
+            if action.output and isinstance(action.output, dict):
+                intent = action.output.get("intent", intent)
+                confidence = action.output.get("confidence", confidence)
+
+            content = f"🧐 **Intent Detected**: `{intent}` (Confidence: {confidence:.2f})"
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=self._get_unified_plan_id(action, force_associate=True),
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # Handle SQL Validation (convert to ChatEvent for visibility)
+        elif action.action_type == "sql_validation":
+            # Extract validation results from output
+            validation_result = {}
+            if action.output and isinstance(action.output, dict):
+                validation_result = action.output
+
+            is_valid = validation_result.get("is_valid", False)
+            syntax_valid = validation_result.get("syntax_valid", False)
+            tables_exist = validation_result.get("tables_exist", True)
+            columns_exist = validation_result.get("columns_exist", True)
+            has_dangerous_ops = validation_result.get("has_dangerous_ops", False)
+            errors = validation_result.get("errors", [])
+            warnings = validation_result.get("warnings", [])
+
+            # Build validation summary message
+            if is_valid:
+                content_lines = [
+                    "✅ **SQL验证通过**",
+                    f"- 语法验证: {'✅ 通过' if syntax_valid else '❌ 失败'}",
+                    f"- 表存在性: {'✅ 通过' if tables_exist else '❌ 失败'}",
+                    f"- 列存在性: {'✅ 通过' if columns_exist else '❌ 失败'}",
+                    f"- 危险操作: {'⚠️ 检测到' if has_dangerous_ops else '✅ 无危险操作'}",
+                ]
+
+                if warnings:
+                    content_lines.append(f"\n**警告** ({len(warnings)}):")
+                    for warning in warnings[:3]:
+                        content_lines.append(f"- {warning}")
+                    if len(warnings) > 3:
+                        content_lines.append(f"- ...还有 {len(warnings) - 3} 个警告")
+
+                content = "\n".join(content_lines)
+            else:
+                content_lines = [
+                    "❌ **SQL验证失败**",
+                    f"- 语法验证: {'✅ 通过' if syntax_valid else '❌ 失败'}",
+                    f"- 表存在性: {'✅ 通过' if tables_exist else '❌ 失败'}",
+                    f"- 列存在性: {'✅ 通过' if columns_exist else '❌ 失败'}",
+                    f"- 危险操作: {'⚠️ 检测到' if has_dangerous_ops else '✅ 无危险操作'}",
+                ]
+
+                if errors:
+                    content_lines.append(f"\n**错误** ({len(errors)}):")
+                    for error in errors[:3]:
+                        content_lines.append(f"- {error}")
+                    if len(errors) > 3:
+                        content_lines.append(f"- ...还有 {len(errors) - 3} 个错误")
+
+                if warnings:
+                    content_lines.append(f"\n**警告** ({len(warnings)}):")
+                    for warning in warnings[:3]:
+                        content_lines.append(f"- {warning}")
+                    if len(warnings) > 3:
+                        content_lines.append(f"- ...还有 {len(warnings) - 3} 个警告")
+
+                content = "\n".join(content_lines)
+
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=self._get_unified_plan_id(action, force_associate=True),
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # Handle Schema Discovery (convert to ToolCallEvent)
+        elif action.action_type == "schema_discovery":
+            tool_call_id = str(uuid.uuid4())
+            # Ensure input is a dict
+            tool_input = {}
+            if action.input and isinstance(action.input, dict):
+                tool_input = action.input
+
+            # Use unified plan ID strategy (fix for Text2SQL workflow)
+            schema_plan_id = self._get_unified_plan_id(action, force_associate=True)
+
+            events.append(
+                ToolCallEvent(
+                    id=f"{event_id}_call",
+                    planId=schema_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    toolName="schema_discovery",
+                    input=tool_input,
+                )
+            )
+
+            events.append(
+                ToolCallResultEvent(
+                    id=f"{event_id}_result",
+                    planId=schema_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    data=action.output,
+                    error=action.status == ActionStatus.FAILED,
+                )
+            )
+
+            # Check for schema discovery failure report and send as ChatEvent
+            if action.status == ActionStatus.FAILED and action.output and isinstance(action.output, dict):
+                diagnostic_report = action.output.get("diagnostic_report")
+                if diagnostic_report:
+                    report_content = self._format_diagnostic_report(diagnostic_report)
+                    events.append(
+                        ChatEvent(
+                            id=f"{event_id}_diagnostic",
+                            planId=schema_plan_id,
+                            timestamp=timestamp,
+                            content=report_content,
+                        )
+                    )
+
+        # Handle Schema Validation (convert to ToolCallEvent with diagnostic report on failure)
+        elif action.action_type == "schema_validation":
+            tool_call_id = str(uuid.uuid4())
+            # Ensure input is a dict
+            tool_input = {}
+            if action.input and isinstance(action.input, dict):
+                tool_input = action.input
+
+            # Use unified plan ID strategy (fix for Text2SQL workflow)
+            validation_plan_id = self._get_unified_plan_id(action, force_associate=True)
+
+            events.append(
+                ToolCallEvent(
+                    id=f"{event_id}_call",
+                    planId=validation_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    toolName="schema_validation",
+                    input=tool_input,
+                )
+            )
+
+            events.append(
+                ToolCallResultEvent(
+                    id=f"{event_id}_result",
+                    planId=validation_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    data=action.output,
+                    error=action.status == ActionStatus.FAILED,
+                )
+            )
+
+            # Check for schema discovery failure report and send as ChatEvent
+            if action.status == ActionStatus.FAILED and action.output and isinstance(action.output, dict):
+                diagnostic_report = action.output.get("diagnostic_report")
+                if diagnostic_report:
+                    report_content = self._format_diagnostic_report(diagnostic_report)
+                    events.append(
+                        ChatEvent(
+                            id=f"{event_id}_diagnostic",
+                            planId=validation_plan_id,
+                            timestamp=timestamp,
+                            content=report_content,
+                        )
+                    )
+
+        # Handle Schema Linking
+        elif action.action_type == "schema_linking" and action.status == ActionStatus.SUCCESS:
+            tables_found = 0
+            if action.output and isinstance(action.output, dict):
+                tables_found = action.output.get("tables_found", 0)
+
+            content = f"🔗 **Schema Linking**: Linked {tables_found} tables to the query context."
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=self._get_unified_plan_id(action, force_associate=True),
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # Handle Knowledge Search
+        elif action.action_type == "knowledge_search" and action.status == ActionStatus.SUCCESS:
+            knowledge_found = False
+            if action.output and isinstance(action.output, dict):
+                knowledge_found = action.output.get("knowledge_found", False)
+
+            if knowledge_found:
+                content = "📚 **Knowledge Search**: Found relevant external business knowledge."
+                events.append(
+                    ChatEvent(
+                        id=event_id,
+                        planId=self._get_unified_plan_id(action, force_associate=True),
+                        timestamp=timestamp,
+                        content=content,
+                    )
+                )
+
+        # Handle SQL Execution (convert to ToolCallEvent)
+        elif action.action_type == "sql_execution":
+            tool_call_id = action.action_id
+            tool_input = {}
+            if action.input and isinstance(action.input, dict):
+                tool_input = action.input
+
+            exec_plan_id = self._get_unified_plan_id(action, force_associate=True)
+
+            if action.status == ActionStatus.PROCESSING:
+                events.append(
+                    ToolCallEvent(
+                        id=f"{event_id}_call",
+                        planId=exec_plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        toolName="execute_sql",
+                        input=tool_input,
+                    )
+                )
+
+            if action.status in (ActionStatus.SUCCESS, ActionStatus.FAILED):
+                events.append(
+                    ToolCallResultEvent(
+                        id=f"{event_id}_result",
+                        planId=exec_plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        data=action.output,
+                        error=action.status == ActionStatus.FAILED,
+                    )
+                )
+
+        # Handle Preflight Tool Execution
+        elif action.action_type.startswith("preflight_"):
+            # Extract tool name from action_type (e.g., "preflight_describe_table" -> "describe_table")
+            tool_name = action.action_type.replace("preflight_", "", 1)
+
+            # Extract tool_call_id from input or generate a new one
+            tool_call_id = None
+            if action.input and isinstance(action.input, dict):
+                # Try to find tool_call_id in the input
+                for key, value in action.input.items():
+                    if "tool_call" in str(key).lower() or isinstance(value, str) and "preflight_" in value:
+                        tool_call_id = value
+                        break
+
+            if not tool_call_id:
+                tool_call_id = str(uuid.uuid4())
+
+            # Use unified plan ID strategy for proper virtual step binding
+            # This ensures preflight tools map to their parent virtual step (e.g., "step_schema")
+            preflight_plan_id = self._get_unified_plan_id(action, force_associate=True)
+
+            # Create ToolCallEvent for processing status
+            if action.status == ActionStatus.PROCESSING:
+                tool_input = {}
+                if action.input and isinstance(action.input, dict):
+                    tool_input = action.input
+
+                events.append(
+                    ToolCallEvent(
+                        id=f"{event_id}_call",
+                        planId=preflight_plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        toolName=tool_name,
+                        input=tool_input,
+                    )
+                )
+
+            # Create ToolCallResultEvent for completed/failed status
+            if action.status in [ActionStatus.SUCCESS, ActionStatus.FAILED]:
+                events.append(
+                    ToolCallResultEvent(
+                        id=f"{event_id}_result",
+                        planId=preflight_plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        data=action.output,
+                        error=action.status == ActionStatus.FAILED,
+                    )
+                )
+
+        # Handle Reflection Analysis
+        elif action.action_type == "reflection_analysis" and action.status == ActionStatus.SUCCESS:
+            strategy = "UNKNOWN"
+            if action.output and isinstance(action.output, dict):
+                strategy = action.output.get("strategy", strategy)
+
+            content = f"🤔 **Reflection**: Analyzing results... Strategy: `{strategy}`"
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=self._get_unified_plan_id(action, force_associate=True),
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # 2. Handle tool calls - ToolCallEvent / ToolCallResultEvent and PlanUpdateEvent for plan tools
+        elif action.role == ActionRole.TOOL:
+            # Handle tool_call_result first - don't generate new tool_call_id, find the original
+            if action.action_type == "tool_call_result" and action.output:
+                tool_call_id = self._find_tool_call_id(action)
+                if tool_call_id:
+                    events.append(
+                        ToolCallResultEvent(
+                            id=event_id,
+                            planId=self._get_unified_plan_id(action, force_associate=True),
+                            timestamp=timestamp,
+                            toolCallId=str(tool_call_id),
+                            data=action.output,
+                            error=action.status == ActionStatus.FAILED,
+                        )
+                    )
+                return events
+
+            # 过滤掉内部的todo_update状态管理调用
+            if action.action_type == "todo_update" and self._is_internal_todo_update(action):
+                return []  # 不生成任何事件
+
+            tool_call_id = str(uuid.uuid4())
+            # store mapping for later result binding
+            self.tool_call_map[action.action_id] = tool_call_id
+
+            is_plan_tool = action.action_type in ["todo_write", "todo_update"]
+            normalized_tool_name = self._normalize_tool_name(action.action_type)
+            plan_data = {}
+            if action.output:
+                plan_data = self._extract_plan_from_output(action.output)
+
+            # Build normalized input: parse stringified 'arguments' if present so fields like todo_id are exposed.
+            normalized_input: Dict[str, Any] = {}
+            if action.input:
+                if isinstance(action.input, dict):
+                    normalized_input = dict(action.input)
+                    # parse 'arguments' field if it's a JSON string
+                    if "arguments" in normalized_input and isinstance(normalized_input["arguments"], str):
+                        parsed_args = self._try_parse_json_like(normalized_input["arguments"])
+                        if isinstance(parsed_args, dict):
+                            normalized_input.update(parsed_args)
+                else:
+                    parsed = self._try_parse_json_like(action.input)
+                    if isinstance(parsed, dict):
+                        normalized_input = parsed
+
+            # Determine planId for tool events using unified strategy
+            # This ensures proper binding for both plan tools and Text2SQL workflow tools
+            tool_plan_id = self._get_unified_plan_id(action, force_associate=True)
+
+            # Track active TodoItem for agentic workflow event binding
+            # When todo_update changes status to "in_progress", track that TodoItem
+            # When status is "completed" or "failed", clear the active TodoItem
+            if is_plan_tool and action.action_type == "todo_update":
+                todo_id = None
+                # First try to get todo_id from normalized_input
+                if "todo_id" in normalized_input:
+                    todo_id = normalized_input["todo_id"]
+                # Then try to get todo_id from plan_data updated_item
+                elif "updated_item" in plan_data:
+                    ui = plan_data["updated_item"]
+                    if isinstance(ui, dict) and ui.get("id"):
+                        todo_id = ui["id"]
+                        # Check the status to update active_todo_item_id
+                        status = ui.get("status", "").lower()
+                        if status == "in_progress":
+                            self.active_todo_item_id = todo_id
+                            self.logger.debug(f"Tracking active TodoItem: {todo_id}")
+                        elif status in ("completed", "failed", "error"):
+                            if self.active_todo_item_id == todo_id:
+                                self.logger.debug(f"Clearing active TodoItem: {todo_id} (status={status})")
+                                self.active_todo_item_id = None
+
+            # If this is a plan tool and we found plan data, emit PlanUpdateEvent first
+            if is_plan_tool and plan_data:
+                todos = []
+                replace_order = False
+                if "todo_list" in plan_data:
+                    tlist = plan_data["todo_list"]
+                    if isinstance(tlist, dict) and "items" in tlist:
+                        replace_order = True
+                        for todo_data in tlist["items"]:
+                            if isinstance(todo_data, dict):
+                                todo_id = todo_data.get("id")
+                                if not todo_id:
+                                    self.logger.warning("Skipping todo item without id in todo_list: %s", todo_data)
+                                    continue
+                                todos.append(
+                                    TodoItem(
+                                        id=str(todo_id),
+                                        content=todo_data.get("content", ""),
+                                        status=TodoStatus(self._normalize_todo_status(todo_data.get("status", "pending"))),
+                                    )
+                                )
+                elif "updated_item" in plan_data:
+                    ui = plan_data["updated_item"]
+                    if isinstance(ui, dict):
+                        todo_id = ui.get("id")
+                        if not todo_id:
+                            self.logger.warning("Skipping updated_item without id: %s", ui)
+                        else:
+                            todos.append(
+                                TodoItem(
+                                    id=str(todo_id),
+                                    content=ui.get("content", ""),
+                                    status=TodoStatus(self._normalize_todo_status(ui.get("status", "pending"))),
+                                )
+                            )
+
+                if todos:
+                    # Update cached todo state to emit full plan when possible
+                    self._update_todo_state(todos, replace_order=replace_order)
+                    todo_payload = self._get_todo_state_list() or todos
+
+                    # For plan tools, emit tool events AND plan update event
+                    events.append(
+                        ToolCallEvent(
+                            id=f"{event_id}_call",
+                            planId=tool_plan_id,
+                            timestamp=timestamp,
+                            toolCallId=tool_call_id,
+                            toolName=normalized_tool_name,
+                            input=normalized_input or (action.input if isinstance(action.input, dict) else {}),
+                        )
+                    )
+
+                    if action.output:
+                        events.append(
+                            ToolCallResultEvent(
+                                id=f"{event_id}_result",
+                                planId=tool_plan_id,
+                                timestamp=timestamp,
+                                toolCallId=tool_call_id,
+                                data=action.output,
+                                error=action.status == ActionStatus.FAILED,
+                            )
+                        )
+
+                    # PlanUpdateEvent uses the specific todo_id for updated items, or None for plan creation
+                    plan_update_plan_id = None
+                    if action.action_type == "todo_update" and "updated_item" in plan_data:
+                        ui = plan_data["updated_item"]
+                        if isinstance(ui, dict) and ui.get("id"):
+                            plan_update_plan_id = ui["id"]
+
+                    events.append(
+                        PlanUpdateEvent(
+                            id=f"{event_id}_plan", planId=plan_update_plan_id, timestamp=timestamp, todos=todo_payload
+                        )
+                    )
+            else:
+                # Normal tool call: emit call + result (if available)
+                events.append(
+                    ToolCallEvent(
+                        id=f"{event_id}_call",
+                        planId=tool_plan_id,
+                        timestamp=timestamp,
+                        toolCallId=tool_call_id,
+                        toolName=normalized_tool_name,
+                        input=normalized_input or (action.input if isinstance(action.input, dict) else {}),
+                    )
+                )
+                if action.output:
+                    events.append(
+                        ToolCallResultEvent(
+                            id=f"{event_id}_result",
+                            planId=tool_plan_id,
+                            timestamp=timestamp,
+                            toolCallId=tool_call_id,
+                            data=action.output,
+                            error=action.status == ActionStatus.FAILED,
+                        )
+                    )
+
+        # 5. Handle workflow completion (修复 CompleteEvent 处理)
+        elif action.action_type == "workflow_completion" and action.status == ActionStatus.SUCCESS:
+            # Force complete all virtual steps
+            if self.virtual_plan_emitted:
+                final_todos = []
+                for step in self.VIRTUAL_STEPS:
+                    final_todos.append(
+                        TodoItem(id=str(step["id"]), content=str(step["content"]), status=TodoStatus.COMPLETED)
+                    )
+                events.append(
+                    PlanUpdateEvent(id=f"{event_id}_plan_final", planId=None, timestamp=timestamp, todos=final_todos)
+                )
+
+            events.append(
+                CompleteEvent(
+                    id=event_id,
+                    planId=None,  # CompleteEvent should not have planId by default
+                    timestamp=timestamp,
+                    content=action.messages,
+                )
+            )
+
+        # 6. Handle workflow initialization
+        elif action.action_type == "workflow_init":
+            # Convert workflow init to a ChatEvent to inform user
+            content = f"🚀 **System Initialization**: {action.messages}"
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=None,
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+            # Emit initial virtual plan for Text2SQL workflow
+            # We assume if it's workflow_init, we can initialize the virtual plan
+            if not self.virtual_plan_emitted:
+                plan_update = self._generate_virtual_plan_update()
+                if plan_update:
+                    events.append(plan_update)
+                    self.virtual_plan_emitted = True
+
+        # 7. Handle node execution
+        elif action.action_type == "node_execution":
+            # Update virtual plan if applicable
+            node_type = None
+            if action.input and isinstance(action.input, dict):
+                node_type = action.input.get("node_type")
+
+            if node_type:
+                plan_update = self._generate_virtual_plan_update(node_type)
+                if plan_update and plan_update.todos:
+                    # Check if status actually changed to avoid spamming events
+                    # (Simplified: always emit for now as _generate logic handles state)
+                    events.append(plan_update)
+
+            # Convert node execution to a status update (ChatEvent with specific formatting or just text)
+            # We can use it to show what the agent is doing
+            node_desc = "Unknown Node"
+            if action.input and isinstance(action.input, dict):
+                node_desc = action.input.get("description", node_desc)
+
+            content = f"🔄 **Executing Step**: {node_desc}"
+            events.append(
+                ChatEvent(
+                    id=event_id,
+                    planId=self._get_unified_plan_id(action, force_associate=True),  # Use unified plan ID
+                    timestamp=timestamp,
+                    content=content,
+                )
+            )
+
+        # 8. Handle errors
+        elif action.status == ActionStatus.FAILED:
+            # Use unified plan ID strategy for error events
+            # This ensures errors are associated with virtual steps when appropriate
+            error_plan_id = self._get_unified_plan_id(action, force_associate=False)
+
+            error_msg = action.messages or "Unknown error"
+
+            # Enrich error message with details if available
+            if action.output and isinstance(action.output, dict):
+                details = []
+                if action.output.get("error_code"):
+                    details.append(f"Code: {action.output.get('error_code')}")
+
+                # Check for recovery suggestions
+                suggestions = action.output.get("recovery_suggestions")
+                if suggestions and isinstance(suggestions, list):
+                    suggestions_str = "\n".join([f"- {s}" for s in suggestions])
+                    details.append(f"Suggestions:\n{suggestions_str}")
+
+                if details:
+                    error_msg += "\n\n" + "\n".join(details)
+
+            events.append(ErrorEvent(id=event_id, planId=error_plan_id, timestamp=timestamp, error=error_msg))
+
+        # 9. Handle report generation and SQL output
+        elif action.action_type == "output_generation" and action.output:
+            if isinstance(action.output, dict):
+                # First, handle SQL output via ChatEvent (for text2sql workflow)
+                sql_query = action.output.get("sql_query", "")
+                sql_result = action.output.get("sql_result", "")
+                sql_query_final = action.output.get("sql_query_final", "")
+                sql_result_final = action.output.get("sql_result_final", "")
+                row_count = action.output.get("row_count", 0)
+                success = action.output.get("success", True)
+                metadata = action.output.get("metadata", {})
+
+                # Use final SQL if available, otherwise use generated SQL
+                final_sql = sql_query_final if sql_query_final else sql_query
+
+                # If SQL exists, send ChatEvent with comprehensive SQL generation report
+                if final_sql:
+                    # Generate comprehensive report (includes SQL, validation, intent, etc.)
+                    final_result = sql_result_final if sql_result_final else sql_result
+
+                    # Use comprehensive report if metadata is available, otherwise fall back to simple summary
+                    # More lenient condition: check if metadata has valid content (excluding default reflection_count=0)
+                    if metadata:
+                        # Check if metadata has any valid content (excluding default reflection_count=0)
+                        has_valid_content = any(
+                            bool(v) and not (k == "reflection_count" and v == 0)
+                            for k, v in metadata.items()
+                        )
+
+                        if has_valid_content or "table_schemas" in metadata:
+                            table_schemas = metadata.get("table_schemas")
+                            report = self._generate_sql_generation_report(
+                                sql_query=final_sql,
+                                sql_result=final_result,
+                                row_count=row_count,
+                                metadata=metadata,
+                                table_schemas=table_schemas
+                            )
+                        else:
+                            # Fallback to simple summary for backward compatibility
+                            report = self._generate_sql_summary(final_sql, final_result, row_count)
+                    else:
+                        # Fallback to simple summary for backward compatibility
+                        report = self._generate_sql_summary(final_sql, final_result, row_count)
+
+                    # Send the comprehensive report as ChatEvent
+                    events.append(
+                        ChatEvent(
+                            id=f"{event_id}_report",
+                            planId=self._get_unified_plan_id(action, force_associate=True),
+                            timestamp=timestamp,
+                            content=report,
+                        )
+                    )
+
+                # Original ReportEvent handling (for HTML reports)
+                report_url = action.output.get("report_url", "")
+                report_data = action.output.get("html_content", "")
+                # Create ReportEvent if we have either url or data
+                if report_url or report_data:
+                    # ReportEvent should use unified planId strategy to bind to virtual steps
+                    report_plan_id = self._get_unified_plan_id(action, force_associate=True)
+                    events.append(
+                        ReportEvent(
+                            id=event_id, planId=report_plan_id, timestamp=timestamp, url=report_url, data=report_data
+                        )
+                    )
+
+        # Debug logging: track generated events
+        for event in events:
+            self.logger.debug(f"Generated event: {event.event}, planId: {event.planId}, id: {event.id}")
+
+        # Validate event flow for critical actions
+        self.validate_event_flow(action.action_type, events)
+
+        return events
+
+    async def convert_stream_to_events(
+        self, action_stream: AsyncGenerator[ActionHistory, None]
+    ) -> AsyncGenerator[str, None]:
+        """Convert ActionHistory stream to DeepResearchEvent SSE stream."""
+
+        seq_num = 0
+
+        try:
+            async for action in action_stream:
+                seq_num += 1
+                events = self.convert_action_to_event(action, seq_num)
+
+                for event in events:
+                    # Convert to JSON and yield as SSE data
+                    event_json = event.model_dump_json()
+                    yield f"data: {event_json}\n\n"
+
+                    # 检查是否被取消
+                    current_task = asyncio.current_task()
+                    if current_task and current_task.cancelled():
+                        break
+        except asyncio.CancelledError:
+            self.logger.info("Event conversion stream was cancelled")
+            raise

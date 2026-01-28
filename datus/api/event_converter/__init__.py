@@ -3,30 +3,22 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 """
-Event converter for mapping ActionHistory to DeepResearchEvent format.
+Event converter package for mapping ActionHistory to DeepResearchEvent format.
 
-This module has been refactored into a package for better maintainability.
-The original monolithic file (2390 lines) has been split into focused modules:
+This package has been refactored from the original monolithic event_converter.py
+(2390 lines) into focused modules for better maintainability:
 
-- datus/api/event_converter/core.py: Main converter class
-- datus/api/event_converter/virtual_steps.py: Virtual step management
-- datus/api/event_converter/normalization.py: Normalization utilities
-- datus/api/event_converter/sql_processing.py: SQL processing and reports
-- datus/api/event_converter/event_validation.py: Event validation
-- datus/api/event_converter/streaming.py: SSE streaming utilities
-
-This file now re-exports the public API from the event_converter package
-for backward compatibility. All imports continue to work as before.
-
-For the full implementation, see the event_converter package.
+Modules:
+- core: Main DeepResearchEventConverter class
+- virtual_steps: Virtual step management for Text2SQL workflows
+- normalization: Identifier and status normalization utilities
+- sql_processing: SQL report generation and DDL parsing
+- event_validation: Event flow validation and helper methods
+- streaming: SSE stream conversion utilities
 """
 
-# Re-export everything from the event_converter package
-from .event_converter import (
-    # Main converter
-    DeepResearchEventConverter,
-
-    # Event models
+# Re-export all event models
+from .models import (
     ChatEvent,
     CompleteEvent,
     DeepResearchEvent,
@@ -37,20 +29,27 @@ from .event_converter import (
     TodoStatus,
     ToolCallEvent,
     ToolCallResultEvent,
+)
 
-    # Streaming
-    convert_stream_to_events,
+# Re-export main converter class
+from .core import DeepResearchEventConverter
 
-    # Virtual steps
-    VIRTUAL_STEPS,
+# Re-export streaming utilities
+from .streaming import convert_stream_to_events
 
-    # Normalization
+# Re-export virtual steps for external use
+from .virtual_steps import VIRTUAL_STEPS
+
+# Re-export normalization functions for external use
+from .normalization import (
     normalize_node_type,
     normalize_tool_name,
     normalize_todo_status,
     hash_text,
+)
 
-    # Validation
+# Re-export validation functions for external use
+from .event_validation import (
     extract_plan_from_output,
     extract_callid_from_output,
     extract_todo_id_from_action,
@@ -60,8 +59,10 @@ from .event_converter import (
     extract_node_type_from_action,
     validate_event_flow,
     generate_event_id,
+)
 
-    # SQL processing
+# Re-export SQL processing functions for external use
+from .sql_processing import (
     generate_sql_summary,
     format_diagnostic_report,
     parse_ddl_comments,
@@ -74,7 +75,10 @@ from .event_converter import (
 )
 
 __all__ = [
+    # Main converter
     "DeepResearchEventConverter",
+
+    # Event models
     "ChatEvent",
     "CompleteEvent",
     "DeepResearchEvent",
@@ -85,12 +89,20 @@ __all__ = [
     "TodoStatus",
     "ToolCallEvent",
     "ToolCallResultEvent",
+
+    # Streaming
     "convert_stream_to_events",
+
+    # Virtual steps
     "VIRTUAL_STEPS",
+
+    # Normalization
     "normalize_node_type",
     "normalize_tool_name",
     "normalize_todo_status",
     "hash_text",
+
+    # Validation
     "extract_plan_from_output",
     "extract_callid_from_output",
     "extract_todo_id_from_action",
@@ -100,6 +112,8 @@ __all__ = [
     "extract_node_type_from_action",
     "validate_event_flow",
     "generate_event_id",
+
+    # SQL processing
     "generate_sql_summary",
     "format_diagnostic_report",
     "parse_ddl_comments",
