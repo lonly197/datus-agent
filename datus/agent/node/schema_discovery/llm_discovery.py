@@ -12,7 +12,7 @@ preventing hallucination of non-existent table names.
 from typing import Any, List
 
 from datus.configuration.business_term_config import LLM_TABLE_DISCOVERY_CONFIG
-from datus.utils.error_handler import NodeExecutionResult
+from datus.utils.error_handling import NodeExecutionResult
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)

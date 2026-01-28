@@ -27,7 +27,7 @@ from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
 from datus.storage.cache import get_storage_cache_instance
-from datus.utils.error_handler import LLMMixin
+from datus.utils.error_handling import LLMMixin
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 

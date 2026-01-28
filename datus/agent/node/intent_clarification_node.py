@@ -25,7 +25,7 @@ from datus.configuration.node_config import DEFAULT_INTENT_CLARIFICATION_RETRIES
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
-from datus.utils.error_handler import LLMMixin
+from datus.utils.error_handling import LLMMixin
 from datus.utils.exceptions import ErrorCode
 from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger

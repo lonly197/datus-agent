@@ -1661,7 +1661,7 @@ class ChatAgenticNode(GenSQLAgenticNode):
             logger.error(f"Chat execution failed: {e}")
 
             # Create error result
-            from datus.agent.error_handling import NodeErrorResult
+            from datus.utils.error_handling import NodeErrorResult
 
             self.result = NodeErrorResult(success=False, error_message=str(e), error_code="chat_execution_error")
 

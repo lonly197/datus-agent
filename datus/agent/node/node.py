@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from agents import Tool
 
-from datus.agent.error_handling import ErrorHandlerMixin
-from datus.agent.error_handling import NodeErrorResult as AgentNodeErrorResult
+from datus.utils.error_handling import ErrorHandlerMixin
+from datus.utils.error_handling import NodeErrorResult as AgentNodeErrorResult
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.node_config import DEFAULT_NODE_TIMEOUT
 from datus.configuration.node_type import NodeType

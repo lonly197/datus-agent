@@ -21,7 +21,7 @@ from datus.schemas.action_history import (
 )
 from datus.schemas.base import BaseResult
 from datus.schemas.node_models import BaseInput
-from datus.utils.error_handler import LLMMixin, NodeExecutionResult
+from datus.utils.error_handling import LLMMixin, NodeExecutionResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.schema_discovery_metrics import (

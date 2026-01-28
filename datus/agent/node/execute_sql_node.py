@@ -5,7 +5,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncGenerator, Dict, Optional, cast
 
-from datus.agent.error_handling import unified_error_handler
+from datus.utils.error_handling import unified_error_handler
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
