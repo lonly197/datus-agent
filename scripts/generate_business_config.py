@@ -34,7 +34,7 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -429,18 +429,19 @@ class BusinessConfigGenerator:
             },
         }
 
-    def _load_metrics_code_to_tables_mapping(self, xlsx_path: Path) -> Dict[str, List[str]]:
+    def _load_metrics_code_to_tables_mapping(self, xlsx_path: Path) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
         """
-        从Sheet2读取指标编码到物理表名的映射
+        从Sheet2读取指标映射关系
         
-        Sheet2包含人工维护的指标-表关联信息，格式：
-        - 编码: M-0018
-        - 指标涉及表名: "a:ods_dms_cs_slc_dealer_clue_di\nb:ods_dms_cs_slc_clue_di"
+        Sheet2包含人工维护的指标-表关联信息，返回两个映射：
+        1. 指标编码 -> 物理表名列表
+        2. 中文描述 -> 物理表名列表（用于匹配Sheet1的"来源dws模型"列）
         
         Returns:
-            Dict[指标编码, List[物理表名]]
+            Tuple[Dict[编码, 表名列表], Dict[中文描述, 表名列表]]
         """
         code_to_tables = {}
+        chinese_to_tables = {}  # 新增：中文描述 -> 表名
         
         try:
             # 尝试读取第二个工作表（Sheet2）
@@ -449,7 +450,7 @@ class BusinessConfigGenerator:
             
             if len(sheet_names) < 2:
                 logger.info("[Sheet2] Excel只有一个工作表，跳过Sheet2读取")
-                return code_to_tables
+                return code_to_tables, chinese_to_tables
             
             # 读取Sheet2，使用第一行作为表头
             df_sheet2 = pd.read_excel(xlsx_path, sheet_name=1, header=0)
@@ -458,8 +459,9 @@ class BusinessConfigGenerator:
             for _, row in df_sheet2.iterrows():
                 # 提取指标编码
                 code = str(row.get('编码', '')).strip() if pd.notna(row.get('编码')) else ''
-                if not code or code == 'nan':
-                    continue
+                
+                # 提取指标定义（中文描述）
+                metric_def = str(row.get('指标定义', '')).strip() if pd.notna(row.get('指标定义')) else ''
                 
                 # 提取指标涉及表名（可能包含多行，如 "a:table1\nb:table2"）
                 tables_raw = str(row.get('指标涉及表名', '')).strip() if pd.notna(row.get('指标涉及表名')) else ''
@@ -480,15 +482,28 @@ class BusinessConfigGenerator:
                     if table_name and self._is_valid_table_name(table_name):
                         tables.append(table_name)
                 
-                if tables:
+                if not tables:
+                    continue
+                
+                # 映射1: 编码 -> 表名
+                if code and code != 'nan':
                     code_to_tables[code] = tables
+                
+                # 映射2: 中文描述 -> 表名（用于匹配Sheet1）
+                if metric_def and metric_def != 'nan' and len(metric_def) > 2:
+                    # 清理中文描述（去除换行、多余空格）
+                    clean_def = ' '.join(metric_def.split())
+                    chinese_to_tables[clean_def] = tables
+                    # 同时存储前10个字符的简短版本（应对截断情况）
+                    if len(clean_def) > 10:
+                        chinese_to_tables[clean_def[:10]] = tables
             
-            logger.info(f"[Sheet2] 成功解析 {len(code_to_tables)} 个指标编码的表名映射")
+            logger.info(f"[Sheet2] 成功解析 {len(code_to_tables)} 个编码映射, {len(chinese_to_tables)} 个中文描述映射")
             
         except Exception as e:
             logger.warning(f"[Sheet2] 读取失败: {e}")
         
-        return code_to_tables
+        return code_to_tables, chinese_to_tables
 
     def _match_chinese_model_name_to_table(
         self, 
@@ -577,6 +592,87 @@ class BusinessConfigGenerator:
         
         return unique_keywords[:10]  # 限制数量，避免噪音
 
+    def _load_table_comments_from_lancedb(self) -> Dict[str, str]:
+        """
+        从LanceDB加载所有表的table_comment信息
+        
+        用于中文描述到物理表名的模糊匹配
+        
+        Returns:
+            Dict[table_name, table_comment]
+        """
+        table_comments = {}
+        
+        try:
+            # 确保表已就绪
+            self.schema_storage._ensure_table_ready()
+            
+            # 读取所有schema记录
+            all_records = self.schema_storage.table.to_pandas()
+            
+            if all_records is None or all_records.empty:
+                logger.warning("[LanceDB] schema表为空")
+                return table_comments
+            
+            # 提取table_name和table_comment
+            for _, row in all_records.iterrows():
+                table_name = row.get('table_name', '')
+                comment = row.get('table_comment', '')
+                
+                if table_name and isinstance(table_name, str):
+                    table_comments[table_name] = str(comment) if comment else ''
+            
+            logger.info(f"[LanceDB] 加载了 {len(table_comments)} 个表的comment信息")
+            
+        except Exception as e:
+            logger.warning(f"[LanceDB] 加载表comment失败: {e}")
+        
+        return table_comments
+
+    def _match_chinese_to_table_by_comment(
+        self, 
+        chinese_desc: str, 
+        table_comments: Dict[str, str]
+    ) -> List[str]:
+        """
+        通过table_comment将中文描述匹配到物理表名
+        
+        策略：
+        1. 精确匹配：chinese_desc == table_comment
+        2. 包含匹配：chinese_desc 在 table_comment 中
+        3. 关键词匹配：提取关键词匹配
+        """
+        if not chinese_desc or len(chinese_desc) < 2:
+            return []
+        
+        matched_tables = []
+        chinese_clean = chinese_desc.strip()
+        
+        for table_name, comment in table_comments.items():
+            if not comment:
+                continue
+            
+            comment_clean = comment.strip()
+            
+            # 1. 精确匹配
+            if chinese_clean == comment_clean:
+                matched_tables.append(table_name)
+                continue
+            
+            # 2. 包含匹配（中文描述是comment的子串）
+            if chinese_clean in comment_clean:
+                matched_tables.append(table_name)
+                continue
+            
+            # 3. 关键词匹配（提取核心业务词）
+            keywords = self._extract_core_keywords(chinese_clean)
+            for kw in keywords:
+                if len(kw) >= 4 and kw in comment_clean:  # 至少4个字的关键词
+                    matched_tables.append(table_name)
+                    break
+        
+        return list(set(matched_tables))  # 去重
+
     def generate_from_metrics_xlsx(
         self,
         xlsx_path: Path,
@@ -617,15 +713,20 @@ class BusinessConfigGenerator:
         term_to_schema = defaultdict(set, existing_terms.get("term_to_schema", {}))
 
         stats = {
-            "total_metrics": 0,      # 处理的总指标数
-            "valid_metrics": 0,      # 有效指标数（有名称）
-            "with_tables": 0,        # 成功关联到表的指标数
-            "tables_added": set(),   # 涉及的物理表集合
-            "sheet2_matched": 0,     # 通过Sheet2精确匹配的数量
+            "total_metrics": 0,         # 处理的总指标数
+            "valid_metrics": 0,         # 有效指标数（有名称）
+            "with_tables": 0,           # 成功关联到表的指标数
+            "tables_added": set(),      # 涉及的物理表集合
+            "sheet2_matched": 0,        # 通过Sheet2编码精确匹配的数量
+            "sheet2_chinese_matched": 0,  # 通过Sheet2中文描述匹配的数量
+            "lancedb_matched": 0,       # 通过LanceDB table_comment匹配的数量
         }
 
-        # 步骤1: 从Sheet2加载编码->表名映射（内部使用，不输出）
-        code_to_tables = self._load_metrics_code_to_tables_mapping(xlsx_path)
+        # 步骤1: 从Sheet2加载编码->表名映射，同时构建中文描述->表名映射
+        code_to_tables, chinese_to_tables = self._load_metrics_code_to_tables_mapping(xlsx_path)
+        
+        # 步骤1.5: 从LanceDB加载table_comment信息（用于中文描述匹配）
+        lancedb_table_comments = self._load_table_comments_from_lancedb()
 
         # 步骤2: 读取Sheet1（主指标清单）
         records = self._read_excel_with_header(xlsx_path, header_rows, sheet_name)
@@ -668,21 +769,44 @@ class BusinessConfigGenerator:
 
             stats["valid_metrics"] += 1
 
-            # === 核心：获取物理表名（优先Sheet2，其次Sheet1）===
+            # === 核心：获取物理表名（多策略，优先级递减）===
             source_tables = []
+            match_source = None
             
-            # 策略1: Sheet2精确映射（高置信度）
+            # 策略1: Sheet2编码精确映射（最高置信度）
             if metric_code and metric_code in code_to_tables:
                 source_tables = code_to_tables[metric_code]
                 stats["sheet2_matched"] += 1
+                match_source = "sheet2_code"
             
-            # 策略2: Sheet1的"来源dws模型"列（可能是物理表名或中文描述）
+            # 策略2: Sheet1的"来源dws模型"是物理表名
+            elif source_model and self._is_valid_table_name(source_model):
+                source_tables = [source_model]
+                match_source = "sheet1_direct"
+            
+            # 策略3: Sheet1的"来源dws模型"是中文描述，用Sheet2映射匹配
             elif source_model:
-                if self._is_valid_table_name(source_model):
-                    # 直接是物理表名
-                    source_tables = [source_model]
-                # 否则是中文描述，暂时不处理（准确率不高，避免噪音）
-                # 未来可考虑通过table_comment模糊匹配
+                # 清理输入的中文描述
+                clean_source = ' '.join(source_model.split())
+                # 尝试完整匹配
+                if clean_source in chinese_to_tables:
+                    source_tables = chinese_to_tables[clean_source]
+                    match_source = "sheet2_chinese"
+                    stats["sheet2_chinese_matched"] += 1
+                # 尝试前10字符匹配（应对截断）
+                elif len(clean_source) > 10 and clean_source[:10] in chinese_to_tables:
+                    source_tables = chinese_to_tables[clean_source[:10]]
+                    match_source = "sheet2_chinese_prefix"
+                    stats["sheet2_chinese_matched"] += 1
+                # 策略4: 使用LanceDB的table_comment进行模糊匹配
+                elif lancedb_table_comments:
+                    matched = self._match_chinese_to_table_by_comment(
+                        clean_source, lancedb_table_comments
+                    )
+                    if matched:
+                        source_tables = matched
+                        match_source = "lancedb_comment"
+                        stats["lancedb_matched"] = stats.get("lancedb_matched", 0) + 1
             
             if not source_tables:
                 continue  # 没有表名关联，跳过（避免低质量映射）
@@ -711,16 +835,29 @@ class BusinessConfigGenerator:
                     if len(kw) >= 4:  # 较长关键词更可靠
                         table_keywords[kw] = list(source_tables)[0]
 
+        # 统计各种匹配来源
+        sheet2_chinese_matched = stats.get('sheet2_chinese_matched', 0)
+        lancedb_matched = stats.get('lancedb_matched', 0)
+        
         logger.info(
             f"[指标清单] text2sql映射生成: {stats['with_tables']}/{stats['valid_metrics']} 指标关联表, "
-            f"{len(stats['tables_added'])} 个物理表, "
-            f"{stats['sheet2_matched']} 个Sheet2精确匹配"
+            f"{len(stats['tables_added'])} 个物理表"
+        )
+        logger.info(
+            f"[指标清单] 匹配来源: {stats['sheet2_matched']}个编码精确匹配, "
+            f"{sheet2_chinese_matched}个Sheet2中文匹配, "
+            f"{lancedb_matched}个LanceDB注释匹配"
         )
         
         # 输出关键业务术语样本（用于验证）
         key_terms = ['有效线索', '首触', '试驾', '订单', '客户']
         found_terms = [t for t in key_terms if t in term_to_table]
         logger.info(f"[术语验证] 关键业务术语覆盖: {found_terms}")
+        
+        # 调试：显示未覆盖的关键术语
+        missing_terms = [t for t in key_terms if t not in term_to_table]
+        if missing_terms:
+            logger.info(f"[术语验证] 未覆盖的关键术语: {missing_terms}")
         
         # 详细调试信息
         if stats['tables_added']:
