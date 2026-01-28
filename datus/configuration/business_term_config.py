@@ -5,11 +5,10 @@
 """
 Business term mapping configuration.
 
-This module now supports external, YAML-based business term dictionaries.
-Load order (first hit wins):
-1) Environment variable BUSINESS_TERM_CONFIG (file path)
-2) conf/business_terms.yml (repo/local override)
-3) ~/.datus/conf/business_terms.yml (per-user override)
+This module supports external, YAML-based business term dictionaries.
+The business_terms.yml file is loaded from the same directory as agent.yml:
+1) ./conf/business_terms.yml (if ./conf/agent.yml exists)
+2) ~/.datus/conf/business_terms.yml (if ~/.datus/conf/agent.yml exists)
 
 The external file format is:
 term_to_table:
@@ -20,7 +19,6 @@ table_keywords:
   线索宽表: dws_obtain_original_clue_2h_di
 """
 
-import os
 from pathlib import Path
 from typing import Dict, List
 
@@ -346,6 +344,30 @@ def detect_temporal_granularity(column_name: str, comment: str = "") -> str:
 
 # ---------- External config loading ----------
 
+def _get_agent_config_dir() -> Path | None:
+    """
+    Get the directory where agent.yml is located.
+    
+    Uses the same priority as parse_config_path() in agent_config_loader:
+    1. Check if agent.yml exists in current directory ./conf/
+    2. Check if agent.yml exists in ~/.datus/conf/
+    
+    Returns:
+        Path to the directory containing agent.yml, or None if not found
+    """
+    # Priority 1: Current directory ./conf/agent.yml
+    local_config = Path("conf/agent.yml")
+    if local_config.exists():
+        return local_config.parent
+    
+    # Priority 2: ~/.datus/conf/agent.yml
+    home_config = Path.home() / ".datus" / "conf" / "agent.yml"
+    if home_config.exists():
+        return home_config.parent
+    
+    return None
+
+
 def _load_yaml_config(path: Path) -> Dict[str, Dict[str, List[str]]]:
     if not path or not path.exists():
         return {}
@@ -373,21 +395,17 @@ def _merge_external_config(cfg: Dict[str, Dict[str, List[str]]]) -> None:
 
 def _load_external_business_terms() -> None:
     """
-    Load external business term dictionary based on priority.
+    Load external business term dictionary from the same directory as agent.yml.
+    
+    The business_terms.yml file should be located in the same directory as agent.yml.
+    This ensures business terms are loaded from the project-specific configuration.
     """
-    candidates = []
-    env_path = os.getenv("BUSINESS_TERM_CONFIG")
-    if env_path:
-        candidates.append(Path(env_path).expanduser())
-
-    candidates.append(Path("conf/business_terms.yml"))
-    candidates.append(Path.home() / ".datus" / "conf" / "business_terms.yml")
-
-    for p in candidates:
-        cfg = _load_yaml_config(p)
+    config_dir = _get_agent_config_dir()
+    if config_dir:
+        business_terms_path = config_dir / "business_terms.yml"
+        cfg = _load_yaml_config(business_terms_path)
         if cfg:
             _merge_external_config(cfg)
-            break
 
 
 # Load external config at import time
