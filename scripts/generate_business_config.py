@@ -952,12 +952,11 @@ Examples:
     args = parser.parse_args()
 
     # 初始化日志（根据verbose级别设置）
+    # configure_logging 使用 debug 参数: False=INFO级别, True=DEBUG级别
     if args.verbose >= 2:
-        configure_logging(log_level="DEBUG")
-    elif args.verbose >= 1:
-        configure_logging(log_level="INFO")
+        configure_logging(debug=True)  # DEBUG级别
     else:
-        configure_logging(log_level="WARNING")
+        configure_logging(debug=False)  # INFO级别（默认）
 
     # 加载配置
     logger.info(f"Loading agent config from: {args.config}")
