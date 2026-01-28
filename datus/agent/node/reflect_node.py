@@ -7,6 +7,7 @@ from typing import AsyncGenerator, Dict, Optional
 from datus.agent.node import Node
 from datus.agent.reflect import evaluate_with_model
 from datus.agent.workflow import Workflow
+from datus.configuration.node_config import DEFAULT_MAX_REFLECTION_ROUNDS, DEFAULT_STRATEGY_MAX_ITERATIONS
 from datus.configuration.node_type import NodeType
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
@@ -127,28 +128,32 @@ class ReflectNode(Node):
         if not hasattr(workflow, "metadata") or workflow.metadata is None:
             workflow.metadata = {}
 
-        # Per-strategy iteration limits
-        STRATEGY_MAX_ITERATIONS = {
-            "schema_linking": 3,  # prefer schema linking, allow up to 3 attempts
-            "simple_regenerate": 3,
-            "reasoning": 3,
-            "doc_search": 1,
-        }
+        # Get per-strategy iteration limits from configuration
+        # Priority: agent.yml configuration > constants default > environment variable fallback
+        if hasattr(workflow, "_global_config") and hasattr(workflow._global_config, "reflection_config"):
+            config_max_iterations = workflow._global_config.reflection_config.strategy_max_iterations
+            config_max_rounds = workflow._global_config.reflection_config.max_reflection_rounds
+        else:
+            # Fallback to defaults if configuration not available
+            config_max_iterations = DEFAULT_STRATEGY_MAX_ITERATIONS
+            config_max_rounds = get_env_int("MAX_REFLECTION_ROUNDS", DEFAULT_MAX_REFLECTION_ROUNDS)
 
         # Prefer schema_linking as first recovery if not yet tried
         if strategy.lower() != "schema_linking":
+            strategy_counts = workflow.metadata.get("strategy_counts", {})
             schema_linking_tries = strategy_counts.get("schema_linking", 0)
-            if schema_linking_tries < STRATEGY_MAX_ITERATIONS["schema_linking"]:
+            schema_linking_max = config_max_iterations.get("schema_linking", 3)
+            if schema_linking_tries < schema_linking_max:
                 logger.info(
                     "Overriding reflection strategy to SCHEMA_LINKING for prioritized schema recovery "
-                    f"(attempt {schema_linking_tries + 1}/{STRATEGY_MAX_ITERATIONS['schema_linking']})"
+                    f"(attempt {schema_linking_tries + 1}/{schema_linking_max})"
                 )
                 strategy = StrategyType.SCHEMA_LINKING
 
         # Check for per-strategy iteration limits
         strategy_counts = workflow.metadata.get("strategy_counts", {})
         current_count = strategy_counts.get(strategy.lower(), 0)
-        max_allowed = STRATEGY_MAX_ITERATIONS.get(strategy.lower(), 1)
+        max_allowed = config_max_iterations.get(strategy.lower(), 1)
 
         if current_count >= max_allowed:
             logger.warning(
@@ -176,13 +181,12 @@ class ReflectNode(Node):
                 }
 
         # Check for max reflection rounds (global limit)
-        max_round = get_env_int("MAX_REFLECTION_ROUNDS", 3)
-        if workflow.reflection_round > max_round:
-            logger.info("Max reflection rounds exceeded, proceeding to output node for report generation")
+        if workflow.reflection_round > config_max_rounds:
+            logger.info(f"Max reflection rounds ({config_max_rounds}) exceeded, proceeding to output node for report generation")
             from datus.agent.workflow_status import WorkflowTerminationStatus
 
             workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
-            workflow.metadata["termination_reason"] = f"Max reflection rounds ({max_round}) exceeded"
+            workflow.metadata["termination_reason"] = f"Max reflection rounds ({config_max_rounds}) exceeded"
 
             return {
                 "success": False,

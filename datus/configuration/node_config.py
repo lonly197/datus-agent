@@ -63,3 +63,20 @@ DEFAULT_MAX_KNOWLEDGE_LENGTH = 5000  # Default max knowledge length (characters)
 # =============================================================================
 
 DEFAULT_SQL_SUMMARY_TOP_N = 5  # Default top N for SQL summary results
+
+# =============================================================================
+# Reflection Configuration
+# =============================================================================
+
+# Maximum iterations per reflection strategy
+# Each strategy can be attempted multiple times before falling back to reasoning
+DEFAULT_STRATEGY_MAX_ITERATIONS = {
+    "schema_linking": 3,  # Prefer schema linking, allow up to 3 attempts
+    "simple_regenerate": 3,  # Simple SQL regeneration attempts
+    "reasoning": 3,  # Complex reasoning attempts
+    "doc_search": 1,  # Documentation search (expensive, limited attempts)
+}
+
+# Maximum reflection rounds (global limit across all strategies)
+# Prevents infinite loops in reflection workflow
+DEFAULT_MAX_REFLECTION_ROUNDS = 3

@@ -133,6 +133,22 @@ agent:
     hybrid_rerank_min_cpu_count: 4
     hybrid_rerank_min_memory_gb: 8.0
 
+  # Reflection strategy configuration (v2.7)
+  # Controls how the reflection node handles SQL execution errors and retry strategies
+  reflection:
+    # Maximum iterations allowed per reflection strategy
+    # Each strategy can be attempted multiple times before falling back to reasoning
+    strategy_max_iterations:
+      schema_linking: 3      # Prefer schema linking, allow up to 3 attempts (default: 3)
+      simple_regenerate: 3   # Simple SQL regeneration attempts (default: 3)
+      reasoning: 3           # Complex reasoning attempts (default: 3)
+      doc_search: 1          # Documentation search - expensive, limited attempts (default: 1)
+
+    # Maximum reflection rounds (global limit across all strategies)
+    # Prevents infinite loops in the reflection workflow
+    # This is the total number of times the reflect node can be executed
+    max_reflection_rounds: 3  # Default: 3
+
   export:
     max_lines: 1000  # Maximum number of exported data rows, default is 1000
   # Benchmark data is stored at {agent.home}/benchmark/{name}

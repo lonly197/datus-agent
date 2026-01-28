@@ -18,6 +18,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 from datus.agent.node.node import Node, execute_with_async_stream
 from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
+from datus.configuration.node_config import DEFAULT_MAX_REFLECTION_ROUNDS
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
 from datus.schemas.base import BaseInput, BaseResult
@@ -174,7 +175,11 @@ class SQLValidateNode(Node):
                     if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
                         self.workflow.metadata = {}
                     # Check if reflection retries are exhausted before skipping to reflect
-                    max_reflection_rounds = get_env_int("MAX_REFLECTION_ROUNDS", 3)
+                    # Priority: agent.yml configuration > constants default > environment variable fallback
+                    if hasattr(self.workflow, "_global_config") and hasattr(self.workflow._global_config, "reflection_config"):
+                        max_reflection_rounds = self.workflow._global_config.reflection_config.max_reflection_rounds
+                    else:
+                        max_reflection_rounds = get_env_int("MAX_REFLECTION_ROUNDS", DEFAULT_MAX_REFLECTION_ROUNDS)
                     current_reflection_round = getattr(self.workflow, "reflection_round", 0)
                     if current_reflection_round >= max_reflection_rounds:
                         # Reflection exhausted, proceed to output for final report

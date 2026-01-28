@@ -72,6 +72,49 @@ class SQLReviewPreflightConfig:
 
 
 @dataclass
+class ReflectionConfig:
+    """Reflection strategy configuration (v2.7 - enhanced recovery strategy limits)."""
+
+    # Maximum iterations per reflection strategy
+    # Each strategy can be attempted multiple times before falling back to reasoning
+    strategy_max_iterations: Dict[str, int] = field(
+        default_factory=lambda: {
+            "schema_linking": 3,  # Prefer schema linking, allow up to 3 attempts
+            "simple_regenerate": 3,  # Simple SQL regeneration attempts
+            "reasoning": 3,  # Complex reasoning attempts
+            "doc_search": 1,  # Documentation search (expensive, limited attempts)
+        }
+    )
+
+    # Maximum reflection rounds (global limit across all strategies)
+    # Prevents infinite loops in reflection workflow
+    max_reflection_rounds: int = 3
+
+    def __post_init__(self):
+        """Validate reflection configuration parameters."""
+        logger = get_logger(__name__)
+
+        # Validate max_reflection_rounds
+        if self.max_reflection_rounds < 1:
+            logger.warning("reflection.max_reflection_rounds must be >= 1; using default 3")
+            self.max_reflection_rounds = 3
+
+        # Validate strategy_max_iterations
+        valid_strategies = {"schema_linking", "simple_regenerate", "reasoning", "doc_search"}
+        for strategy, max_iter in list(self.strategy_max_iterations.items()):
+            if strategy not in valid_strategies:
+                logger.warning(
+                    f"reflection.strategy_max_iterations: unknown strategy '{strategy}'; removing from config"
+                )
+                del self.strategy_max_iterations[strategy]
+            elif max_iter < 1:
+                logger.warning(
+                    f"reflection.strategy_max_iterations.{strategy} must be >= 1; using default 1"
+                )
+                self.strategy_max_iterations[strategy] = 1
+
+
+@dataclass
 class SchemaDiscoveryConfig:
     """Schema discovery configuration (v2.5 - enhanced with SchemaLinkingNode capabilities)."""
 
@@ -98,7 +141,7 @@ class SchemaDiscoveryConfig:
     # Dynamic similarity threshold adjustment for Chinese queries
     chinese_query_threshold_reduction: float = 0.6  # Apply 40% reduction (0.6 multiplier) for Chinese queries
     enable_chinese_detection: bool = True  # Enable automatic Chinese text detection
-    
+
     # Enhanced Chinese query processing (v2.6)
     enable_chinese_llm_rewrite: bool = True  # Use LLM for bilingual query enhancement
     chinese_dynamic_threshold: bool = True   # Enable complexity-based dynamic threshold
@@ -136,7 +179,52 @@ class SchemaDiscoveryConfig:
     llm_fts_rewrite_enabled: bool = False
     llm_fts_rewrite_min_chars: int = 6
 
+
+@dataclass
+class ReflectionConfig:
+    """Reflection strategy configuration (v2.7 - enhanced recovery strategy limits)."""
+
+    # Maximum iterations per reflection strategy
+    # Each strategy can be attempted multiple times before falling back to reasoning
+    strategy_max_iterations: Dict[str, int] = field(
+        default_factory=lambda: {
+            "schema_linking": 3,  # Prefer schema linking, allow up to 3 attempts
+            "simple_regenerate": 3,  # Simple SQL regeneration attempts
+            "reasoning": 3,  # Complex reasoning attempts
+            "doc_search": 1,  # Documentation search (expensive, limited attempts)
+        }
+    )
+
+    # Maximum reflection rounds (global limit across all strategies)
+    # Prevents infinite loops in reflection workflow
+    max_reflection_rounds: int = 3
+
     def __post_init__(self):
+        """Validate reflection configuration parameters."""
+        logger = get_logger(__name__)
+
+        # Validate max_reflection_rounds
+        if self.max_reflection_rounds < 1:
+            logger.warning("reflection.max_reflection_rounds must be >= 1; using default 3")
+            self.max_reflection_rounds = 3
+
+        # Validate strategy_max_iterations
+        valid_strategies = {"schema_linking", "simple_regenerate", "reasoning", "doc_search"}
+        for strategy, max_iter in self.strategy_max_iterations.items():
+            if strategy not in valid_strategies:
+                logger.warning(
+                    f"reflection.strategy_max_iterations: unknown strategy '{strategy}'; removing from config"
+                )
+                del self.strategy_max_iterations[strategy]
+            elif max_iter < 1:
+                logger.warning(
+                    f"reflection.strategy_max_iterations.{strategy} must be >= 1; using default 1"
+                )
+                self.strategy_max_iterations[strategy] = 1
+
+
+@dataclass
+class SchemaDiscoveryConfig:
         logger = get_logger(__name__)
 
         def _clamp(value: float, name: str, default: float) -> float:
@@ -350,6 +438,8 @@ class AgentConfig:
     sql_review_preflight: SQLReviewPreflightConfig
     # v2.5 additions
     schema_discovery_config: SchemaDiscoveryConfig
+    # v2.7 additions
+    reflection_config: ReflectionConfig
 
     def __init__(self, nodes: Dict[str, NodeConfig], **kwargs):
         """
@@ -417,6 +507,10 @@ class AgentConfig:
         # Initialize schema discovery configuration (v2.5)
         schema_discovery_cfg = kwargs.get("schema_discovery", {})
         self.schema_discovery_config = SchemaDiscoveryConfig(**schema_discovery_cfg)
+
+        # Initialize reflection configuration (v2.7)
+        reflection_cfg = kwargs.get("reflection", {})
+        self.reflection_config = ReflectionConfig(**reflection_cfg)
 
         # Benchmark paths are now fixed at {agent.home}/benchmark/{name}
         # Supported benchmarks: bird_dev, spider2, semantic_layer
