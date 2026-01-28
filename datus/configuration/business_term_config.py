@@ -8,8 +8,8 @@ Business term mapping configuration.
 This module now supports external, YAML-based business term dictionaries.
 Load order (first hit wins):
 1) Environment variable BUSINESS_TERM_CONFIG (file path)
-2) conf/business_terms.auto.yml (repo/local override)
-3) ~/.datus/conf/business_terms.auto.yml (per-user override)
+2) conf/business_terms.yml (repo/local override)
+3) ~/.datus/conf/business_terms.yml (per-user override)
 
 The external file format is:
 term_to_table:
@@ -380,8 +380,8 @@ def _load_external_business_terms() -> None:
     if env_path:
         candidates.append(Path(env_path).expanduser())
 
-    candidates.append(Path("conf/business_terms.auto.yml"))
-    candidates.append(Path.home() / ".datus" / "conf" / "business_terms.auto.yml")
+    candidates.append(Path("conf/business_terms.yml"))
+    candidates.append(Path.home() / ".datus" / "conf" / "business_terms.yml")
 
     for p in candidates:
         cfg = _load_yaml_config(p)
