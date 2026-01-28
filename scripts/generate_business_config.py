@@ -1607,10 +1607,26 @@ class BusinessConfigGenerator:
             # 初始化 ExtKnowledgeStore
             ext_store = ExtKnowledgeStore(db_path=self.db_path)
             
-            # 调试：显示表schema
+            # 检查表是否存在且schema是否正确
+            import lancedb
+            db = lancedb.connect(self.db_path)
+            table_exists = "ext_knowledge" in db.table_names()
+            
+            if table_exists:
+                temp_table = db.open_table("ext_knowledge")
+                schema_fields = set(temp_table.schema.names)
+                expected_fields = {"name", "subject_node_id", "created_at", "terminology", "explanation", "vector"}
+                
+                if not expected_fields.issubset(schema_fields):
+                    logger.warning(f"[ExtKnowledge] 表schema不匹配，字段: {schema_fields}")
+                    logger.warning("[ExtKnowledge] 删除旧表并重新创建...")
+                    db.drop_table("ext_knowledge")
+                    # 重新初始化 store 以创建新表
+                    ext_store = ExtKnowledgeStore(db_path=self.db_path)
+            
+            # 确保表已准备好
             ext_store._ensure_table_ready()
-            if ext_store.table:
-                logger.info(f"[ExtKnowledge] 表schema: {ext_store.table.schema}")
+            logger.info(f"[ExtKnowledge] 表schema: {ext_store.table.schema}")
             
             # 如果需要清空现有Metrics数据
             if clear_existing:
