@@ -11,6 +11,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import yaml
+
 from datus.configuration.agent_config_loader import load_agent_config
 from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata import SchemaStorage
@@ -272,6 +274,30 @@ class BusinessConfigCLI:
             if metrics_catalog:
                 importer.import_metrics(metrics_catalog)
 
+        # 保存到 YAML 文件
+        output_path = Path(self.args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 构建输出数据（不包含内部统计信息）
+        output_data = {
+            "term_to_table": business_terms.get("term_to_table", {}),
+            "term_to_schema": business_terms.get("term_to_schema", {}),
+            "table_keywords": business_terms.get("table_keywords", {}),
+        }
+
+        with output_path.open("w", encoding="utf-8") as f:
+            yaml.dump(
+                output_data,
+                f,
+                allow_unicode=True,
+                default_flow_style=False,
+                sort_keys=False,
+            )
+
+        logger.info(f"Business configuration saved to: {output_path}")
+        logger.info(f"  - term_to_table: {len(output_data['term_to_table'])} entries")
+        logger.info(f"  - term_to_schema: {len(output_data['term_to_schema'])} entries")
+        logger.info(f"  - table_keywords: {len(output_data['table_keywords'])} entries")
         logger.info("Business configuration generation complete!")
         return 0
 
