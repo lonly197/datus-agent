@@ -60,7 +60,7 @@ class SchemaStorage(BaseMetadataStorage):
             db_path=db_path,
             table_name="schema_metadata",
             embedding_model=embedding_model,
-            vector_source_name="definition",
+            vector_source_name="search_text",  # Use enhanced search text for embedding
         )
         self.reranker = None
         # Optional: Configure reranker
