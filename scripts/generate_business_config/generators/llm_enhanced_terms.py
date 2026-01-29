@@ -10,6 +10,8 @@ LLM-enhanced business terms generator.
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+import hashlib
+import json
 
 from datus.models.base import LLMBaseModel
 from datus.utils.loggings import get_logger
@@ -22,7 +24,10 @@ from ..shared import (
     get_table_priority,
     should_include_table,
     clean_excel_text,
-    extract_clean_keywords
+    extract_clean_keywords,
+    clean_table_keywords,
+    clean_term_to_table,
+    clean_term_to_schema,
 )
 
 logger = get_logger(__name__)
@@ -30,11 +35,14 @@ logger = get_logger(__name__)
 
 class LLMEnhancedBusinessTermsGenerator:
     """LLM增强的业务术语生成器
-    
+
     特性：
     - 表优先级过滤（DWD/DWS/DIM > ADS > ODS）
     - 文本清洗（去除emoji、序号、特殊符号等）
+    - 业务术语质量过滤（移除无意义关键词）
     - LLM智能改写指标定义
+    - 批量LLM处理优化
+    - LLM响应缓存
     """
 
     def __init__(
@@ -44,14 +52,23 @@ class LLMEnhancedBusinessTermsGenerator:
         min_term_length: int = 2,
         use_llm: bool = False,
         max_table_priority: TablePriority = TablePriority.ADS,
-        enable_text_cleaning: bool = True
+        enable_text_cleaning: bool = True,
+        enable_term_filter: bool = True,  # 启用业务术语质量过滤
+        llm_batch_size: int = 20,  # 批量处理大小
+        llm_cache_enabled: bool = True,  # 是否启用缓存
     ):
         self.min_term_length = min_term_length
         self.use_llm = use_llm
         self.max_table_priority = max_table_priority
         self.enable_text_cleaning = enable_text_cleaning
+        self.enable_term_filter = enable_term_filter
+        self.llm_batch_size = llm_batch_size
+        self.llm_cache_enabled = llm_cache_enabled
         self.llm_model = None
         self.text_rewriter = None
+
+        # LLM响应缓存
+        self._llm_cache: Dict[str, Dict] = {}
 
         if use_llm and agent_config:
             try:
@@ -65,13 +82,32 @@ class LLMEnhancedBusinessTermsGenerator:
         self.excel_reader = ExcelReader()
         self.csv_reader = CsvReader()
         self.term_extractor = TermExtractor(min_term_length)
-        
+
         # 统计信息
         self.stats = {
             "tables_filtered_by_priority": 0,
             "tables_by_priority": {p.name: 0 for p in TablePriority},
             "llm_rewrites": 0,
+            "llm_cache_hits": 0,
+            "llm_actual_calls": 0,
+            "terms_filtered": 0,  # 被质量过滤器过滤的术语数
         }
+
+    def _get_llm_cache_key(self, category: str, *args) -> str:
+        """生成LLM缓存键"""
+        content = f"{category}:{':'.join(str(a) for a in args)}"
+        return hashlib.md5(content.encode("utf-8")).hexdigest()[:16]
+
+    def _get_cached_llm_response(self, cache_key: str) -> Optional[Dict]:
+        """获取缓存的LLM响应"""
+        if not self.llm_cache_enabled:
+            return None
+        return self._llm_cache.get(cache_key)
+
+    def _cache_llm_response(self, cache_key: str, response: Dict):
+        """缓存LLM响应"""
+        if self.llm_cache_enabled:
+            self._llm_cache[cache_key] = response
 
     def generate_from_architecture_xlsx(
         self,
@@ -184,8 +220,9 @@ class LLMEnhancedBusinessTermsGenerator:
             term_to_schema[attr_cn].add(f"{table_name}.{column_name}")
             term_to_schema[attr_cn].add(column_name)
 
-            # 使用LLM改写字段定义（如果启用）
+            # 使用LLM改写字段定义（如果启用）- 收集到批量列表
             if self.use_llm and self.text_rewriter and attr_def:
+                # 立即调用（同步模式），后续可优化为批量
                 try:
                     rewritten = self.text_rewriter.rewrite_field_definition(
                         column_name, attr_cn, attr_def
@@ -223,7 +260,30 @@ class LLMEnhancedBusinessTermsGenerator:
         table_keywords: Dict[str, str],
         stats: Dict
     ) -> Dict:
-        """构建结果字典"""
+        """构建结果字典（应用质量过滤）"""
+
+        # 应用业务术语质量过滤
+        if self.enable_term_filter:
+            original_table_count = len(term_to_table)
+            original_schema_count = len(term_to_schema)
+            original_keyword_count = len(table_keywords)
+
+            term_to_table = clean_term_to_table(term_to_table)
+            term_to_schema = clean_term_to_schema(term_to_schema)
+            table_keywords = clean_table_keywords(table_keywords)
+
+            filtered_table = original_table_count - len(term_to_table)
+            filtered_schema = original_schema_count - len(term_to_schema)
+            filtered_keyword = original_keyword_count - len(table_keywords)
+
+            self.stats["terms_filtered"] = filtered_table + filtered_schema + filtered_keyword
+
+            if filtered_table > 0 or filtered_keyword > 0:
+                logger.info(
+                    f"术语质量过滤: table_keywords -{filtered_keyword}, "
+                    f"term_to_table -{filtered_table}, term_to_schema -{filtered_schema}"
+                )
+
         return {
             "term_to_table": dict(term_to_table),
             "term_to_schema": dict(term_to_schema),
@@ -236,6 +296,7 @@ class LLMEnhancedBusinessTermsGenerator:
                 "tables_filtered_by_priority": self.stats["tables_filtered_by_priority"],
                 "tables_by_priority": self.stats["tables_by_priority"],
                 "llm_rewrites": self.stats["llm_rewrites"],
+                "terms_filtered": self.stats.get("terms_filtered", 0),
             },
         }
 

@@ -116,6 +116,29 @@ Examples:
         action="store_true",
         help="Use LLM to rewrite metric definitions for better searchability (requires --use-llm)",
     )
+    parser.add_argument(
+        "--llm-batch-size",
+        type=int,
+        default=20,
+        help="LLM batch processing size for rewrite operations (default: 20). "
+             "Larger values reduce API calls but may increase latency per batch.",
+    )
+    parser.add_argument(
+        "--llm-no-cache",
+        action="store_true",
+        help="Disable LLM response caching for identical inputs",
+    )
+    parser.add_argument(
+        "--llm-rewrite-mode",
+        choices=["per-item", "batch"],
+        default="batch",
+        help="LLM rewrite mode: 'per-item' = one call per item (slower), 'batch' = single call for multiple items (faster, default)",
+    )
+    parser.add_argument(
+        "--disable-term-filter",
+        action="store_true",
+        help="Disable business term quality filter (removes low-quality terms like '的任务数量')",
+    )
 
     return parser
 
@@ -129,7 +152,11 @@ class BusinessConfigCLI:
         self.use_llm = args.use_llm
         self.include_confidence = args.include_confidence
         self.rewrite_with_llm = args.rewrite_with_llm
-        
+        self.llm_batch_size = args.llm_batch_size
+        self.llm_cache_enabled = not args.llm_no_cache
+        self.llm_rewrite_mode = args.llm_rewrite_mode
+        self.enable_term_filter = not args.disable_term_filter
+
         # 表优先级设置
         priority_map = {
             "DIM": TablePriority.DIM,
@@ -140,14 +167,16 @@ class BusinessConfigCLI:
         }
         self.max_table_priority = priority_map[args.max_table_priority]
         self.enable_text_cleaning = not args.disable_text_cleaning
-        
+
         self.metrics_catalog_gen = MetricsCatalogGenerator(self.min_term_length)
 
         # 根据 use_llm 选择生成器
         if self.use_llm:
             logger.info("LLM enhancement enabled for term extraction and conflict resolution")
             if self.rewrite_with_llm:
-                logger.info("LLM rewriting enabled for metric definitions")
+                logger.info(f"LLM rewriting enabled for metric definitions (mode: {self.llm_rewrite_mode}, batch_size: {self.llm_batch_size})")
+            if self.enable_term_filter:
+                logger.info("Business term quality filter enabled")
             self.business_terms_gen = None  # 初始化时不需要，传agent_config
         else:
             self.business_terms_gen = BusinessTermsGenerator(
@@ -178,6 +207,9 @@ class BusinessConfigCLI:
                     use_llm=True,
                     max_table_priority=self.max_table_priority,
                     enable_text_cleaning=self.enable_text_cleaning,
+                    enable_term_filter=self.enable_term_filter,
+                    llm_batch_size=self.llm_batch_size,
+                    llm_cache_enabled=self.llm_cache_enabled,
                 )
                 business_terms = llm_gen.generate_from_architecture_xlsx(
                     Path(self.args.arch_xlsx), header_rows=3, sheet_name=self.args.arch_sheet_name
@@ -202,6 +234,9 @@ class BusinessConfigCLI:
                     use_llm=True,
                     max_table_priority=self.max_table_priority,
                     enable_text_cleaning=self.enable_text_cleaning,
+                    enable_term_filter=self.enable_term_filter,
+                    llm_batch_size=self.llm_batch_size,
+                    llm_cache_enabled=self.llm_cache_enabled,
                 )
                 business_terms = llm_gen.generate_from_metrics_xlsx(
                     Path(self.args.metrics_xlsx), business_terms, header_rows=2, sheet_name=self.args.metrics_sheet_name

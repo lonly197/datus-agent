@@ -207,37 +207,37 @@ def clean_excel_text(text: Optional[str], remove_newlines: bool = False) -> str:
 
 def extract_clean_keywords(text: str, min_length: int = 2, max_length: int = 20) -> List[str]:
     """从文本中提取清洗后的关键词
-    
+
     Args:
         text: 输入文本
         min_length: 最小长度
         max_length: 最大长度
-        
+
     Returns:
         List[str]: 关键词列表
     """
     if not text:
         return []
-    
+
     # 先清洗文本
     cleaned = clean_excel_text(text, remove_newlines=True)
     if not cleaned:
         return []
-    
+
     keywords = []
-    
+
     # 提取中文词汇
     for match in re.finditer(r'[\u4e00-\u9fa5]{' + str(min_length) + r',' + str(max_length) + r'}', cleaned):
         kw = match.group()
         if kw not in STOP_WORDS and is_meaningful_term(kw, min_length):
             keywords.append(kw)
-    
+
     # 提取英文/数字业务词汇
     for match in re.finditer(r'[a-z_][a-z0-9_]{' + str(min_length - 1) + r',}', cleaned.lower()):
         kw = match.group()
         if kw not in TECHNICAL_TERMS and len(kw) <= 40:
             keywords.append(kw)
-    
+
     # 去重并保持顺序
     seen = set()
     unique_keywords = []
@@ -245,5 +245,137 @@ def extract_clean_keywords(text: str, min_length: int = 2, max_length: int = 20)
         if kw not in seen:
             seen.add(kw)
             unique_keywords.append(kw)
-    
+
     return unique_keywords
+
+
+# ============================================================
+# 业务术语质量过滤器
+# ============================================================
+
+# 否定词列表（不应作为业务术语开头）
+NEGATION_WORDS: Set[str] = {'不', '无', '非', '未', '别', '莫', '勿'}
+
+# 冗余描述模式
+REDUNDANT_PATTERNS: List[re.Pattern] = [
+    re.compile(r'.+的数量$'),
+    re.compile(r'.+的订单数$'),
+    re.compile(r'.+的线索数$'),
+    re.compile(r'.+的试驾数$'),
+    re.compile(r'.+的任务数$'),
+    re.compile(r'.+的数量$'),
+    re.compile(r'.+的订单数量$'),
+    re.compile(r'.+的线索数量$'),
+    re.compile(r'.+的试驾数量$'),
+    re.compile(r'^不包含.+'),
+    re.compile(r'^不区分.+'),
+    re.compile(r'^未.+'),
+    re.compile(r'^非.+'),
+]
+
+# 过滤的词尾模式（不完整的短语）
+INVALID_ENDINGS: Set[str] = {'的', '了', '在', '是', '为', '于', '和', '或', '与', '及', '中', '上', '下'}
+
+# 推荐的关键词长度范围
+RECOMMENDED_MIN_LENGTH = 3
+RECOMMENDED_MAX_LENGTH = 12
+
+
+def is_valid_business_term(term: str) -> bool:
+    """判断术语是否为有效的业务术语（用于 table_keywords 和 term_to_table）
+
+    过滤规则：
+    1. 长度范围检查（3-12字符）
+    2. 否定词开头检查
+    3. 冗余描述模式检查
+    4. 词尾完整性检查
+    5. 必须是完整词汇（非片段）
+
+    Args:
+        term: 待检查的术语
+
+    Returns:
+        bool: 如果是有效业务术语返回 True
+    """
+    if not term or not isinstance(term, str):
+        return False
+
+    # 1. 长度检查
+    term_len = len(term)
+    if term_len < RECOMMENDED_MIN_LENGTH or term_len > RECOMMENDED_MAX_LENGTH:
+        return False
+
+    # 2. 否定词开头检查
+    if any(term.startswith(neg) for neg in NEGATION_WORDS):
+        return False
+
+    # 3. 冗余描述模式检查
+    for pattern in REDUNDANT_PATTERNS:
+        if pattern.match(term):
+            return False
+
+    # 4. 词尾检查（不能以助词结尾）
+    if term[-1] in INVALID_ENDINGS:
+        return False
+
+    # 5. 检查是否包含完整业务概念（至少有1个中文词根）
+    has_chinese = bool(re.search(r'[\u4e00-\u9fa5]', term))
+    if not has_chinese:
+        # 英文术语需要更严格的检查
+        if not re.match(r'^[a-z][a-z0-9_]{2,}$', term):
+            return False
+
+    return True
+
+
+def filter_business_terms(terms: List[str]) -> List[str]:
+    """批量过滤业务术语
+
+    Args:
+        terms: 术语列表
+
+    Returns:
+        List[str]: 过滤后的术语列表
+    """
+    return [t for t in terms if is_valid_business_term(t)]
+
+
+def clean_table_keywords(keywords: Dict[str, str]) -> Dict[str, str]:
+    """清理 table_keywords，移除无效的关键词
+
+    Args:
+        keywords: 原始关键词映射 {关键词: 表名}
+
+    Returns:
+        Dict[str, str]: 清理后的关键词映射
+    """
+    return {k: v for k, v in keywords.items() if is_valid_business_term(k)}
+
+
+def clean_term_to_table(term_to_table: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
+    """清理 term_to_table，移除无效的术语
+
+    Args:
+        term_to_table: 原始术语映射 {术语: {表1, 表2, ...}}
+
+    Returns:
+        Dict[str, Set[str]]: 清理后的术语映射
+    """
+    return {k: v for k, v in term_to_table.items() if is_valid_business_term(k)}
+
+
+def clean_term_to_schema(term_to_schema: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
+    """清理 term_to_schema，移除无效的术语并去重
+
+    Args:
+        term_to_schema: 原始字段映射 {术语: {字段1, 字段2, ...}}
+
+    Returns:
+        Dict[str, Set[str]]: 清理后的字段映射
+    """
+    cleaned = {}
+    for term, fields in term_to_schema.items():
+        if is_valid_business_term(term):
+            # 使用 set 去重
+            cleaned[term] = set(fields)
+    return cleaned
