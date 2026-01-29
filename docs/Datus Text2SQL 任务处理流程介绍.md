@@ -1,12 +1,19 @@
 # Datus Text2SQL 任务处理流程介绍
 
-> **文档版本**: v2.12
-> **更新日期**: 2026-01-28
+> **文档版本**: v2.13
+> **更新日期**: 2026-01-29
 > **相关模块**: `datus/agent/workflow.yml`, `datus/agent/node/`
 
 ---
 
 基于最新的系统优化与实战验证（2026-01-26），Text2SQL 任务处理流程已升级为**具备高度自愈能力的智能工作流**。系统采用了证据驱动的生成架构，引入了**Preflight 预检编排**、**意图澄清节点**、**专用 SQL 验证节点**、**数仓开发版 SQL 报告**、**多层级 Schema 发现**、**Schema 充分性验证**与**动态反思纠错**机制，确保在生成 SQL 之前先完成意图分析、Schema 探查和验证，然后进行 SQL 生成和验证，若不合适则通过 Reflect 进行反思，继续尝试，直到找不到满足的表才报错终止。
+
+**v2.13 新增特性**（2026-01-29）：
+
+- ✅ **节点处理流程图**：新增第 4 章，包含 3 个详细 Mermaid 流程图
+- ✅ **完整流程图**：展示所有节点的执行顺序、状态转换和分支条件
+- ✅ **Schema Discovery 流程图**：四阶段混合搜索策略的可视化展示
+- ✅ **Reflect 恢复策略映射**：错误类型到恢复动作的映射关系
 
 **v2.12 新增特性**（2026-01-28）：
 
@@ -514,7 +521,151 @@ WITH first_test_drive AS (
 | `_generate_optimization_suggestions()` | 生成优化建议 |
 | `_escape_markdown_table_cell()` | 转义 Markdown 表格特殊字符 |
 
-## 4. 执行流程实例 (完整自愈过程)
+## 4. 节点处理流程图
+
+### 4.1 完整节点处理流程
+
+以下流程图展示了 Text2SQL 工作流中所有节点的执行顺序、状态转换和分支条件：
+
+```mermaid
+flowchart TB
+    subgraph PREFLIGHT["【Preflight 预检阶段】"]
+        A1([用户请求]) --> A2[Intent Analysis<br/>意图分析]
+        A2 --> A3{execution_mode<br/>已指定?}
+        A3 -- Yes --> A4[跳过 Clarification]
+        A3 -- No --> A5[Intent Clarification<br/>意图澄清]
+        A4 --> A6[Schema Discovery<br/>模式发现]
+        A5 --> A6
+    end
+
+    subgraph SCHEMA["【Schema 处理阶段】"]
+        A6 --> A7{召回表数<br/>< 10?}
+        A7 -- Yes --> A8[Context Search<br/>深度元数据扫描]
+        A7 -- No --> A9{发现表数<br/>= 0?}
+        A8 --> A9
+        A9 -- Yes --> A10[Fallback<br/>全表扫描]
+        A9 -- No --> A11{外部知识<br/>已启用?}
+        A10 --> A12[Schema Validation<br/>Schema充分性验证]
+        A11 -- Yes --> A13[External Knowledge<br/>指标知识检索]
+        A13 --> A12
+        A11 -- No --> A12
+    end
+
+    subgraph SQL_GEN["【SQL 生成阶段】"]
+        A12 --> A14{Schema<br/>充分?}
+        A14 -- No --> A15[Reflect SOFT_FAILED]
+        A14 -- Yes --> A16[Generate SQL<br/>SQL生成]
+        A16 --> A17[SQL Validate<br/>SQL验证]
+    end
+
+    subgraph EXEC["【执行与验证阶段】"]
+        A17 --> A18{SQL<br/>有效?}
+        A18 -- No --> A15
+        A18 -- Yes --> A19[Execute SQL<br/>SQL执行]
+        A19 --> A20[Result Validation<br/>结果验证]
+    end
+
+    subgraph OUTPUT["【输出阶段】"]
+        A20 --> A21{结果<br/>有效?}
+        A21 -- No --> A15
+        A21 -- Yes --> A22[Output<br/>结果输出]
+        A22 --> A23([结束])
+    end
+
+    subgraph REFLECT["【反思恢复阶段】"]
+        A15 --> A24{可恢复?}
+        A24 -- Yes --> A25[Inject Recovery<br/>注入恢复节点]
+        A25 --> A6
+        A24 -- No --> A26[Terminate<br/>工作流终止]
+        A26 --> A27([错误结束])
+    end
+
+    classDef success fill:#90EE90,stroke:#228B22,stroke-width:2px
+    classDef warning fill:#FFFACD,stroke:#DAA520,stroke-width:2px
+    classDef error fill:#FFB6C1,stroke:#DC143C,stroke-width:2px
+    classDef process fill:#87CEEB,stroke:#4169E1,stroke-width:2px
+    classDef decision fill:#DDA0DD,stroke:#8B008B,stroke-width:2px
+
+    class A14,A18,A21,A24 success
+    class A7,A9,A11,A13 warning
+    class A26,A27 error
+    class A1,A23 process
+    class A3,A18,A21,A24 decision
+```
+
+### 4.2 Schema Discovery 详细流程
+
+```mermaid
+flowchart LR
+    subgraph STAGE1["阶段1: 快速混合召回"]
+        B1[语义检索] --> B2{候选表数<br/>≥ 10?}
+        B1 --- B3[关键词匹配]
+        B1 --- B4[LLM推断]
+        B3 --- B2
+        B4 --- B2
+    end
+
+    subgraph STAGE2["阶段2: 深度扫描"]
+        B2 -- No --> B5[Context Search]
+        B5 --> B6[指标搜索]
+        B5 --> B7[参考SQL搜索]
+    end
+
+    subgraph STAGE3["阶段3: Fallback"]
+        B8{全表扫描} --> B9[获取全部表名]
+        B9 --> B10[限制≤50张表]
+    end
+
+    subgraph STAGE4["阶段4: 外部知识"]
+        B11{外部知识<br/>已启用?} --> B12[检索指标知识]
+        B12 --> B13[注入Prompt]
+    end
+
+    B2 -- Yes --> B14[进入验证]
+    B6 --> B14
+    B7 --> B14
+    B10 --> B14
+
+    classDef stage fill:#E0FFFF,stroke:#00CED1,stroke-width:2px
+    class STAGE1,STAGE2,STAGE3,STAGE4 stage
+```
+
+### 4.3 Reflect 恢复策略映射
+
+```mermaid
+flowchart TB
+    C1([Reflect节点]) --> C2{错误类型分析}
+
+    C2 --> C3[SCHEMA_LINKING]
+    C2 --> C4[DOC_SEARCH]
+    C2 --> C5[SIMPLE_REGENERATE]
+    C2 --> C6[REASONING]
+    C2 --> C7[硬失败]
+
+    C3 --> C8[插入SchemaLinkingNode]
+    C8 --> C9[SchemaValidationNode]
+    C9 --> C10[GenerateSQLNode]
+
+    C4 --> C11[插入DocSearchNode]
+
+    C5 --> C12[重新执行GenerateSQL]
+
+    C6 --> C13[插入ReasoningNode]
+
+    C7 --> C14[TERMINATE_WITH_ERROR]
+
+    C10 --> C15[返回验证阶段]
+    C11 --> C15
+    C12 --> C15
+    C13 --> C15
+
+    classDef recovery fill:#FFD700,stroke:#FF8C00,stroke-width:2px
+    class C3,C4,C5,C6,C7,C8,C9,C10,C11,C12,C13 recovery
+```
+
+### 4.4 执行流程实例 (简化版)
+
+> 以下是简化版的执行流程，便于快速理解核心逻辑：
 
 ```mermaid
 graph TD
@@ -651,6 +802,13 @@ pip install sqlglot
 ```
 
 ## 7. 总结
+
+### v2.13 核心改进（2026-01-29）
+
+1. ✅ **节点处理流程图**：新增 3 个 Mermaid 流程图可视化节点处理逻辑
+2. ✅ **完整流程图**：展示 Preflight → Schema → SQL生成 → 执行验证 → 输出的完整链路
+3. ✅ **Schema Discovery 流程图**：四阶段（混合召回 → 深度扫描 → Fallback → 外部知识）可视化
+4. ✅ **Reflect 恢复策略映射**：SCHEMA_LINKING、DOC_SEARCH、REASONING 等策略的流程映射
 
 ### v2.12 核心改进（2026-01-28）
 
