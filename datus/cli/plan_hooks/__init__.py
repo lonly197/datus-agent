@@ -116,6 +116,7 @@ else:
     # Fallback: Import from the parent directory (original file)
     import importlib
     import sys
+    import warnings
     from pathlib import Path
 
     # Add parent directory to path if needed
@@ -128,16 +129,13 @@ else:
         plan_hooks_module = importlib.import_module("plan_hooks")
         PlanModeHooks = plan_hooks_module.PlanModeHooks
     except ImportError:
-        # Last resort: use the core class as PlanModeHooks
-        # Note: This will be missing execution methods that need to be added
-        PlanModeHooks = PlanModeHooksCore
-        import warnings
-
-        warnings.warn(
-            "Using PlanModeHooksCore as PlanModeHooks - some functionality may be limited. "
-            "Ensure plan_hooks.py is properly installed.",
-            DeprecationWarning,
-            stacklevel=2,
+        # Original file not available - raise ImportError with helpful message
+        # instead of silently using an incomplete fallback class
+        raise ImportError(
+            "Original plan_hooks.py not found and PlanModeHooksCore is not a complete substitute. "
+            "The following methods require the original PlanModeHooks class: "
+            "execute, run, handle_execution_step, on_plan_generated. "
+            "Please ensure datus/cli/plan_hooks.py is properly installed."
         )
 
 # Version info

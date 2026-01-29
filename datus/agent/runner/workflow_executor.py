@@ -147,6 +147,10 @@ class WorkflowExecutor:
         from datus.schemas.action_history import ActionStatus
         from datus.agent.runner.workflow_termination import WorkflowTerminationManager
 
+        # Defensive check: ensure self.workflow is not None before accessing
+        if not self.workflow:
+            return is_soft_failure, jump_to_reflect, False
+
         termination_mgr = WorkflowTerminationManager(self.workflow)
 
         # Check for workflow metadata termination status (set by nodes like SQLValidateNode)

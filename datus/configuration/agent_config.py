@@ -181,49 +181,6 @@ class SchemaDiscoveryConfig:
 
 
 @dataclass
-class ReflectionConfig:
-    """Reflection strategy configuration (v2.7 - enhanced recovery strategy limits)."""
-
-    # Maximum iterations per reflection strategy
-    # Each strategy can be attempted multiple times before falling back to reasoning
-    strategy_max_iterations: Dict[str, int] = field(
-        default_factory=lambda: {
-            "schema_linking": 3,  # Prefer schema linking, allow up to 3 attempts
-            "simple_regenerate": 3,  # Simple SQL regeneration attempts
-            "reasoning": 3,  # Complex reasoning attempts
-            "doc_search": 1,  # Documentation search (expensive, limited attempts)
-        }
-    )
-
-    # Maximum reflection rounds (global limit across all strategies)
-    # Prevents infinite loops in reflection workflow
-    max_reflection_rounds: int = 3
-
-    def __post_init__(self):
-        """Validate reflection configuration parameters."""
-        logger = get_logger(__name__)
-
-        # Validate max_reflection_rounds
-        if self.max_reflection_rounds < 1:
-            logger.warning("reflection.max_reflection_rounds must be >= 1; using default 3")
-            self.max_reflection_rounds = 3
-
-        # Validate strategy_max_iterations
-        valid_strategies = {"schema_linking", "simple_regenerate", "reasoning", "doc_search"}
-        for strategy, max_iter in self.strategy_max_iterations.items():
-            if strategy not in valid_strategies:
-                logger.warning(
-                    f"reflection.strategy_max_iterations: unknown strategy '{strategy}'; removing from config"
-                )
-                del self.strategy_max_iterations[strategy]
-            elif max_iter < 1:
-                logger.warning(
-                    f"reflection.strategy_max_iterations.{strategy} must be >= 1; using default 1"
-                )
-                self.strategy_max_iterations[strategy] = 1
-
-
-@dataclass
 class DbConfig:
     path_pattern: str = field(default="", init=True)
     type: str = field(default="", init=True)
