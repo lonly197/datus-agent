@@ -34,8 +34,9 @@ def _fetch_db_ddl(
     catalog_name: str,
     database_name: str,
     schema_name: str,
+    agent_config: Any,
 ) -> Dict[str, Any]:
-    db_manager = get_db_manager()
+    db_manager = get_db_manager(agent_config.namespaces)
     connector = db_manager.get_conn(namespace, database_name)
     if not connector:
         return {"error": f"No connector for database {database_name}"}
@@ -111,6 +112,7 @@ def main() -> None:
                 catalog_name,
                 database_name,
                 schema_name,
+                agent_config,
             )
 
         output.append(record)
