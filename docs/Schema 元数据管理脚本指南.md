@@ -1,6 +1,6 @@
 # Schema 元数据管理脚本指南
 
-> **文档版本**: v1.7
+> **文档版本**: v1.8
 > **更新日期**: 2026-01-29
 
 > 本指南介绍用于 Schema 元数据管理的脚本。如需查看所有脚本（包括模型下载、开发测试等），请参考 [脚本清单](../scripts/脚本清单.md)。
@@ -50,6 +50,7 @@ LanceDB `schema_metadata` 表使用以下字段结构：
 | [live_bootstrap.py](#live_bootstrappy---实时引导) | 从数据库引导 | 增量更新 |
 | [local_init.py](#local_initpy---schema-导入) | 直接导入 Schema | 快速导入 |
 | [check_search_text_fts.py](#check_search_text_ftspy---fts-检查) | search_text 覆盖率 + FTS 召回 | 验证中文检索优化 |
+| [test_layer_priority.py](#test_layer_prioritypy---层级优先级验证) | 验证层级权重配置 | 验证 DW > ADS > ODS 优先级 |
 | [rebuild_schema_fts_index.py](#rebuild_schema_fts_indexpy---fts-索引重建) | 重建 Schema FTS 索引 | FTS 故障排查 |
 
 ---
@@ -224,6 +225,86 @@ python scripts/check_search_text_fts.py \
   --queries="线索统计 铂智3X 渠道,转化漏斗 试驾 订单实绩" \
   --llm-rewrite
 ```
+
+---
+
+## test_layer_priority.py - 层级优先级验证
+
+**功能**: 验证 schema discovery 中的层级权重配置是否正确生效。该脚本模拟 `finalize_candidates()` 的权重应用逻辑，验证 DWS/DWD/DIM 层（白名单）获得加分，ODS 层（黑名单）被降权。
+
+**核心特性**:
+- **白名单加分**: `dws_`, `dwd_`, `dim_` 前缀表获得 priority +1 和 semantic_score +0.05
+- **黑名单降权**: `ods_` 前缀表 priority -1 和 semantic_score ×0.7
+- **排名对比**: 显示权重应用前后的排名变化
+- **支持 Mock 数据**: 无需 LanceDB 即可测试权重逻辑
+
+**层级优先级设计目标**:
+| 优先级 | 前缀 | 层 | 权重策略 |
+|--------|------|------|----------|
+| 1 | `dws_` | 汇总层 | 白名单 (+0.05) |
+| 2 | `dwd_` | 明细层 | 白名单 (+0.05) |
+| 3 | `dim_` | 维度层 | 白名单 (+0.05) |
+| 4 | `ads_` | 应用层 | 中性 (0) |
+| 5 | `ods_` | 原始层 | 黑名单 (×0.7) |
+
+**使用示例**:
+
+```bash
+# 1. 使用 Mock 数据测试（无需 LanceDB）
+python scripts/test_layer_priority.py --mock --config=conf/agent.yml
+
+# 2. 使用实际 LanceDB 数据测试
+python scripts/test_layer_priority.py --lancedb --config=conf/agent.yml --namespace=test
+
+# 3. 指定命名空间
+python scripts/test_layer_priority.py --mock --config=/path/to/agent.yml --namespace=test
+
+# 4. 输出结果到 JSON
+python scripts/test_layer_priority.py --mock --config=conf/agent.yml --output=layer_test.json
+```
+
+**输出示例**:
+```
+================================================================================
+LAYER PRIORITY TEST - With Agent Config
+================================================================================
+Config: conf/agent.yml
+Namespace: default
+
+Configuration:
+  Whitelist: ['dws_', 'dwd_', 'dim_']
+  Blacklist: ['ods_']
+  Whitelist bonus: +0.1
+  Blacklist penalty: ×0.5
+
+...
+
+WEIGHTED RANKING (after applying layer priorities)
+--------------------------------------------------------------------------------
+Rank   Table Name                                    Layer    Priority   Score      Change
+--------------------------------------------------------------------------------
+1      dim_date_info                                 DIM      5          21.8600    -
+2      dws_testdrive_index_sc_channel_daily_di       DWS      5          15.5500    ↑2
+...
+11     ods_eip_nev_online_intention_order_info_di    ODS      3          7.8400    ↓9
+12     ods_dms_sal_vhs_customer_pending_di           ODS      3          7.7400    ↓9
+13     ods_dms_sal_vhs_customer_pending_follow_di    ODS      3          4.2800    ↓2
+
+...
+
+✅ CORRECT LAYER ORDER: DW > ADS > ODS
+```
+
+**与 check_search_text_fts.py 的区别**:
+
+| 特性 | check_search_text_fts.py | test_layer_priority.py |
+|------|--------------------------|------------------------|
+| 用途 | FTS 搜索测试 | 层级权重验证 |
+| 权重应用 | ❌ 绕过权重逻辑 | ✅ 完整应用权重 |
+| 模拟真实流程 | ❌ 否 | ✅ 是 |
+| 排名变化分析 | ❌ 无 | ✅ 有 |
+
+**说明**: `check_search_text_fts.py` 直接调用 `storage.search_fts()`，该方法是纯 FTS 搜索，绕过了 `finalize_candidates()` 中的权重应用逻辑。因此 FTS 测试结果不代表真实 text2sql 行为。如需验证层级优先级，必须使用 `test_layer_priority.py` 或运行完整的 text2sql 流程。
 
 ---
 
@@ -570,6 +651,13 @@ python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
 ---
 
 ## 版本记录
+
+### v1.8 (2026-01-29)
+- **新增层级优先级验证脚本文档**
+  - 新增 `test_layer_priority.py` 脚本说明
+  - 解释层级权重配置（白名单/黑名单）设计
+  - 说明 `check_search_text_fts.py` 与真实流程的区别
+  - 添加 DW > ADS > ODS 优先级验证方法
 
 ### v1.7 (2026-01-29)
 - **修复 Schema 存储结构问题**
