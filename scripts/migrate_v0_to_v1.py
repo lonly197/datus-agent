@@ -1255,6 +1255,7 @@ def import_schema_metadata(
     clear_before_import: bool = False,
     extract_statistics: bool = False,
     extract_relationships: bool = True,
+    llm_enum_extraction: bool = False,
 ) -> int:
     """
     Import schema metadata from database into LanceDB after migration.
@@ -1340,6 +1341,7 @@ def import_schema_metadata(
             pool_size=4,
             extract_statistics=extract_statistics,
             extract_relationships=extract_relationships,
+            llm_enum_extraction=llm_enum_extraction,
         )
 
         # Verify import was successful
@@ -1636,6 +1638,7 @@ def main():
     )
     parser.add_argument("--llm-fallback", action="store_true", help="Use LLM as final fallback for DDL parsing failures")
     parser.add_argument("--llm-model", help="Optional model name for LLM fallback (defaults to active model)")
+    parser.add_argument("--llm-enum-extraction", action="store_true", help="Use LLM to enhance enum value extraction from comments")
 
     args = parser.parse_args()
     configure_logging(debug=False)
@@ -1671,6 +1674,7 @@ def main():
     logger.info(f"Extract statistics: {args.extract_statistics}")
     logger.info(f"Extract relationships: {args.extract_relationships}")
     logger.info(f"LLM fallback: {args.llm_fallback}")
+    logger.info(f"LLM enum extraction: {args.llm_enum_extraction}")
     logger.info("")
 
     # Report current migration state (diagnostics)
@@ -1857,6 +1861,7 @@ def main():
                         clear_before_import=args.clear,
                         extract_statistics=args.extract_statistics,
                         extract_relationships=args.extract_relationships,
+                        llm_enum_extraction=args.llm_enum_extraction,
                     )
                     migration_results["schemas_imported"] = imported_count
 
