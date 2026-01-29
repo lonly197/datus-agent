@@ -224,43 +224,6 @@ class ReflectionConfig:
 
 
 @dataclass
-class SchemaDiscoveryConfig:
-        logger = get_logger(__name__)
-
-        def _clamp(value: float, name: str, default: float) -> float:
-            if not isinstance(value, (int, float)):
-                logger.warning(f"schema_discovery.{name} must be numeric; using default {default}")
-                return default
-            if value < 0 or value > 1:
-                logger.warning(f"schema_discovery.{name} must be in [0,1]; using default {default}")
-                return default
-            return float(value)
-
-        self.hybrid_vector_weight = _clamp(self.hybrid_vector_weight, "hybrid_vector_weight", 0.6)
-        self.hybrid_fts_weight = _clamp(self.hybrid_fts_weight, "hybrid_fts_weight", 0.3)
-        self.hybrid_row_count_weight = _clamp(self.hybrid_row_count_weight, "hybrid_row_count_weight", 0.2)
-        self.hybrid_tag_bonus = _clamp(self.hybrid_tag_bonus, "hybrid_tag_bonus", 0.1)
-        self.hybrid_comment_bonus = _clamp(self.hybrid_comment_bonus, "hybrid_comment_bonus", 0.05)
-        self.hybrid_rerank_weight = _clamp(self.hybrid_rerank_weight, "hybrid_rerank_weight", 0.2)
-
-        if self.hybrid_rerank_min_tables < 0:
-            logger.warning("schema_discovery.hybrid_rerank_min_tables must be >= 0; using 20")
-            self.hybrid_rerank_min_tables = 20
-        if self.hybrid_rerank_top_n < 1:
-            logger.warning("schema_discovery.hybrid_rerank_top_n must be >= 1; using 50")
-            self.hybrid_rerank_top_n = 50
-        if self.hybrid_rerank_min_cpu_count < 0:
-            logger.warning("schema_discovery.hybrid_rerank_min_cpu_count must be >= 0; using 4")
-            self.hybrid_rerank_min_cpu_count = 4
-        if not isinstance(self.hybrid_rerank_min_memory_gb, (int, float)):
-            logger.warning("schema_discovery.hybrid_rerank_min_memory_gb must be numeric; using 8.0")
-            self.hybrid_rerank_min_memory_gb = 8.0
-        if self.hybrid_rerank_min_memory_gb < 0:
-            logger.warning("schema_discovery.hybrid_rerank_min_memory_gb must be >= 0; using 8.0")
-            self.hybrid_rerank_min_memory_gb = 8.0
-
-
-@dataclass
 class DbConfig:
     path_pattern: str = field(default="", init=True)
     type: str = field(default="", init=True)
