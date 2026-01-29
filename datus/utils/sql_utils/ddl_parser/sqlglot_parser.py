@@ -223,6 +223,11 @@ def extract_metadata_from_ddl_regex_only(
     """
     from datus.utils.sql_utils.ddl_parser.regex_fallback import _parse_ddl_with_regex
 
+    # Debug: log input type
+    if not isinstance(sql, str):
+        logger.warning(f"extract_metadata_from_ddl_regex_only received non-string type: {type(sql).__name__}")
+        logger.warning(f"Input preview: {repr(sql)[:200] if sql else 'empty'}")
+
     sql = fix_missing_commas_in_ddl(sql)
     is_valid, error_msg = validate_sql_input(sql)
     if not is_valid:

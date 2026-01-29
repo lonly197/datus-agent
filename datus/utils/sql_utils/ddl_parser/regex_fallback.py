@@ -53,6 +53,11 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
     Returns:
         Dict with parsed metadata
     """
+    # Type guard: ensure sql is a string before processing
+    if not isinstance(sql, str):
+        logger.warning(f"SQL input must be a string, got {type(sql).__name__}. Input: {repr(sql)[:200] if sql else 'empty'}")
+        return _empty_result()
+
     # Validate input
     is_valid, error_msg = validate_sql_input(sql)
     if not is_valid:
@@ -98,7 +103,7 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
             _extract_starrocks_properties(result, sql)
 
     except Exception as e:
-        logger.warning(f"Error in regex DDL parsing: {e}", exc_info=True)
+        logger.warning(f"Error in regex DDL parsing: {e}")
 
     return result
 
