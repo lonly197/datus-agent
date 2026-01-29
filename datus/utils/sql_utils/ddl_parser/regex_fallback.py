@@ -98,8 +98,14 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
 
         # Extract column definitions
         columns_text = _extract_columns_text(sql)
+        logger.debug(f"_extract_columns_text returned type: {type(columns_text).__name__}, length: {len(columns_text) if columns_text else 0}")
+
         if columns_text:
-            result["columns"] = _parse_columns(columns_text)
+            if not isinstance(columns_text, str):
+                logger.error(f"CRITICAL: columns_text is not a string: {type(columns_text).__name__}")
+                logger.error(f"columns_text value: {repr(columns_text)[:500]}")
+            else:
+                result["columns"] = _parse_columns(columns_text)
 
         # Extract constraints
         result["primary_keys"] = _extract_primary_keys(sql)
@@ -111,8 +117,9 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
             _extract_starrocks_properties(result, sql)
 
     except Exception as e:
-        logger.warning(f"Error in regex DDL parsing: {e}")
-        logger.debug("Full stack trace:", exc_info=True)
+        logger.error(f"Error in regex DDL parsing: {e}")
+        logger.error(f"SQL type: {type(sql).__name__}, SQL length: {len(sql) if isinstance(sql, str) else 'N/A'}")
+        logger.error("Full stack trace:", exc_info=True)
 
     return result
 
@@ -336,14 +343,16 @@ def _split_columns(columns_text: str) -> list:
             paren_depth -= 1
             current_def.append(char)
         elif char == ',' and paren_depth == 0:
-            if current_def.strip():
-                column_defs.append(current_def.strip())
+            current_def_str = "".join(current_def)
+            if current_def_str.strip():
+                column_defs.append(current_def_str.strip())
             current_def = []
         else:
             current_def.append(char)
 
-    if current_def.strip():
-        column_defs.append(current_def.strip())
+    current_def_str = "".join(current_def)
+    if current_def_str.strip():
+        column_defs.append(current_def_str.strip())
 
     return column_defs
 
