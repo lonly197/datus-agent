@@ -231,6 +231,21 @@ def load_backup_json(backup_path: str) -> List[Dict]:
 # DDL Parsing and Dialect Detection
 # ============================================================================
 
+def _normalize_dialect(value: Any) -> str:
+    """
+    Normalize a database type to a string value.
+
+    Args:
+        value: Database type (DBType enum or string)
+
+    Returns:
+        Normalized database type string
+    """
+    if isinstance(value, DBType):
+        return value.value
+    return str(value or "").strip().lower()
+
+
 def detect_dialect_from_ddl(ddl: str) -> str:
     """
     Attempt to detect SQL dialect from DDL statement.
