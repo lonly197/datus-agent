@@ -600,7 +600,9 @@ def ddl_has_missing_commas(ddl: str) -> bool:
 
 def fix_missing_commas_in_ddl(ddl: str) -> str:
     if not ddl or not isinstance(ddl, str):
-        return ddl
+        if ddl is not None:
+            logger.warning(f"fix_missing_commas_in_ddl received non-string type: {type(ddl).__name__}")
+        return ddl if ddl is not None else ""
     span = _find_create_table_columns_span(ddl)
     if not span:
         return ddl

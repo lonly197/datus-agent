@@ -93,6 +93,11 @@ def parse_metadata_from_ddl(
     Returns:
         Dict containing table name, schema, database, and column list with types and comments.
     """
+    # Type guard: ensure sql is a string before processing
+    if not isinstance(sql, str):
+        logger.warning(f"parse_metadata_from_ddl received non-string type: {type(sql).__name__}")
+        return {"table": {"name": ""}, "columns": []}
+
     # Validate input
     is_valid, error_msg = validate_sql_input(sql)
     if not is_valid:

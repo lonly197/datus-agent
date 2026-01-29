@@ -56,6 +56,7 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
     # Type guard: ensure sql is a string before processing
     if not isinstance(sql, str):
         logger.warning(f"SQL input must be a string, got {type(sql).__name__}. Input: {repr(sql)[:200] if sql else 'empty'}")
+        logger.warning(f"Stack trace for debugging:", exc_info=True)
         return _empty_result()
 
     # Validate input
@@ -104,6 +105,7 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
 
     except Exception as e:
         logger.warning(f"Error in regex DDL parsing: {e}")
+        logger.debug("Full stack trace:", exc_info=True)
 
     return result
 

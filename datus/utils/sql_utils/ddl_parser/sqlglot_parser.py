@@ -56,6 +56,13 @@ def extract_enhanced_metadata_from_ddl(
     Returns:
         Dict containing table info, columns, primary keys, foreign keys, and indexes.
     """
+    # Type guard: ensure sql is a string before processing
+    if not isinstance(sql, str):
+        logger.error(f"CRITICAL: extract_enhanced_metadata_from_ddl received non-string type: {type(sql).__name__}")
+        logger.error(f"Input preview: {repr(sql)[:500] if sql else 'empty'}")
+        logger.error("Stack trace:", exc_info=True)
+        return _empty_metadata_result()
+
     # Validate and clean input
     sql = fix_missing_commas_in_ddl(sql)
     is_valid, error_msg = validate_sql_input(sql)
@@ -225,8 +232,10 @@ def extract_metadata_from_ddl_regex_only(
 
     # Debug: log input type
     if not isinstance(sql, str):
-        logger.warning(f"extract_metadata_from_ddl_regex_only received non-string type: {type(sql).__name__}")
-        logger.warning(f"Input preview: {repr(sql)[:200] if sql else 'empty'}")
+        logger.error(f"CRITICAL: extract_metadata_from_ddl_regex_only received non-string type: {type(sql).__name__}")
+        logger.error(f"Input preview: {repr(sql)[:500] if sql else 'empty'}")
+        logger.error("Stack trace:", exc_info=True)
+        return _empty_metadata_result()
 
     sql = fix_missing_commas_in_ddl(sql)
     is_valid, error_msg = validate_sql_input(sql)
