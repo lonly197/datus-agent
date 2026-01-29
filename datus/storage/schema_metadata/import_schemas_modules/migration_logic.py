@@ -272,6 +272,7 @@ def migrate_schema_storage(
             "table_name",
             "table_type",
             "definition",
+            "search_text",  # Enhanced content for embedding
             "table_comment",
             "column_comments",
             "column_enums",
@@ -289,7 +290,8 @@ def migrate_schema_storage(
             "schema_name",
             "table_name",
             "table_type",
-            "definition",
+            "definition",  # Raw DDL for SQL generation
+            "search_text",  # Enhanced content for embedding
         }
         table_exists = storage.table_name in storage.db.table_names(limit=100)
         table_recreated = not table_exists

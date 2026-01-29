@@ -1,9 +1,39 @@
 # Schema 元数据管理脚本指南
 
-> **文档版本**: v1.6
-> **更新日期**: 2026-01-28
+> **文档版本**: v1.7
+> **更新日期**: 2026-01-29
 
 > 本指南介绍用于 Schema 元数据管理的脚本。如需查看所有脚本（包括模型下载、开发测试等），请参考 [脚本清单](../scripts/脚本清单.md)。
+
+## Schema 存储结构说明
+
+LanceDB `schema_metadata` 表使用以下字段结构：
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `definition` | string | **原始 DDL**（用于 SQL 生成） |
+| `search_text` | string | **增强搜索文本**（用于向量嵌入，包含注释等增强内容） |
+| `vector` | vector<float32> | 向量嵌入（从 `search_text` 生成） |
+| `identifier` | string | 唯一标识符（catalog.database.schema.table.type） |
+| `catalog_name` | string | Catalog 名称 |
+| `database_name` | string | Database 名称 |
+| `schema_name` | string | Schema 名称 |
+| `table_name` | string | Table 名称 |
+| `table_type` | string | Table 类型（table/view/mv） |
+| `table_comment` | string | 表注释（从 DDL COMMENT 提取） |
+| `column_comments` | string | 列注释（JSON 格式） |
+| `column_enums` | string | 列枚举值（JSON 格式） |
+| `business_tags` | list<string> | 业务标签 |
+| `row_count` | int64 | 表行数 |
+| `sample_statistics` | string | 列统计信息（JSON 格式） |
+| `relationship_metadata` | string | 关系元数据（JSON 格式） |
+| `metadata_version` | int32 | 元数据版本（当前为 1） |
+| `last_updated` | int64 | 最后更新时间戳 |
+
+**重要说明**：
+- `definition` 字段存储**原始 DDL**，保证 SQL 生成的准确性
+- `search_text` 字段存储**增强内容**（包含表注释、列注释等），用于语义搜索
+- 向量嵌入从 `search_text` 生成，而非从 `definition` 生成，以提高检索质量
 
 ## 快速索引
 
@@ -491,6 +521,44 @@ python scripts/check_migration_report.py \
 | 术语包含乱码/emoji | 文本清洗自动处理，或禁用 `--disable-text-cleaning` |
 | 权限错误 | 检查数据库用户权限 |
 | 回滚恢复 | `bash scripts/backup_storage.sh` 后手动恢复 |
+| **LanceError: Column definition does not exist** | **schema 缺少 `definition` 字段**。确保使用最新代码版本，schema 应同时包含 `definition` 和 `search_text` 字段 |
+| **迁移脚本查询失败** | 检查 `schema_metadata` 表是否包含 `definition` 字段。如果缺失，需要重建表 |
+
+### 常见错误处理
+
+#### LanceDB Schema 错误
+
+如果遇到 "Column definition does not exist" 错误：
+
+```bash
+# 1. 检查当前 schema 字段
+python -c "
+from datus.storage.schema_metadata.store_modules import SchemaStorage
+from datus.storage.embedding_models import get_db_embedding_model
+
+model = get_db_embedding_model()
+storage = SchemaStorage(db_path='/root/.datus/data/datus_db_test', embedding_model=model)
+storage._ensure_table_ready()
+print('Schema fields:', sorted(storage.table.schema.names))
+"
+
+# 2. 如果缺少 definition 或 search_text 字段，需要重建
+python -m datus.storage.schema_metadata.migrate_v0_to_v1 \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --clear \
+  --force \
+  --import-schemas
+```
+
+#### 迁移失败处理
+
+如果迁移脚本失败：
+
+1. 检查日志确认具体错误
+2. 确保数据库连接正常
+3. 验证命名空间配置正确
+4. 如果是 schema 错误，使用 `--clear --force` 重建表
 
 ---
 
@@ -502,6 +570,18 @@ python scripts/check_migration_report.py \
 ---
 
 ## 版本记录
+
+### v1.7 (2026-01-29)
+- **修复 Schema 存储结构问题**
+  - 明确 `definition` 和 `search_text` 字段的双字段设计
+  - `definition`: 存储原始 DDL（用于 SQL 生成）
+  - `search_text`: 存储增强内容（用于向量嵌入）
+  - 修复 "Column definition does not exist" 错误
+  - 移除 v0 向后兼容性误导说明
+- **新增故障排除**：
+  - LanceDB Schema 错误处理指南
+  - 迁移失败处理步骤
+  - Schema 字段验证方法
 
 ### v1.6 (2026-01-28)
 - 重构 `generate_business_config.py` 脚本说明

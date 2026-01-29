@@ -40,8 +40,8 @@ class BaseMetadataStorage(BaseEmbeddingStore, SearchMixin):
         - schema_name: Schema name
         - table_name: Table name (required)
         - table_type: Table type (table, view, mv)
-        - vector_source_name: Vector source field (required)
-        - search_text: Searchable text field
+        - definition: Raw DDL for SQL generation
+        - vector_source_name: Enhanced search text for embedding (default: "search_text")
         - vector: Embedding vector (required)
         - Enhanced fields (v1):
             - table_comment: Table comment
@@ -53,6 +53,11 @@ class BaseMetadataStorage(BaseEmbeddingStore, SearchMixin):
             - relationship_metadata: JSON of relationships
             - metadata_version: Schema version (0=legacy, 1=enhanced)
             - last_updated: Unix timestamp
+
+    Note:
+        - 'definition' stores the original DDL for SQL generation
+        - 'search_text' (vector_source_name) contains enhanced content with comments for semantic search
+        - Both fields are always present in the schema
     """
 
     def __init__(
@@ -71,23 +76,22 @@ class BaseMetadataStorage(BaseEmbeddingStore, SearchMixin):
             table_name: Name of the metadata table
             vector_source_name: Field name containing text to embed
         """
-        # Build schema fields dynamically to avoid duplicates
+        # Build schema fields
         schema_fields = [
-            # Original fields (v0)
+            # Core identification fields
             pa.field("identifier", pa.string()),
             pa.field("catalog_name", pa.string()),
             pa.field("database_name", pa.string()),
             pa.field("schema_name", pa.string()),
             pa.field("table_name", pa.string()),
             pa.field("table_type", pa.string()),
+            # DDL fields: definition (raw DDL) + search_text (enhanced content for embedding)
+            # definition: Stores original DDL for SQL generation
+            pa.field("definition", pa.string()),
+            # search_text: Enhanced content with comments, used as vector source
             pa.field(vector_source_name, pa.string()),
         ]
-        
-        # Add search_text only if it's different from vector_source_name
-        # This avoids duplicate field when vector_source_name="search_text"
-        if vector_source_name != "search_text":
-            schema_fields.append(pa.field("search_text", pa.string()))
-        
+
         schema_fields.extend([
             pa.field("vector", pa.list_(pa.float32(), list_size=embedding_model.dim_size)),
             # Enhanced fields (v1) - Business Semantics (HIGH PRIORITY)
@@ -143,8 +147,8 @@ class BaseMetadataStorage(BaseEmbeddingStore, SearchMixin):
                 "schema_name",
                 "table_name",
                 "table_type",
-                self.vector_source_name,
-                "search_text",
+                "definition",  # Raw DDL for keyword search
+                self.vector_source_name,  # Enhanced content for semantic search
                 "table_comment",
                 "column_comments",
             ]
