@@ -61,6 +61,7 @@ from .validation import (
     MAX_TABLE_NAME_LENGTH,
     MAX_COMMENT_LENGTH,
     MAX_TYPE_DEFINITION_LENGTH,
+    MAX_PAREN_DEPTH,
 )
 
 __all__ = [
@@ -95,4 +96,5 @@ __all__ = [
     "MAX_TABLE_NAME_LENGTH",
     "MAX_COMMENT_LENGTH",
     "MAX_TYPE_DEFINITION_LENGTH",
+    "MAX_PAREN_DEPTH",
 ]

@@ -28,6 +28,7 @@ MAX_COLUMN_NAME_LENGTH = 128
 MAX_TABLE_NAME_LENGTH = 256
 MAX_COMMENT_LENGTH = 4000
 MAX_TYPE_DEFINITION_LENGTH = 256
+MAX_PAREN_DEPTH = 100  # Reasonable limit for DDL nested parentheses
 
 # Comment sanitization patterns
 _SCRIPT_TAG_RE = re.compile(r'<script[^>]*>.*?</script>', re.IGNORECASE | re.DOTALL)
@@ -72,7 +73,6 @@ def validate_sql_input(sql: Any, max_length: int = MAX_SQL_LENGTH) -> Tuple[bool
 
     # Check for potential ReDoS patterns (excessive nested parentheses)
     paren_depth = 0
-    max_paren_depth = 100  # Reasonable limit for DDL
     in_single_quote = False
     in_double_quote = False
     in_backtick = False
@@ -136,7 +136,7 @@ def validate_sql_input(sql: Any, max_length: int = MAX_SQL_LENGTH) -> Tuple[bool
             continue
         if char == '(':
             paren_depth += 1
-            if paren_depth > max_paren_depth:
+            if paren_depth > MAX_PAREN_DEPTH:
                 return False, f"Excessive nested parentheses (depth {paren_depth})"
         elif char == ')':
             paren_depth -= 1
