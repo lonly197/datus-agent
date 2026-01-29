@@ -113,7 +113,7 @@ def store_tables(
                 table_comment = starrocks_metadata.get("table_comment", "") or ""
                 column_comments = starrocks_metadata.get("column_comments", {}) or {}
                 column_names = starrocks_metadata.get("column_names", []) or []
-                if definition and (not table_comment or not column_comments):
+                if definition and isinstance(definition, str) and (not table_comment or not column_comments):
                     regex_metadata = extract_metadata_from_ddl_regex_only(
                         definition,
                         dialect=DBType.STARROCKS,
@@ -194,7 +194,7 @@ def store_tables(
                         table_comment=table_comment,
                         column_comments=column_comments,
                     )
-        if is_starrocks and definition and not used_information_schema:
+        if is_starrocks and definition and isinstance(definition, str) and not used_information_schema:
             regex_metadata = extract_metadata_from_ddl_regex_only(
                 definition,
                 dialect=DBType.STARROCKS,

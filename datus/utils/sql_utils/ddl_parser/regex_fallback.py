@@ -78,6 +78,13 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
 
     # Clean the DDL
     sql = _clean_ddl(original_sql)
+
+    # Additional type guard after _clean_ddl
+    if not isinstance(sql, str):
+        logger.error(f"CRITICAL: _clean_ddl returned non-string type: {type(sql).__name__}")
+        logger.error(f"Original SQL type: {type(original_sql).__name__}")
+        return _empty_result()
+
     if sql != original_sql:
         logger.debug(f"Cleaned corrupted DDL: {len(original_sql)} -> {len(sql)} chars")
 

@@ -546,6 +546,12 @@ class StarRocksConnector(BaseSqlConnector):
                             # Fix truncated DDL
                             create_statement = sanitize_ddl_for_storage(create_statement)
 
+                            # Type guard for definition
+                            if not isinstance(create_statement, str):
+                                logger.error(f"CRITICAL: sanitize_ddl_for_storage returned non-string type: {type(create_statement).__name__} for table {table}")
+                                logger.error(f"Original value: {repr(create_statement)[:200] if create_statement else 'empty'}")
+                                create_statement = ""
+
                             table_list.append({
                                 "identifier": self.identifier(
                                     catalog_name=catalog_name,
@@ -590,6 +596,12 @@ class StarRocksConnector(BaseSqlConnector):
 
                             # Fix truncated DDL
                             create_statement = sanitize_ddl_for_storage(create_statement)
+
+                            # Type guard for definition
+                            if not isinstance(create_statement, str):
+                                logger.error(f"CRITICAL: sanitize_ddl_for_storage returned non-string type: {type(create_statement).__name__} for table {table}")
+                                logger.error(f"Original value: {repr(create_statement)[:200] if create_statement else 'empty'}")
+                                create_statement = ""
 
                             table_list.append({
                                 "identifier": self.identifier(
