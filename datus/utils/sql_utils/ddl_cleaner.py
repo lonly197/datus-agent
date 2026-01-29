@@ -10,11 +10,235 @@ fixing truncation issues, and normalizing DDL format for parsing.
 """
 
 import re
-from typing import Dict, Optional, Tuple
+from typing import Dict, Generator, Optional, Tuple
 
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
+
+
+# =============================================================================
+# SHARED QUOTE PARSING UTILITIES
+# Extracted to avoid code duplication across DDL processing functions
+# =============================================================================
+
+class QuoteState:
+    """Track quote state during SQL parsing."""
+    __slots__ = ('in_single', 'in_double', 'in_backtick', 'escaped')
+
+    def __init__(self):
+        self.in_single: bool = False
+        self.in_double: bool = False
+        self.in_backtick: bool = False
+        self.escaped: bool = False
+
+    def reset(self):
+        """Reset all quote states to False."""
+        self.in_single = False
+        self.in_double = False
+        self.in_backtick = False
+        self.escaped = False
+
+
+def parse_quoted_content(text: str) -> Generator[str, None, None]:
+    """
+    Parse text by extracting content outside of quotes.
+
+    Yields chunks of text that are NOT within single, double, or backtick quotes.
+    Handles escape sequences properly.
+
+    Args:
+        text: SQL text to parse
+
+    Yields:
+        Text chunks outside of quotes
+    """
+    QuoteState  # Ensure class is available
+    state = QuoteState()
+    current = []
+
+    for char in text:
+        if state.escaped:
+            current.append(char)
+            state.escaped = False
+            continue
+
+        if char == "\\":
+            current.append(char)
+            state.escaped = True
+            continue
+
+        if state.in_single:
+            current.append(char)
+            if char == "'":
+                state.in_single = False
+            continue
+
+        if state.in_double:
+            current.append(char)
+            if char == '"':
+                state.in_double = False
+            continue
+
+        if state.in_backtick:
+            current.append(char)
+            if char == "`":
+                state.in_backtick = False
+            continue
+
+        # Not in any quote
+        if char == "'":
+            if current:
+                yield "".join(current)
+                current = []
+            state.in_single = True
+            continue
+
+        if char == '"':
+            if current:
+                yield "".join(current)
+                current = []
+            state.in_double = True
+            continue
+
+        if char == "`":
+            if current:
+                yield "".join(current)
+                current = []
+            state.in_backtick = True
+            continue
+
+        current.append(char)
+
+    if current:
+        yield "".join(current)
+
+
+def count_quoted_elements(text: str, depth: int = 0) -> Tuple[int, int, int, int]:
+    """
+    Count commas, backticks, and parentheses at top level (outside quotes).
+
+    Args:
+        text: Text to analyze
+        depth: Starting parenthesis depth (default 0)
+
+    Returns:
+        Tuple of (comma_count, backtick_count, final_depth, in_quote_depth)
+    """
+    state = QuoteState()
+    comma_count = 0
+    backtick_count = 0
+    current_depth = depth
+    max_depth = depth
+
+    for char in text:
+        if state.escaped:
+            state.escaped = False
+            continue
+
+        if char == "\\":
+            state.escaped = True
+            continue
+
+        if state.in_single or state.in_double or state.in_backtick:
+            if state.in_single and char == "'":
+                state.in_single = False
+            elif state.in_double and char == '"':
+                state.in_double = False
+            elif state.in_backtick and char == "`":
+                state.in_backtick = False
+            continue
+
+        # Not in quote
+        if char == "'":
+            state.in_single = True
+            continue
+        if char == '"':
+            state.in_double = True
+            continue
+        if char == "`":
+            backtick_count += 1
+            state.in_backtick = True
+            continue
+        if char == "(":
+            current_depth += 1
+            max_depth = max(max_depth, current_depth)
+            continue
+        if char == ")":
+            current_depth = max(current_depth - 1, depth)
+            continue
+        if char == "," and current_depth == depth:
+            comma_count += 1
+
+    return comma_count, backtick_count, current_depth, max_depth
+
+
+def find_parentheses_span(text: str, start_pos: int = 0) -> Optional[Tuple[int, int, int]]:
+    """
+    Find the matching closing parenthesis for an opening parenthesis.
+
+    Args:
+        text: SQL text to search
+        start_pos: Position to start searching from (should be at or before '(')
+
+    Returns:
+        Tuple of (open_paren_pos, close_paren_pos, max_depth) or None if not found
+    """
+    state = QuoteState()
+    paren_count = 0
+    open_pos = -1
+    max_depth = 0
+
+    for i in range(start_pos, len(text)):
+        char = text[i]
+
+        if state.escaped:
+            state.escaped = False
+            continue
+
+        if char == "\\":
+            state.escaped = True
+            continue
+
+        if state.in_single:
+            if char == "'":
+                state.in_single = False
+            continue
+
+        if state.in_double:
+            if char == '"':
+                state.in_double = False
+            continue
+
+        if state.in_backtick:
+            if char == "`":
+                state.in_backtick = False
+            continue
+
+        # Not in quote
+        if char == "'":
+            state.in_single = True
+            continue
+        if char == '"':
+            state.in_double = True
+            continue
+        if char == "`":
+            state.in_backtick = True
+            continue
+
+        if char == "(":
+            if paren_count == 0:
+                open_pos = i
+            paren_count += 1
+            max_depth = max(max_depth, paren_count)
+            continue
+
+        if char == ")":
+            paren_count -= 1
+            if paren_count == 0 and open_pos >= 0:
+                return (open_pos, i, max_depth)
+
+    return None if paren_count > 0 else (open_pos, len(text), max_depth)
 
 # =============================================================================
 # PRE-COMPILED REGEX PATTERNS FOR DDL CLEANING
@@ -271,7 +495,16 @@ def fix_truncated_ddl(ddl: str) -> str:
     return ddl
 
 
-def _find_create_table_columns_span(sql: str) -> Optional[Tuple[int, int]]:
+def _find_create_table_columns_span(sql: str) -> Optional[Tuple[int, int, int]]:
+    """
+    Find the column definitions span within CREATE TABLE parentheses.
+
+    Uses shared quote-parsing utilities for accurate position tracking.
+    This replaces the duplicated inline quote handling logic.
+
+    Returns:
+        Tuple of (start_idx, end_idx, max_depth) or None if not found
+    """
     if not sql or not isinstance(sql, str):
         return None
     sql_upper = sql.upper()
@@ -282,48 +515,10 @@ def _find_create_table_columns_span(sql: str) -> Optional[Tuple[int, int]]:
     if paren_start < 0:
         return None
 
-    paren_count = 0
-    in_single_quote = False
-    in_double_quote = False
-    in_backtick = False
-    escaped = False
-    for idx in range(paren_start, len(sql)):
-        char = sql[idx]
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\":
-            escaped = True
-            continue
-        if in_single_quote:
-            if char == "'":
-                in_single_quote = False
-            continue
-        if in_double_quote:
-            if char == '"':
-                in_double_quote = False
-            continue
-        if in_backtick:
-            if char == "`":
-                in_backtick = False
-            continue
-        if char == "'":
-            in_single_quote = True
-            continue
-        if char == '"':
-            in_double_quote = True
-            continue
-        if char == "`":
-            in_backtick = True
-            continue
-        if char == "(":
-            if paren_count == 0:
-                start_idx = idx + 1
-            paren_count += 1
-        elif char == ")":
-            paren_count -= 1
-            if paren_count == 0:
-                return (start_idx, idx)
+    result = find_parentheses_span(sql, paren_start)
+    if result:
+        open_pos, close_pos, max_depth = result
+        return (open_pos + 1, close_pos, max_depth)
     return None
 
 
@@ -374,15 +569,32 @@ def _count_top_level_commas_and_backticks(segment: str) -> Tuple[int, int]:
     return comma_count, backtick_count
 
 
+def _count_top_level_commas_and_backticks_new(segment: str) -> Tuple[int, int]:
+    """
+    Count top-level commas and backticks in a SQL segment.
+
+    Uses shared quote-parsing utilities for accurate counting.
+    This replaces the duplicated inline quote handling logic.
+
+    Args:
+        segment: SQL text segment to analyze
+
+    Returns:
+        Tuple of (comma_count, backtick_count)
+    """
+    comma_count, backtick_count, _, _ = count_quoted_elements(segment)
+    return comma_count, backtick_count
+
+
 def ddl_has_missing_commas(ddl: str) -> bool:
     if not ddl or not isinstance(ddl, str):
         return False
     span = _find_create_table_columns_span(ddl)
     if not span:
         return False
-    start_idx, end_idx = span
+    start_idx, end_idx, _ = span
     columns_text = ddl[start_idx:end_idx]
-    comma_count, backtick_count = _count_top_level_commas_and_backticks(columns_text)
+    comma_count, backtick_count = _count_top_level_commas_and_backticks_new(columns_text)
     return backtick_count >= 2 and comma_count == 0
 
 
@@ -395,7 +607,7 @@ def fix_missing_commas_in_ddl(ddl: str) -> str:
     if not ddl_has_missing_commas(ddl):
         return ddl
 
-    start_idx, end_idx = span
+    start_idx, end_idx, _ = span
     columns_text = ddl[start_idx:end_idx]
     fixed_columns = []
     depth = 0

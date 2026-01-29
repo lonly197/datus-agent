@@ -123,7 +123,22 @@ class SmartExecutionRouter:
 
 
 class TaskTypeClassifier:
-    """智能任务类型分类器"""
+    """Intelligent task type classifier for plan mode execution.
+
+    This classifier determines whether a todo item requires:
+    - TOOL_EXECUTION: External tool calls (database queries, etc.)
+    - LLM_ANALYSIS: Large language model reasoning
+    - HYBRID: Combination of both approaches
+
+    The classifier uses pattern matching to identify SQL review patterns,
+    data analysis requests, and other task types that require specific
+    execution strategies.
+
+    Attributes:
+        TOOL_EXECUTION: Task requires external tool execution
+        LLM_ANALYSIS: Task requires LLM-based analysis
+        HYBRID: Task may require both tools and analysis
+    """
 
     TOOL_EXECUTION = "tool_execution"  # 需要调用外部工具
     LLM_ANALYSIS = "llm_analysis"  # 需要LLM推理分析

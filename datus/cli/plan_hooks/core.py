@@ -281,8 +281,8 @@ class PlanModeHooksCore(AgentHooks):
         return False
 
 
-# Note: The complete implementation would include:
-# - All lifecycle hook methods
+# TODO: Complete PlanModeHooksCore implementation
+# Pending migration from PlanModeHooks:
+# - Lifecycle hook methods
 # - State management methods
 # - Configuration loading
-# - Integration with execution, events, and matching modules

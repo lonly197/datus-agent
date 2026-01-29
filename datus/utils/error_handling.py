@@ -720,13 +720,13 @@ def _create_node_error_result(
         try:
             node_context["input_summary"] = node_instance.summarize_input()
         except Exception as e:
-            logger.warning(f"Failed to summarize input: {e}")
+            logger.error(f"Failed to summarize input: {e}", exc_info=True)
             node_context["input_summary"] = {"error": "Failed to summarize input"}
     elif hasattr(node_instance, "_summarize_input"):
         try:
             node_context["input_summary"] = node_instance._summarize_input()
         except Exception as e:
-            logger.warning(f"Failed to summarize input: {e}")
+            logger.error(f"Failed to summarize input: {e}", exc_info=True)
             node_context["input_summary"] = {"error": "Failed to summarize input"}
 
     # Enhanced error details
@@ -735,9 +735,9 @@ def _create_node_error_result(
         enhanced_details.update(
             {"stack_trace": traceback.format_exc(), "operation": operation, "timestamp": time.time()}
         )
-    except Exception:
-        # Fallback if update fails
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to update error details: {e}")
+        enhanced_details["update_error"] = str(e)
 
     # Generate recovery suggestions based on error type
     # Note: retryable flag is set based on error type below; caller-provided value is ignored

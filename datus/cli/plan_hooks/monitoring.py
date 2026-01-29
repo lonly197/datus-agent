@@ -613,9 +613,8 @@ class ExecutionMonitor:
 
         logger.info("📊 === Plan Mode Monitoring Report ===")
         logger.info(f"📈 Total Executions: {report['summary']['total_executions']}")
-        logger.info(".1%")
+        logger.info(f"📈 Success Rate: {report['summary']['success_rate']:.1%}")
         logger.info(f"📝 Total Todos Processed: {report['summary']['total_todos_processed']}")
-        logger.info(".1%")
         logger.info(f"⚡ Batch Optimizations: {report['summary']['batch_optimizations']}")
         logger.info(f"🔄 Error Recoveries: {report['summary']['error_recoveries']}")
 
@@ -649,9 +648,12 @@ class ExecutionMonitor:
 
             summary = report["summary"]
             lines.append(f"Total Executions: {summary['total_executions']}")
-            lines.append(".1%")
+            success_rate = summary.get('success_rate', 0)
+            if isinstance(success_rate, (int, float)):
+                lines.append(f"Success Rate: {success_rate:.1%}")
+            else:
+                lines.append(f"Success Rate: {success_rate}")
             lines.append(f"Total Todos Processed: {summary['total_todos_processed']}")
-            lines.append(".1%")
             lines.append(f"Batch Optimizations: {summary['batch_optimizations']}")
             lines.append(f"Error Recoveries: {summary['error_recoveries']}")
 

@@ -200,7 +200,7 @@ class WorkflowTerminationManager:
                         if not self.workflow_task.cancelled():
                             logger.warning("Task may not have been cancelled successfully immediately")
                 except Exception as e:
-                    logger.warning(f"Error during workflow task cancellation: {e}")
+                    logger.error(f"Error during workflow task cancellation: {e}", exc_info=True)
 
         elif termination_status == WorkflowTerminationStatus.TERMINATE_SUCCESS:
             logger.info("Workflow completed successfully")
@@ -383,5 +383,5 @@ class OutputNodeExecutor:
                         return True
             return False
         except Exception as e:
-            logger.warning(f"Error checking parallel node success: {e}")
-            return False
+            logger.error(f"Error checking parallel node success: {e}", exc_info=True)
+            return False  # Return False but log error for debugging

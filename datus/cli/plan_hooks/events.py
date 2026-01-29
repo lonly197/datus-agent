@@ -271,11 +271,7 @@ async def emit_sql_execution_error(
         logger.error(f"Failed to emit SQL execution error event: {e}")
 
 
-# Note: The complete implementation would extract these methods from PlanModeHooks:
-# - _emit_action (lines ~1931-1942)
-# - _emit_plan_update_event (lines ~5100-5150)
-# - _emit_tool_error_event (lines ~5150-5220)
-# - _emit_status_message (lines ~5220-5270)
-# - SQL execution event helpers
-# - Deep research event helpers
-# - Progress update helpers
+# TODO: Extract remaining event emission methods from PlanModeHooks
+# These methods are pending migration to the modular structure:
+# - emit_action, emit_plan_update_event, emit_tool_error_event
+# - emit_status_message, SQL execution event helpers
