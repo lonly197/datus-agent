@@ -11,10 +11,9 @@ validation, and result generation.
 """
 
 import hashlib
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from datus.agent.node.node import Node, execute_with_async_stream
-from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.business_term_config import LLM_TERM_EXTRACTION_CONFIG, SCHEMA_VALIDATION_CONFIG
 from datus.schemas.action_history import (
@@ -28,6 +27,9 @@ from datus.schemas.node_models import TableSchema
 from datus.utils.error_handling import LLMMixin, NodeExecutionResult
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
+
+if TYPE_CHECKING:
+    from datus.agent.workflow import Workflow
 
 from .diagnostics import DiagnosticReporter
 from .term_utils import TermProcessor

@@ -9,10 +9,9 @@ This module contains the main SchemaDiscoveryNode class that orchestrates
 the schema discovery process using all the refactored modules.
 """
 
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from datus.agent.node.node import Node, execute_with_async_stream
-from datus.agent.workflow import Workflow
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import (
     ActionHistory,
@@ -28,6 +27,9 @@ from datus.utils.schema_discovery_metrics import (
     SchemaDiscoveryMetrics,
     global_metrics_collector,
 )
+
+if TYPE_CHECKING:
+    from datus.agent.workflow import Workflow
 
 from .discovery_engine import (
     discover_candidate_tables,

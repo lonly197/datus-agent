@@ -11,7 +11,7 @@ values, and combined RAG (Retrieval-Augmented Generation) storage.
 
 import json
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 import pyarrow as pa
 
@@ -19,10 +19,18 @@ from datus.configuration.agent_config import AgentConfig
 from datus.schemas.base import TABLE_TYPE
 from datus.schemas.node_models import TableSchema, TableValue
 from datus.storage.lancedb_conditions import build_where, eq, or_
-from datus.utils.constants import DBType
 from datus.utils.json_utils import json2csv
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import extract_enum_values_from_comment, is_likely_truncated_ddl, sanitize_ddl_for_storage
+
+if TYPE_CHECKING:
+    from datus.utils.constants import DBType
+
+# Runtime fallback for DBType
+try:
+    from datus.utils.constants import DBType
+except ImportError:
+    DBType = str  # type: ignore[misc]
 
 # Import base storage and utilities
 from datus.storage.embedding_models import EmbeddingModel
