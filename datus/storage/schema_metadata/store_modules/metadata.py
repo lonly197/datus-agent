@@ -90,11 +90,12 @@ class SchemaStorage(BaseMetadataStorage):
         column_comments: Optional[Dict[str, str]] = None,
     ) -> str:
         """
-        Enhance DDL definition with Chinese comments for better semantic search.
+        Build enhanced search text with comments for better semantic search.
 
-        This prepends Chinese comments to the DDL so that when embeddings are
-        created, the Chinese terminology is included in the vector representation.
-        This improves semantic search for Chinese queries.
+        This method now returns a search text string (not modified DDL) that
+        combines table comments, column comments, and DDL information for
+        embedding generation. The original DDL is preserved unchanged for
+        SQL generation purposes.
 
         Args:
             definition: Original DDL statement
@@ -102,26 +103,22 @@ class SchemaStorage(BaseMetadataStorage):
             column_comments: Dict mapping column names to Chinese comments
 
         Returns:
-            Enhanced DDL with Chinese comments prepended
+            Enhanced search text with Chinese comments for embedding
         """
         enhanced_parts = []
 
         # Add table comment if available
         if table_comment and table_comment.strip():
-            enhanced_parts.append(f"-- 表注释: {table_comment}")
+            enhanced_parts.append(f"表: {table_comment}")
 
         # Add column comments if available
         if column_comments:
             for col_name, col_comment in column_comments.items():
                 if col_comment and col_comment.strip():
-                    enhanced_parts.append(f"-- 列 {col_name}: {col_comment}")
-                    enum_pairs = extract_enum_values_from_comment(col_comment)
-                    if enum_pairs:
-                        formatted = "; ".join([f"{code}={label}" for code, label in enum_pairs])
-                        enhanced_parts.append(f"-- 列 {col_name} 枚举: {formatted}")
+                    enhanced_parts.append(f"列 {col_name}: {col_comment}")
 
-        # Add original DDL
-        enhanced_parts.append(definition)
+        # Add table name extracted from DDL for context
+        enhanced_parts.append(definition[:500])  # First 500 chars for context
 
         return "\n".join(enhanced_parts)
 
@@ -441,14 +438,17 @@ class SchemaStorage(BaseMetadataStorage):
                 schema_name=schema_name,
             )
 
-            # Enhance definition with Chinese comments for better semantic search
-            enhanced_definition = self._enhance_definition_with_comments(
+            # Build enhanced search text with Chinese comments for better semantic search
+            # This is used for embedding generation, while original DDL is preserved
+            enhanced_search_text = self._enhance_definition_with_comments(
                 definition=definition,
                 table_comment=table_comment or "",
                 column_comments=column_comments or {},
             )
 
             # Prepare data with enhanced fields
+            # Note: definition keeps original DDL for SQL generation
+            # search_text contains enhanced content with comments for embedding
             data = {
                 "identifier": identifier,
                 "catalog_name": catalog_name or "",
@@ -456,7 +456,8 @@ class SchemaStorage(BaseMetadataStorage):
                 "schema_name": schema_name or "",
                 "table_name": table_name,
                 "table_type": table_type,
-                "definition": enhanced_definition,
+                "definition": definition,  # Keep original DDL unchanged
+                "search_text": enhanced_search_text,  # Enhanced for embedding
                 "table_comment": table_comment or "",
                 "column_comments": json.dumps(column_comments or {}, ensure_ascii=False),
                 "column_enums": json.dumps(column_enums or {}, ensure_ascii=False),

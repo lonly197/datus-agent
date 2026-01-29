@@ -518,18 +518,23 @@ def _complete_incomplete_ddl(sql: str) -> str:
     if not sql or not isinstance(sql, str):
         return sql
 
-    # Check if DDL appears to be truncated or incomplete
-    # Use indicators rather than simple parentheses counting
-    ddl_upper = sql.upper().strip()
-
     stripped_sql = sql.rstrip()
+    ddl_upper = stripped_sql.upper()
+
+    # Check if DDL ends properly (with ); or just ;)
+    ends_properly = stripped_sql.endswith(');') or (
+        stripped_sql.endswith(';') and 'CREATE TABLE' in ddl_upper
+    )
+    if ends_properly:
+        return sql
+
     # Indicators of actual truncation
     indicators = [
         stripped_sql.endswith(','),  # Ends with comma (incomplete column list)
         not stripped_sql.endswith(')'),  # No closing paren near end
     ]
 
-    # Only complete if multiple indicators suggest truncation
+    # Only complete if indicators suggest truncation
     if sum(indicators) >= 1:
         # Add one closing paren for CREATE TABLE if clearly missing
         # (not for each varchar() - those are already balanced in valid DDL)
@@ -540,7 +545,7 @@ def _complete_incomplete_ddl(sql: str) -> str:
 
         # Add ENGINE clause if completely missing and this looks like StarRocks
         stripped_sql = sql.rstrip()
-        ddl_upper = sql.upper().strip()
+        ddl_upper = stripped_sql.upper()
         starrocks_indicators = [
             'DUPLICATE KEY' in ddl_upper,
             'AGGREGATE KEY' in ddl_upper,

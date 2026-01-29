@@ -187,7 +187,9 @@ def store_tables(
                 if sample_statistics:
                     table["sample_statistics"] = json.dumps(sample_statistics, ensure_ascii=False)
                 if table_comment or column_comments:
-                    table["definition"] = table_lineage_store.schema_store._enhance_definition_with_comments(
+                    # Build enhanced search text with comments for better semantic search
+                    # Original DDL is preserved in 'definition', search_text contains enhanced content
+                    table["search_text"] = table_lineage_store.schema_store._enhance_definition_with_comments(
                         definition=definition,
                         table_comment=table_comment,
                         column_comments=column_comments,
@@ -234,7 +236,9 @@ def store_tables(
             if relationship_metadata:
                 table["relationship_metadata"] = json.dumps(relationship_metadata, ensure_ascii=False)
             if table_comment or column_comments:
-                table["definition"] = table_lineage_store.schema_store._enhance_definition_with_comments(
+                # Build enhanced search text with comments for better semantic search
+                # Original DDL is preserved in 'definition', search_text contains enhanced content
+                table["search_text"] = table_lineage_store.schema_store._enhance_definition_with_comments(
                     definition=definition,
                     table_comment=table_comment,
                     column_comments=column_comments,
@@ -305,7 +309,9 @@ def store_tables(
                 if relationship_metadata:
                     table["relationship_metadata"] = json.dumps(relationship_metadata, ensure_ascii=False)
                 if table_comment or column_comments:
-                    table["definition"] = table_lineage_store.schema_store._enhance_definition_with_comments(
+                    # Build enhanced search text with comments for better semantic search
+                    # Original DDL is preserved in 'definition', search_text contains enhanced content
+                    table["search_text"] = table_lineage_store.schema_store._enhance_definition_with_comments(
                         definition=definition,
                         table_comment=table_comment,
                         column_comments=column_comments,
