@@ -74,3 +74,4 @@ coordination/orchestration/*
 claude-flow
 # Removed Windows wrapper files per user request
 hive-mind-prompt-*.txt
+数据架构与指标清单分析报告.txt

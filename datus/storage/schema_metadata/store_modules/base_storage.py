@@ -71,37 +71,45 @@ class BaseMetadataStorage(BaseEmbeddingStore, SearchMixin):
             table_name: Name of the metadata table
             vector_source_name: Field name containing text to embed
         """
+        # Build schema fields dynamically to avoid duplicates
+        schema_fields = [
+            # Original fields (v0)
+            pa.field("identifier", pa.string()),
+            pa.field("catalog_name", pa.string()),
+            pa.field("database_name", pa.string()),
+            pa.field("schema_name", pa.string()),
+            pa.field("table_name", pa.string()),
+            pa.field("table_type", pa.string()),
+            pa.field(vector_source_name, pa.string()),
+        ]
+        
+        # Add search_text only if it's different from vector_source_name
+        # This avoids duplicate field when vector_source_name="search_text"
+        if vector_source_name != "search_text":
+            schema_fields.append(pa.field("search_text", pa.string()))
+        
+        schema_fields.extend([
+            pa.field("vector", pa.list_(pa.float32(), list_size=embedding_model.dim_size)),
+            # Enhanced fields (v1) - Business Semantics (HIGH PRIORITY)
+            pa.field("table_comment", pa.string()),  # Extracted from DDL COMMENT
+            pa.field("column_comments", pa.string()),  # JSON: {"col1": "comment1", ...}
+            pa.field("column_enums", pa.string()),  # JSON: {"col1": [{"value": "0", "label": "foo"}], ...}
+            pa.field("business_tags", pa.list_(pa.string())),  # ["finance", "fact_table", "revenue"]
+            # Statistics (MEDIUM PRIORITY)
+            pa.field("row_count", pa.int64()),  # Table row count
+            pa.field("sample_statistics", pa.string()),  # JSON: {"col1": {"min": 0, "max": 100, ...}}
+            # Relationships (MEDIUM PRIORITY)
+            pa.field("relationship_metadata", pa.string()),  # JSON: {"foreign_keys": [...], "join_paths": [...]}
+            # Metadata Management
+            pa.field("metadata_version", pa.int32()),  # 0=legacy, 1=enhanced
+            pa.field("last_updated", pa.int64()),  # Unix timestamp
+        ])
+
         super().__init__(
             db_path=db_path,
             table_name=table_name,
             embedding_model=embedding_model,
-            schema=pa.schema(
-                [
-                    # Original fields (v0)
-                    pa.field("identifier", pa.string()),
-                    pa.field("catalog_name", pa.string()),
-                    pa.field("database_name", pa.string()),
-                    pa.field("schema_name", pa.string()),
-                    pa.field("table_name", pa.string()),
-                    pa.field("table_type", pa.string()),
-                    pa.field(vector_source_name, pa.string()),
-                    pa.field("search_text", pa.string()),
-                    pa.field("vector", pa.list_(pa.float32(), list_size=embedding_model.dim_size)),
-                    # Enhanced fields (v1) - Business Semantics (HIGH PRIORITY)
-                    pa.field("table_comment", pa.string()),  # Extracted from DDL COMMENT
-                    pa.field("column_comments", pa.string()),  # JSON: {"col1": "comment1", ...}
-                    pa.field("column_enums", pa.string()),  # JSON: {"col1": [{"value": "0", "label": "foo"}], ...}
-                    pa.field("business_tags", pa.list_(pa.string())),  # ["finance", "fact_table", "revenue"]
-                    # Statistics (MEDIUM PRIORITY)
-                    pa.field("row_count", pa.int64()),  # Table row count
-                    pa.field("sample_statistics", pa.string()),  # JSON: {"col1": {"min": 0, "max": 100, ...}}
-                    # Relationships (MEDIUM PRIORITY)
-                    pa.field("relationship_metadata", pa.string()),  # JSON: {"foreign_keys": [...], "join_paths": [...]}
-                    # Metadata Management
-                    pa.field("metadata_version", pa.int32()),  # 0=legacy, 1=enhanced
-                    pa.field("last_updated", pa.int64()),  # Unix timestamp
-                ]
-            ),
+            schema=pa.schema(schema_fields),
             vector_source_name=vector_source_name,
         )
         self.reranker = None
