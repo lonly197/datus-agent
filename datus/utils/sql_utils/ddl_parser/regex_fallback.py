@@ -98,7 +98,7 @@ def _parse_ddl_with_regex(sql: str, dialect: str) -> Dict[str, Any]:
             _extract_starrocks_properties(result, sql)
 
     except Exception as e:
-        logger.warning(f"Error in regex DDL parsing: {e}")
+        logger.warning(f"Error in regex DDL parsing: {e}", exc_info=True)
 
     return result
 
