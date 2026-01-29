@@ -166,9 +166,15 @@ def parse_metadata_from_ddl(
 
                     # Get column comment
                     if hasattr(column, "comments") and column.comments:
-                        col_dict["comment"] = column.comments
+                        # column.comments is a list from sqlglot, need to convert to string
+                        comment_value = column.comments[-1] if isinstance(column.comments, list) else column.comments
+                        is_valid, _, comment = validate_comment(comment_value)
+                        if is_valid:
+                            col_dict["comment"] = comment
                     elif hasattr(column, "comment") and column.comment:
-                        col_dict["comment"] = column.comment
+                        is_valid, _, comment = validate_comment(column.comment)
+                        if is_valid:
+                            col_dict["comment"] = comment
 
                     result["columns"].append(col_dict)
 
@@ -238,9 +244,15 @@ def _extract_column_info(column) -> Optional[Dict[str, Any]]:
 
     # Get column comment
     if hasattr(column, "comments") and column.comments:
-        col_dict["comment"] = column.comments
+        # column.comments is a list from sqlglot, need to convert to string
+        comment_value = column.comments[-1] if isinstance(column.comments, list) else column.comments
+        is_valid, _, comment = validate_comment(comment_value)
+        if is_valid:
+            col_dict["comment"] = comment
     elif hasattr(column, "comment") and column.comment:
-        col_dict["comment"] = column.comment
+        is_valid, _, comment = validate_comment(column.comment)
+        if is_valid:
+            col_dict["comment"] = comment
 
     return col_dict
 
