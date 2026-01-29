@@ -379,3 +379,41 @@ def clean_term_to_schema(term_to_schema: Dict[str, Set[str]]) -> Dict[str, Set[s
             # 使用 set 去重
             cleaned[term] = set(fields)
     return cleaned
+
+
+def filter_term_to_schema_by_table_priority(
+    term_to_schema: Dict[str, Set[str]],
+    max_table_priority: TablePriority = TablePriority.ADS,
+    keep_bare_if_has_valid: bool = True,
+) -> Dict[str, Set[str]]:
+    """按表优先级过滤 term_to_schema，移除仅来自低优先级表或仅剩裸字段的术语。
+
+    规则：
+    - 仅保留 table.column 中表名满足 max_table_priority 的映射
+    - 若术语没有任何合法 table.column，则整个术语丢弃（避免仅裸字段污染）
+    - 若存在合法 table.column，可选择保留裸字段（默认保留）
+    """
+    cleaned: Dict[str, Set[str]] = {}
+
+    for term, fields in term_to_schema.items():
+        qualified_fields: Set[str] = set()
+        bare_fields: Set[str] = set()
+
+        for field in fields:
+            if "." in field:
+                table_name, col_name = field.split(".", 1)
+                if should_include_table(table_name, max_table_priority):
+                    qualified_fields.add(f"{table_name}.{col_name}")
+            else:
+                bare_fields.add(field)
+
+        if not qualified_fields:
+            # 没有合法表映射，直接丢弃该术语
+            continue
+
+        if keep_bare_if_has_valid:
+            cleaned[term] = qualified_fields | bare_fields
+        else:
+            cleaned[term] = qualified_fields
+
+    return cleaned

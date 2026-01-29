@@ -141,6 +141,27 @@ Examples:
         action="store_true",
         help="Disable business term quality filter (removes low-quality terms like '的任务数量')",
     )
+    parser.add_argument(
+        "--enable-metric-def-keywords",
+        action="store_true",
+        help="Enable extracting keywords from metric business definition text (disabled by default to reduce noise)",
+    )
+    parser.add_argument(
+        "--llm-final-filter",
+        action="store_true",
+        help="Use LLM to refine final business terms and remove low-quality entries",
+    )
+    parser.add_argument(
+        "--llm-final-filter-batch-size",
+        type=int,
+        default=80,
+        help="LLM final filter batch size (default: 80)",
+    )
+    parser.add_argument(
+        "--llm-final-filter-no-cache",
+        action="store_true",
+        help="Disable cache for LLM final filter",
+    )
 
     return parser
 
@@ -158,6 +179,10 @@ class BusinessConfigCLI:
         self.llm_cache_enabled = not args.llm_no_cache
         self.llm_rewrite_mode = args.llm_rewrite_mode
         self.enable_term_filter = not args.disable_term_filter
+        self.enable_metric_def_keywords = args.enable_metric_def_keywords
+        self.llm_final_filter = args.llm_final_filter
+        self.llm_final_filter_batch_size = args.llm_final_filter_batch_size
+        self.llm_final_filter_cache_enabled = not args.llm_final_filter_no_cache
 
         # 表优先级设置
         priority_map = {
@@ -185,6 +210,8 @@ class BusinessConfigCLI:
                 min_term_length=self.min_term_length,
                 max_table_priority=self.max_table_priority,
                 enable_text_cleaning=self.enable_text_cleaning,
+                enable_term_filter=self.enable_term_filter,
+                enable_metric_def_keywords=self.enable_metric_def_keywords,
             )
 
     def run(self) -> int:
@@ -210,6 +237,7 @@ class BusinessConfigCLI:
                     max_table_priority=self.max_table_priority,
                     enable_text_cleaning=self.enable_text_cleaning,
                     enable_term_filter=self.enable_term_filter,
+                    enable_metric_def_keywords=self.enable_metric_def_keywords,
                     llm_batch_size=self.llm_batch_size,
                     llm_cache_enabled=self.llm_cache_enabled,
                 )
@@ -237,6 +265,7 @@ class BusinessConfigCLI:
                     max_table_priority=self.max_table_priority,
                     enable_text_cleaning=self.enable_text_cleaning,
                     enable_term_filter=self.enable_term_filter,
+                    enable_metric_def_keywords=self.enable_metric_def_keywords,
                     llm_batch_size=self.llm_batch_size,
                     llm_cache_enabled=self.llm_cache_enabled,
                 )
@@ -262,8 +291,27 @@ class BusinessConfigCLI:
                 db_path=agent_config.rag_storage_path(),
                 embedding_model=get_db_embedding_model()
             )
-            merger = DdlMerger(schema_storage, self.min_term_length)
+            merger = DdlMerger(
+                schema_storage,
+                min_term_length=self.min_term_length,
+                max_table_priority=self.max_table_priority,
+                enable_term_filter=self.enable_term_filter,
+            )
             business_terms = merger.merge(business_terms)
+
+        # LLM final refinement (optional)
+        if self.llm_final_filter:
+            try:
+                from .processors import LLMTermRefiner
+
+                refiner = LLMTermRefiner(
+                    agent_config=agent_config,
+                    batch_size=self.llm_final_filter_batch_size,
+                    cache_enabled=self.llm_final_filter_cache_enabled,
+                )
+                business_terms = refiner.refine(business_terms)
+            except Exception as e:
+                logger.warning(f"LLM final filter failed, skip. {type(e).__name__}: {e}")
 
         # 导入到ExtKnowledge
         if self.args.import_to_lancedb and self.args.metrics_xlsx:

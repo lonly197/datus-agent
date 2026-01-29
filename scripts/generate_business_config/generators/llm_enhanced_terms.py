@@ -28,6 +28,7 @@ from ..shared import (
     clean_table_keywords,
     clean_term_to_table,
     clean_term_to_schema,
+    filter_term_to_schema_by_table_priority,
 )
 
 logger = get_logger(__name__)
@@ -54,6 +55,7 @@ class LLMEnhancedBusinessTermsGenerator:
         max_table_priority: TablePriority = TablePriority.ADS,
         enable_text_cleaning: bool = True,
         enable_term_filter: bool = True,  # 启用业务术语质量过滤
+        enable_metric_def_keywords: bool = False,
         llm_batch_size: int = 20,  # 批量处理大小
         llm_cache_enabled: bool = True,  # 是否启用缓存
     ):
@@ -62,6 +64,7 @@ class LLMEnhancedBusinessTermsGenerator:
         self.max_table_priority = max_table_priority
         self.enable_text_cleaning = enable_text_cleaning
         self.enable_term_filter = enable_term_filter
+        self.enable_metric_def_keywords = enable_metric_def_keywords
         self.llm_batch_size = llm_batch_size
         self.llm_cache_enabled = llm_cache_enabled
         self.llm_model = None
@@ -284,6 +287,13 @@ class LLMEnhancedBusinessTermsGenerator:
                     f"term_to_table -{filtered_table}, term_to_schema -{filtered_schema}"
                 )
 
+        # 按表优先级清理 term_to_schema（移除仅ODS/低优先级来源）
+        term_to_schema = filter_term_to_schema_by_table_priority(
+            term_to_schema,
+            max_table_priority=self.max_table_priority,
+            keep_bare_if_has_valid=False,
+        )
+
         return {
             "term_to_table": dict(term_to_table),
             "term_to_schema": dict(term_to_schema),
@@ -485,7 +495,7 @@ Return ONLY a JSON object:
                     logger.debug(f"LLM改写失败 '{metric_name}': {e}")
 
         # 从业务定义提取关键词（使用清洗后的提取）
-        if biz_def:
+        if biz_def and self.enable_metric_def_keywords:
             keywords = extract_clean_keywords(biz_def, min_length=self.min_term_length, max_length=10)
             for kw in keywords:
                 if source_model and should_include_table(source_model, self.max_table_priority):

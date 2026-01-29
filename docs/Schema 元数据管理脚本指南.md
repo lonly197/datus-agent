@@ -435,7 +435,7 @@ python scripts/verify_schema_enrichment.py \
 
 ## generate_business_config.py - 业务术语配置生成
 
-**功能**: 从数据架构Excel和指标清单Excel生成业务术语配置，导入指标到ext_knowledge表。支持表优先级过滤、文本清洗和LLM增强。
+**功能**: 从数据架构Excel和指标清单Excel生成业务术语配置，导入指标到ext_knowledge表。支持表优先级过滤、文本清洗、术语质量过滤、LLM增强与最终精过滤。
 
 **核心特性**:
 - **表优先级过滤**: 优先使用 DIM/DWD/DWS，可选包含 ADS，排除 ODS
@@ -443,7 +443,9 @@ python scripts/verify_schema_enrichment.py \
 - **多策略表名匹配**: 精确匹配、模糊匹配、LLM增强匹配
 - **业务术语提取**: 从分类字段和指标名称自动提取业务术语
 - **LLM 改写**: 将人类可读的指标定义改写为检索友好的术语
-- **指标目录生成**: 生成271个指标的配置文件
+- **无裸字段输出**: `term_to_schema` 仅保留带表名前缀的字段映射
+- **LLM 最终精过滤**: 对输出术语进行高质量筛选，剔除碎片词/泛化词/技术噪音
+- **指标目录生成**: 生成指标配置文件
 
 **核心参数**:
 
@@ -455,8 +457,16 @@ python scripts/verify_schema_enrichment.py \
 | `--metrics-xlsx` | 指标清单Excel路径 | - |
 | `--max-table-priority` | 最大表优先级（DIM/DWD/DWS/ADS/ODS） | ADS |
 | `--disable-text-cleaning` | 禁用文本清洗 | false |
+| `--disable-term-filter` | 禁用业务术语质量过滤 | false |
+| `--enable-metric-def-keywords` | 从指标定义/说明中提取关键词 | false |
 | `--use-llm` | 启用 LLM 增强 | false |
 | `--rewrite-with-llm` | LLM 改写指标定义（需配合 `--use-llm`） | false |
+| `--llm-batch-size` | LLM 批量处理大小 | 20 |
+| `--llm-rewrite-mode` | LLM 改写模式（per-item/batch） | batch |
+| `--llm-no-cache` | 禁用 LLM 响应缓存 | false |
+| `--llm-final-filter` | LLM 最终精过滤（高质量术语筛选） | false |
+| `--llm-final-filter-batch-size` | LLM 最终精过滤批大小 | 200 |
+| `--llm-final-filter-no-cache` | 禁用最终精过滤缓存 | false |
 | `--import-to-lancedb` | 导入指标到ext_knowledge表 | false |
 | `--verbose` | 详细输出 | false |
 
@@ -486,6 +496,17 @@ python scripts/generate_business_config.py \
   --metrics-xlsx=/path/to/打铁指标清单v2.4.xlsx \
   --use-llm \
   --rewrite-with-llm
+
+# 高质量模式（推荐：定义关键词 + LLM 精过滤）
+python scripts/generate_business_config.py \
+  --config=/root/.datus/conf/agent.yml \
+  --namespace=test \
+  --arch-xlsx=/path/to/数据架构详细设计v2.3.xlsx \
+  --metrics-xlsx=/path/to/打铁指标清单v2.4.xlsx \
+  --max-table-priority=DWS \
+  --merge-ddl \
+  --enable-metric-def-keywords \
+  --llm-final-filter
 ```
 
 ---

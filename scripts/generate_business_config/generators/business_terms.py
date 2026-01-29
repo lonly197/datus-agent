@@ -18,7 +18,11 @@ from ..shared import (
     get_table_priority, 
     should_include_table,
     clean_excel_text,
-    extract_clean_keywords
+    extract_clean_keywords,
+    clean_table_keywords,
+    clean_term_to_table,
+    clean_term_to_schema,
+    filter_term_to_schema_by_table_priority,
 )
 from datus.utils.loggings import get_logger
 
@@ -38,11 +42,15 @@ class BusinessTermsGenerator:
         self, 
         min_term_length: int = 2,
         max_table_priority: TablePriority = TablePriority.ADS,
-        enable_text_cleaning: bool = True
+        enable_text_cleaning: bool = True,
+        enable_term_filter: bool = True,
+        enable_metric_def_keywords: bool = False,
     ):
         self.min_term_length = min_term_length
         self.max_table_priority = max_table_priority
         self.enable_text_cleaning = enable_text_cleaning
+        self.enable_term_filter = enable_term_filter
+        self.enable_metric_def_keywords = enable_metric_def_keywords
         self.excel_reader = ExcelReader()
         self.csv_reader = CsvReader()
         self.term_extractor = TermExtractor(min_term_length)
@@ -190,6 +198,30 @@ class BusinessTermsGenerator:
         stats: Dict
     ) -> Dict:
         """构建结果字典"""
+        # 应用业务术语质量过滤（与LLM版本保持一致）
+        terms_filtered = 0
+        if self.enable_term_filter:
+            original_table_count = len(term_to_table)
+            original_schema_count = len(term_to_schema)
+            original_keyword_count = len(table_keywords)
+
+            term_to_table = clean_term_to_table(term_to_table)
+            term_to_schema = clean_term_to_schema(term_to_schema)
+            table_keywords = clean_table_keywords(table_keywords)
+
+            terms_filtered = (
+                (original_table_count - len(term_to_table))
+                + (original_schema_count - len(term_to_schema))
+                + (original_keyword_count - len(table_keywords))
+            )
+
+        # 按表优先级清理 term_to_schema（移除仅ODS/低优先级来源）
+        term_to_schema = filter_term_to_schema_by_table_priority(
+            term_to_schema,
+            max_table_priority=self.max_table_priority,
+            keep_bare_if_has_valid=False,
+        )
+
         return {
             "term_to_table": dict(term_to_table),
             "term_to_schema": dict(term_to_schema),
@@ -201,6 +233,7 @@ class BusinessTermsGenerator:
                 "terms_count": stats["terms_extracted"],
                 "tables_filtered_by_priority": self.stats["tables_filtered_by_priority"],
                 "tables_by_priority": self.stats["tables_by_priority"],
+                "terms_filtered": terms_filtered,
             },
         }
 
@@ -347,7 +380,7 @@ class BusinessTermsGenerator:
                     term_to_table[biz_activity].add(source_model)
 
         # 从业务定义提取关键词（使用清洗后的提取）
-        if biz_def:
+        if biz_def and self.enable_metric_def_keywords:
             keywords = extract_clean_keywords(biz_def, min_length=self.min_term_length, max_length=10)
             for kw in keywords:
                 if source_model and should_include_table(source_model, self.max_table_priority):

@@ -18,6 +18,14 @@ from typing import Dict
 from datus.utils.loggings import get_logger
 
 from ..extractors import KeywordExtractor, TermExtractor
+from ..shared import (
+    TablePriority,
+    should_include_table,
+    clean_table_keywords,
+    clean_term_to_table,
+    clean_term_to_schema,
+    filter_term_to_schema_by_table_priority,
+)
 
 logger = get_logger(__name__)
 
@@ -34,10 +42,18 @@ class DdlMerger:
         term_extractor: Term extraction utility
     """
 
-    def __init__(self, schema_storage, min_term_length: int = 2):
+    def __init__(
+        self,
+        schema_storage,
+        min_term_length: int = 2,
+        max_table_priority: TablePriority = TablePriority.ADS,
+        enable_term_filter: bool = True,
+    ):
         self.schema_storage = schema_storage
         self.keyword_extractor = KeywordExtractor(min_term_length)
         self.term_extractor = TermExtractor(min_term_length)
+        self.max_table_priority = max_table_priority
+        self.enable_term_filter = enable_term_filter
 
     def merge(self, business_terms: Dict) -> Dict:
         """
@@ -65,6 +81,9 @@ class DdlMerger:
                 table_comment = row.get("table_comment", "")
 
                 if not table_name:
+                    continue
+
+                if not should_include_table(table_name, self.max_table_priority):
                     continue
 
                 ddl_stats["tables_checked"] += 1
@@ -107,10 +126,24 @@ class DdlMerger:
             f"{ddl_stats['terms_added']} 术语添加"
         )
 
+        if self.enable_term_filter:
+            term_to_table = clean_term_to_table(term_to_table)
+            term_to_schema = clean_term_to_schema(term_to_schema)
+            table_keywords = clean_table_keywords(business_terms.get("table_keywords", {}))
+        else:
+            table_keywords = business_terms.get("table_keywords", {})
+
+        # 再次按表优先级过滤 term_to_schema，避免仅ODS来源的术语残留
+        term_to_schema = filter_term_to_schema_by_table_priority(
+            term_to_schema,
+            max_table_priority=self.max_table_priority,
+            keep_bare_if_has_valid=False,
+        )
+
         return {
             "term_to_table": dict(term_to_table),
             "term_to_schema": dict(term_to_schema),
-            "table_keywords": business_terms.get("table_keywords", {}),
+            "table_keywords": table_keywords,
             "_stats": {**business_terms.get("_stats", {}), **{
                 "ddl_tables": ddl_stats["tables_checked"],
                 "ddl_terms": ddl_stats["terms_added"],
