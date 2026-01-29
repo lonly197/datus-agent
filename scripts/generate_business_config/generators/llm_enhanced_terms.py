@@ -29,6 +29,7 @@ from ..shared import (
     clean_term_to_table,
     clean_term_to_schema,
     filter_term_to_schema_by_table_priority,
+    StrictTermFilterConfig,
 )
 
 logger = get_logger(__name__)
@@ -58,6 +59,7 @@ class LLMEnhancedBusinessTermsGenerator:
         enable_metric_def_keywords: bool = False,
         llm_batch_size: int = 20,  # 批量处理大小
         llm_cache_enabled: bool = True,  # 是否启用缓存
+        strict_term_filter_config: Optional[StrictTermFilterConfig] = None,
     ):
         self.min_term_length = min_term_length
         self.use_llm = use_llm
@@ -65,6 +67,7 @@ class LLMEnhancedBusinessTermsGenerator:
         self.enable_text_cleaning = enable_text_cleaning
         self.enable_term_filter = enable_term_filter
         self.enable_metric_def_keywords = enable_metric_def_keywords
+        self.strict_term_filter_config = strict_term_filter_config or StrictTermFilterConfig(enabled=False)
         self.llm_batch_size = llm_batch_size
         self.llm_cache_enabled = llm_cache_enabled
         self.llm_model = None
@@ -271,9 +274,9 @@ class LLMEnhancedBusinessTermsGenerator:
             original_schema_count = len(term_to_schema)
             original_keyword_count = len(table_keywords)
 
-            term_to_table = clean_term_to_table(term_to_table)
-            term_to_schema = clean_term_to_schema(term_to_schema)
-            table_keywords = clean_table_keywords(table_keywords)
+            term_to_table = clean_term_to_table(term_to_table, self.strict_term_filter_config)
+            term_to_schema = clean_term_to_schema(term_to_schema, self.strict_term_filter_config)
+            table_keywords = clean_table_keywords(table_keywords, self.strict_term_filter_config)
 
             filtered_table = original_table_count - len(term_to_table)
             filtered_schema = original_schema_count - len(term_to_schema)

@@ -23,6 +23,7 @@ from ..shared import (
     clean_term_to_table,
     clean_term_to_schema,
     filter_term_to_schema_by_table_priority,
+    StrictTermFilterConfig,
 )
 from datus.utils.loggings import get_logger
 
@@ -45,12 +46,14 @@ class BusinessTermsGenerator:
         enable_text_cleaning: bool = True,
         enable_term_filter: bool = True,
         enable_metric_def_keywords: bool = False,
+        strict_term_filter_config: Optional[StrictTermFilterConfig] = None,
     ):
         self.min_term_length = min_term_length
         self.max_table_priority = max_table_priority
         self.enable_text_cleaning = enable_text_cleaning
         self.enable_term_filter = enable_term_filter
         self.enable_metric_def_keywords = enable_metric_def_keywords
+        self.strict_term_filter_config = strict_term_filter_config or StrictTermFilterConfig(enabled=False)
         self.excel_reader = ExcelReader()
         self.csv_reader = CsvReader()
         self.term_extractor = TermExtractor(min_term_length)
@@ -205,9 +208,9 @@ class BusinessTermsGenerator:
             original_schema_count = len(term_to_schema)
             original_keyword_count = len(table_keywords)
 
-            term_to_table = clean_term_to_table(term_to_table)
-            term_to_schema = clean_term_to_schema(term_to_schema)
-            table_keywords = clean_table_keywords(table_keywords)
+            term_to_table = clean_term_to_table(term_to_table, self.strict_term_filter_config)
+            term_to_schema = clean_term_to_schema(term_to_schema, self.strict_term_filter_config)
+            table_keywords = clean_table_keywords(table_keywords, self.strict_term_filter_config)
 
             terms_filtered = (
                 (original_table_count - len(term_to_table))

@@ -13,7 +13,7 @@ the completeness of business term configurations.
 
 import json
 from collections import defaultdict
-from typing import Dict
+from typing import Dict, Optional
 
 from datus.utils.loggings import get_logger
 
@@ -25,6 +25,7 @@ from ..shared import (
     clean_term_to_table,
     clean_term_to_schema,
     filter_term_to_schema_by_table_priority,
+    StrictTermFilterConfig,
 )
 
 logger = get_logger(__name__)
@@ -48,12 +49,14 @@ class DdlMerger:
         min_term_length: int = 2,
         max_table_priority: TablePriority = TablePriority.ADS,
         enable_term_filter: bool = True,
+        strict_term_filter_config: Optional[StrictTermFilterConfig] = None,
     ):
         self.schema_storage = schema_storage
         self.keyword_extractor = KeywordExtractor(min_term_length)
         self.term_extractor = TermExtractor(min_term_length)
         self.max_table_priority = max_table_priority
         self.enable_term_filter = enable_term_filter
+        self.strict_term_filter_config = strict_term_filter_config or StrictTermFilterConfig(enabled=False)
 
     def merge(self, business_terms: Dict) -> Dict:
         """
@@ -127,9 +130,9 @@ class DdlMerger:
         )
 
         if self.enable_term_filter:
-            term_to_table = clean_term_to_table(term_to_table)
-            term_to_schema = clean_term_to_schema(term_to_schema)
-            table_keywords = clean_table_keywords(business_terms.get("table_keywords", {}))
+            term_to_table = clean_term_to_table(term_to_table, self.strict_term_filter_config)
+            term_to_schema = clean_term_to_schema(term_to_schema, self.strict_term_filter_config)
+            table_keywords = clean_table_keywords(business_terms.get("table_keywords", {}), self.strict_term_filter_config)
         else:
             table_keywords = business_terms.get("table_keywords", {})
 

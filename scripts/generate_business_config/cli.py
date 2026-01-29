@@ -8,6 +8,7 @@ Command-line interface for business configuration generation.
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from datus.utils.loggings import configure_logging, get_logger
 
 from .generators import BusinessTermsGenerator, MetricsCatalogGenerator, LLMEnhancedBusinessTermsGenerator
 from .processors import DdlMerger, ExtKnowledgeImporter
-from .shared import TablePriority
+from .shared import TablePriority, StrictTermFilterConfig
 
 logger = get_logger(__name__)
 
@@ -142,6 +143,60 @@ Examples:
         help="Disable business term quality filter (removes low-quality terms like '的任务数量')",
     )
     parser.add_argument(
+        "--strict-term-filter",
+        action="store_true",
+        help="Enable stricter term filtering for text2sql precision (drops generic/boolean/english/numeric-heavy terms)",
+    )
+    parser.add_argument(
+        "--strict-max-mapping-count",
+        type=int,
+        default=15,
+        help="Max mapping count per term when strict filter is enabled (default: 15)",
+    )
+    parser.add_argument(
+        "--strict-min-length",
+        type=int,
+        default=3,
+        help="Min term length when strict filter is enabled (default: 3)",
+    )
+    parser.add_argument(
+        "--strict-allowlist-file",
+        type=str,
+        default="",
+        help="Optional allowlist file (one term per line) for strict term filter",
+    )
+    parser.add_argument(
+        "--strict-allow-pattern",
+        action="append",
+        default=[],
+        help="Regex allow pattern for strict term filter (can be repeated)",
+    )
+    parser.add_argument(
+        "--strict-keep-boolean",
+        action="store_true",
+        help="Do not drop terms starting with '是否' in strict mode",
+    )
+    parser.add_argument(
+        "--strict-keep-english",
+        action="store_true",
+        help="Do not drop terms containing English letters in strict mode",
+    )
+    parser.add_argument(
+        "--strict-keep-digits",
+        action="store_true",
+        help="Do not drop terms containing digits in strict mode",
+    )
+    parser.add_argument(
+        "--strict-keep-symbols",
+        action="store_true",
+        help="Do not drop terms containing symbols in strict mode",
+    )
+    parser.add_argument(
+        "--strict-keep-brackets",
+        action="store_true",
+        help="Do not drop terms containing bracket characters in strict mode",
+    )
+    parser.add_argument(
         "--enable-metric-def-keywords",
         action="store_true",
         help="Enable extracting keywords from metric business definition text (disabled by default to reduce noise)",
@@ -166,6 +221,22 @@ Examples:
     return parser
 
 
+def _load_allowlist(path: str) -> set:
+    if not path:
+        return set()
+    allow_terms: set[str] = set()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                item = line.strip()
+                if not item or item.startswith("#"):
+                    continue
+                allow_terms.add(item)
+    except FileNotFoundError:
+        logger.warning(f"Strict allowlist file not found: {path}")
+    return allow_terms
+
+
 class BusinessConfigCLI:
     """业务配置生成CLI"""
 
@@ -183,6 +254,18 @@ class BusinessConfigCLI:
         self.llm_final_filter = args.llm_final_filter
         self.llm_final_filter_batch_size = args.llm_final_filter_batch_size
         self.llm_final_filter_cache_enabled = not args.llm_final_filter_no_cache
+        self.strict_term_filter_config = StrictTermFilterConfig(
+            enabled=args.strict_term_filter,
+            max_mapping_count=args.strict_max_mapping_count,
+            min_length=args.strict_min_length,
+            drop_boolean_prefix=not args.strict_keep_boolean,
+            drop_english=not args.strict_keep_english,
+            drop_digits=not args.strict_keep_digits,
+            drop_symbols=not args.strict_keep_symbols,
+            drop_bracketed=not args.strict_keep_brackets,
+            allow_terms=_load_allowlist(args.strict_allowlist_file),
+            allow_patterns=[re.compile(p) for p in args.strict_allow_pattern],
+        )
 
         # 表优先级设置
         priority_map = {
@@ -212,6 +295,7 @@ class BusinessConfigCLI:
                 enable_text_cleaning=self.enable_text_cleaning,
                 enable_term_filter=self.enable_term_filter,
                 enable_metric_def_keywords=self.enable_metric_def_keywords,
+                strict_term_filter_config=self.strict_term_filter_config,
             )
 
     def run(self) -> int:
@@ -240,6 +324,7 @@ class BusinessConfigCLI:
                     enable_metric_def_keywords=self.enable_metric_def_keywords,
                     llm_batch_size=self.llm_batch_size,
                     llm_cache_enabled=self.llm_cache_enabled,
+                    strict_term_filter_config=self.strict_term_filter_config,
                 )
                 business_terms = llm_gen.generate_from_architecture_xlsx(
                     Path(self.args.arch_xlsx), header_rows=3, sheet_name=self.args.arch_sheet_name
@@ -268,6 +353,7 @@ class BusinessConfigCLI:
                     enable_metric_def_keywords=self.enable_metric_def_keywords,
                     llm_batch_size=self.llm_batch_size,
                     llm_cache_enabled=self.llm_cache_enabled,
+                    strict_term_filter_config=self.strict_term_filter_config,
                 )
                 business_terms = llm_gen.generate_from_metrics_xlsx(
                     Path(self.args.metrics_xlsx), business_terms, header_rows=2, sheet_name=self.args.metrics_sheet_name
@@ -296,6 +382,7 @@ class BusinessConfigCLI:
                 min_term_length=self.min_term_length,
                 max_table_priority=self.max_table_priority,
                 enable_term_filter=self.enable_term_filter,
+                strict_term_filter_config=self.strict_term_filter_config,
             )
             business_terms = merger.merge(business_terms)
 

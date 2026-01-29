@@ -8,8 +8,9 @@ Shared constants and utilities for business config generation.
 """
 
 import re
+from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Pattern
 
 
 class TablePriority(IntEnum):
@@ -67,6 +68,30 @@ METRIC_SUFFIXES: List[str] = [
 TECHNICAL_KEYWORDS: Set[str] = {
     '明细', '汇总', '统计', '计算', '结果', '数据', '信息', '字段', '表名',
 }
+
+# 严格过滤（Text2SQL 优化）默认配置
+STRICT_STOP_TERMS: Set[str] = {
+    "时间", "日期", "编号", "代码", "名称", "数量", "类型", "状态", "标识", "字段", "备注", "其他",
+    "信息", "金额", "数", "值", "率", "比", "原因", "结果", "方式", "单位", "版本", "类别", "对象",
+    "维度", "指标", "数据", "明细", "汇总", "合计", "总数", "占比", "比例", "详情", "场景",
+    "新增", "累计", "月度", "日度", "周度", "年度",
+    # 业务过于泛化的核心词（仅当等于该词时过滤）
+    "客户", "订单", "线索", "门店", "销售", "试驾", "渠道", "任务",
+}
+
+
+@dataclass
+class StrictTermFilterConfig:
+    enabled: bool = False
+    max_mapping_count: int = 15
+    min_length: int = 3
+    drop_boolean_prefix: bool = True
+    drop_english: bool = True
+    drop_digits: bool = True
+    drop_symbols: bool = True
+    drop_bracketed: bool = True
+    allow_terms: Set[str] = field(default_factory=set)
+    allow_patterns: List[Pattern] = field(default_factory=list)
 
 
 def is_meaningful_term(term: str, min_length: int = 2) -> bool:
@@ -328,6 +353,50 @@ def is_valid_business_term(term: str) -> bool:
     return True
 
 
+def _is_allowed_term(term: str, config: StrictTermFilterConfig) -> bool:
+    if term in config.allow_terms:
+        return True
+    for pattern in config.allow_patterns:
+        if pattern.search(term):
+            return True
+    return False
+
+
+def is_strict_business_term(term: str, config: StrictTermFilterConfig) -> bool:
+    """严格业务术语过滤（用于提升 text2sql 精度）"""
+    if not config.enabled:
+        return is_valid_business_term(term)
+
+    if not is_valid_business_term(term):
+        return False
+
+    if _is_allowed_term(term, config):
+        return True
+
+    if len(term) < config.min_length:
+        return False
+
+    if config.drop_boolean_prefix and term.startswith("是否"):
+        return False
+
+    if term in STRICT_STOP_TERMS:
+        return False
+
+    if config.drop_bracketed and re.search(r"[\\(\\)（）\\[\\]【】]", term):
+        return False
+
+    if config.drop_english and re.search(r"[A-Za-z]", term):
+        return False
+
+    if config.drop_digits and re.search(r"\\d", term):
+        return False
+
+    if config.drop_symbols and re.search(r"[+_/#\\\\:\\-]", term):
+        return False
+
+    return True
+
+
 def filter_business_terms(terms: List[str]) -> List[str]:
     """批量过滤业务术语
 
@@ -340,7 +409,10 @@ def filter_business_terms(terms: List[str]) -> List[str]:
     return [t for t in terms if is_valid_business_term(t)]
 
 
-def clean_table_keywords(keywords: Dict[str, str]) -> Dict[str, str]:
+def clean_table_keywords(
+    keywords: Dict[str, str],
+    strict_config: Optional[StrictTermFilterConfig] = None,
+) -> Dict[str, str]:
     """清理 table_keywords，移除无效的关键词
 
     Args:
@@ -349,10 +421,15 @@ def clean_table_keywords(keywords: Dict[str, str]) -> Dict[str, str]:
     Returns:
         Dict[str, str]: 清理后的关键词映射
     """
-    return {k: v for k, v in keywords.items() if is_valid_business_term(k)}
+    if strict_config is None:
+        strict_config = StrictTermFilterConfig(enabled=False)
+    return {k: v for k, v in keywords.items() if is_strict_business_term(k, strict_config)}
 
 
-def clean_term_to_table(term_to_table: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
+def clean_term_to_table(
+    term_to_table: Dict[str, Set[str]],
+    strict_config: Optional[StrictTermFilterConfig] = None,
+) -> Dict[str, Set[str]]:
     """清理 term_to_table，移除无效的术语
 
     Args:
@@ -361,10 +438,23 @@ def clean_term_to_table(term_to_table: Dict[str, Set[str]]) -> Dict[str, Set[str
     Returns:
         Dict[str, Set[str]]: 清理后的术语映射
     """
-    return {k: v for k, v in term_to_table.items() if is_valid_business_term(k)}
+    if strict_config is None:
+        strict_config = StrictTermFilterConfig(enabled=False)
+    cleaned: Dict[str, Set[str]] = {}
+    for term, tables in term_to_table.items():
+        if not is_strict_business_term(term, strict_config):
+            continue
+        if strict_config.enabled and strict_config.max_mapping_count > 0:
+            if len(tables) > strict_config.max_mapping_count and not _is_allowed_term(term, strict_config):
+                continue
+        cleaned[term] = tables
+    return cleaned
 
 
-def clean_term_to_schema(term_to_schema: Dict[str, Set[str]]) -> Dict[str, Set[str]]:
+def clean_term_to_schema(
+    term_to_schema: Dict[str, Set[str]],
+    strict_config: Optional[StrictTermFilterConfig] = None,
+) -> Dict[str, Set[str]]:
     """清理 term_to_schema，移除无效的术语并去重
 
     Args:
@@ -373,11 +463,17 @@ def clean_term_to_schema(term_to_schema: Dict[str, Set[str]]) -> Dict[str, Set[s
     Returns:
         Dict[str, Set[str]]: 清理后的字段映射
     """
-    cleaned = {}
+    if strict_config is None:
+        strict_config = StrictTermFilterConfig(enabled=False)
+    cleaned: Dict[str, Set[str]] = {}
     for term, fields in term_to_schema.items():
-        if is_valid_business_term(term):
-            # 使用 set 去重
-            cleaned[term] = set(fields)
+        if not is_strict_business_term(term, strict_config):
+            continue
+        unique_fields = set(fields)
+        if strict_config.enabled and strict_config.max_mapping_count > 0:
+            if len(unique_fields) > strict_config.max_mapping_count and not _is_allowed_term(term, strict_config):
+                continue
+        cleaned[term] = unique_fields
     return cleaned
 
 
