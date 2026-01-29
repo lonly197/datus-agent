@@ -82,6 +82,9 @@ def calculate_metadata_score(record: Dict) -> Dict[str, Any]:
         else:
             score["table_comment_quality"] = 1  # 低
     
+    # 提前获取 definition，避免后续覆盖率计算时未初始化
+    definition = record.get("definition", "") or ""
+
     # 列注释覆盖率
     col_comments_str = record.get("column_comments", "{}") or "{}"
     try:
@@ -92,7 +95,6 @@ def calculate_metadata_score(record: Dict) -> Dict[str, Any]:
     if col_comments:
         score["has_column_comments"] = True
         # 从 definition 估算总列数（简化处理）
-        definition = record.get("definition", "") or ""
         estimated_columns = estimate_column_count(definition)
         if estimated_columns > 0:
             score["column_comment_coverage"] = len(col_comments) / estimated_columns
@@ -173,6 +175,8 @@ def compare_scores(before: List[Dict], after: List[Dict]) -> Dict[str, Any]:
     # 计算平均分数
     before_avg = sum(s["overall_score"] for s in before_scores) / len(before_scores) if before_scores else 0
     after_avg = sum(s["overall_score"] for s in after_scores) / len(after_scores) if after_scores else 0
+    total_before = len(before_scores)
+    total_after = len(after_scores)
     
     # 找出改进最大的表
     improvements = []
@@ -192,6 +196,8 @@ def compare_scores(before: List[Dict], after: List[Dict]) -> Dict[str, Any]:
         "before_avg_score": round(before_avg, 1),
         "after_avg_score": round(after_avg, 1),
         "improvement": round(after_avg - before_avg, 1),
+        "total_tables_before": total_before,
+        "total_tables_after": total_after,
         "tables_improved": len(improvements),
         "top_improvements": improvements[:10],
         "coverage_changes": {
@@ -226,8 +232,8 @@ def print_comparison_report(comparison: Dict[str, Any]):
     
     print("Coverage Changes:")
     for field, counts in comparison['coverage_changes'].items():
-        before_pct = counts['before'] / max(comparison['tables_improved'], 1) * 100
-        after_pct = counts['after'] / max(comparison['tables_improved'], 1) * 100
+        before_pct = counts['before'] / max(comparison['total_tables_before'], 1) * 100
+        after_pct = counts['after'] / max(comparison['total_tables_after'], 1) * 100
         print(f"  {field}:")
         print(f"    Before: {counts['before']} tables ({before_pct:.1f}%)")
         print(f"    After:  {counts['after']} tables ({after_pct:.1f}%)")
