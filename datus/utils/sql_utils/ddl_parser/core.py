@@ -130,7 +130,9 @@ def parse_metadata_from_ddl(
 
             # Handle table comment
             if tb_info.comments:
-                is_valid, _, comment = validate_comment(tb_info.comments)
+                # tb_info.comments is a list from sqlglot, need to convert to string
+                comment_value = tb_info.comments[-1] if isinstance(tb_info.comments, list) else tb_info.comments
+                is_valid, _, comment = validate_comment(comment_value)
                 if is_valid:
                     result["table"]["comment"] = comment
 
@@ -203,7 +205,9 @@ def _extract_table_info(
 
     # Handle table comment
     if tb_info.comments:
-        is_valid, _, comment = validate_comment(tb_info.comments)
+        # tb_info.comments is a list from sqlglot, need to convert to string
+        comment_value = tb_info.comments[-1] if isinstance(tb_info.comments, list) else tb_info.comments
+        is_valid, _, comment = validate_comment(comment_value)
         if is_valid:
             result["comment"] = comment
 
