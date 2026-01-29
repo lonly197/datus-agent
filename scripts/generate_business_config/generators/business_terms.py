@@ -289,7 +289,15 @@ class BusinessTermsGenerator:
         for row in records:
             self._process_metrics_row(row, term_to_table, term_to_schema, table_keywords)
 
-        return self._build_result(term_to_table, term_to_schema, table_keywords, {"valid_metrics": len(records)})
+        return self._build_result(
+            term_to_table, term_to_schema, table_keywords,
+            {
+                "total_rows": len(records),
+                "valid_rows": len(records),
+                "tables_found": set(),
+                "terms_extracted": 0,
+            }
+        )
 
     def _process_metrics_row(
         self,
