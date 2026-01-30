@@ -148,26 +148,19 @@ class DeepResearchEventConverter:
         return extract_todo_id_from_action(action)
 
     def _get_unified_plan_id(self, action: ActionHistory, force_associate: bool = False) -> str:
-        """Get unified plan ID for action events."""
+        """Get planId for events. Only TodoItem.id is allowed."""
         # 1) todo_id for agentic workflows
         todo_id = self._extract_todo_id_from_action(action)
         if todo_id:
             return todo_id
 
-        # 2) explicit plan_id from metadata/input/output
-        plan_id = get_unified_plan_id(action, False, None)
-        if plan_id:
-            return plan_id
-
-        # 3) map to virtual step id for text2sql/preflight
+        # 2) map to virtual step id for text2sql/preflight
         node_type = self._extract_node_type_from_action(action) or action.action_type
         virtual_step_id = self._get_virtual_step_id(node_type) if node_type else None
         if virtual_step_id:
             return virtual_step_id
 
-        # 4) fallback to virtual plan when forced
-        if force_associate:
-            return self.virtual_plan_id
+        # No planId when no todo/step mapping exists
         return None
 
     def _find_tool_call_id(self, action: ActionHistory) -> str:
@@ -279,11 +272,10 @@ class DeepResearchEventConverter:
                             )
 
             if todos:
-                self._update_todo_state(todos, replace_order=True)
+                self._update_todo_state(todos, replace_order=not self._todo_state_manager.get_todo_state_list())
                 todos = self._get_todo_state_list() or todos
 
-            plan_event_id = self.virtual_plan_id if action.role == ActionRole.WORKFLOW else event_id
-            events.append(PlanUpdateEvent(id=plan_event_id, planId=None, timestamp=timestamp, todos=todos))
+            events.append(PlanUpdateEvent(id=self.virtual_plan_id, planId=None, timestamp=timestamp, todos=todos))
             return events
 
         # 1. Handle chat/assistant messages
@@ -442,6 +434,8 @@ class DeepResearchEventConverter:
                 tool_input = action.input
 
             schema_plan_id = self._get_unified_plan_id(action, force_associate=True)
+            if not schema_plan_id:
+                return events
 
             events.append(
                 ToolCallEvent(
@@ -486,6 +480,8 @@ class DeepResearchEventConverter:
                 tool_input = action.input
 
             validation_plan_id = self._get_unified_plan_id(action, force_associate=True)
+            if not validation_plan_id:
+                return events
 
             events.append(
                 ToolCallEvent(
@@ -563,6 +559,8 @@ class DeepResearchEventConverter:
                 tool_input = action.input
 
             exec_plan_id = self._get_unified_plan_id(action, force_associate=True)
+            if not exec_plan_id:
+                return events
 
             if action.status == ActionStatus.PROCESSING:
                 events.append(
@@ -603,6 +601,8 @@ class DeepResearchEventConverter:
                 tool_call_id = str(uuid.uuid4())
 
             preflight_plan_id = self._get_unified_plan_id(action, force_associate=True)
+            if not preflight_plan_id:
+                return events
 
             if action.status == ActionStatus.PROCESSING:
                 tool_input = {}
@@ -691,6 +691,8 @@ class DeepResearchEventConverter:
                         normalized_input = parsed
 
             tool_plan_id = self._get_unified_plan_id(action, force_associate=True)
+            if not tool_plan_id:
+                return events
 
             if is_plan_tool and action.action_type == "todo_update":
                 todo_id = None
@@ -745,7 +747,7 @@ class DeepResearchEventConverter:
                             )
 
                 if todos:
-                    self._update_todo_state(todos, replace_order=replace_order)
+                    self._update_todo_state(todos, replace_order=replace_order and not self._todo_state_manager.get_todo_state_list())
                     todo_payload = self._get_todo_state_list() or todos
 
                     events.append(
@@ -771,15 +773,9 @@ class DeepResearchEventConverter:
                             )
                         )
 
-                    plan_update_plan_id = None
-                    if action.action_type == "todo_update" and "updated_item" in plan_data:
-                        ui = plan_data["updated_item"]
-                        if isinstance(ui, dict) and ui.get("id"):
-                            plan_update_plan_id = ui["id"]
-
                     events.append(
                         PlanUpdateEvent(
-                            id=f"{event_id}_plan", planId=plan_update_plan_id, timestamp=timestamp, todos=todo_payload
+                            id=self.virtual_plan_id, planId=None, timestamp=timestamp, todos=todo_payload
                         )
                     )
             else:
@@ -815,7 +811,7 @@ class DeepResearchEventConverter:
                         TodoItem(id=str(step["id"]), content=str(step["content"]), status=status)
                     )
                 events.append(
-                    PlanUpdateEvent(id=f"{event_id}_plan_final", planId=None, timestamp=timestamp, todos=final_todos)
+                    PlanUpdateEvent(id=self.virtual_plan_id, planId=None, timestamp=timestamp, todos=final_todos)
                 )
 
             events.append(
