@@ -11,9 +11,14 @@ from datus.configuration.node_config import DEFAULT_MAX_REFLECTION_ROUNDS, DEFAU
 from datus.configuration.node_type import NodeType
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
-from datus.schemas.node_models import (STRATEGY_LIST, ReflectionInput,
-                                       ReflectionResult, SQLContext,
-                                       StrategyType)
+from datus.schemas.node_models import (
+    STRATEGY_LIST,
+    ReflectionInput,
+    ReflectionResult,
+    SQLContext,
+    SqlTask,
+    StrategyType,
+)
 from datus.utils.env import get_env_int
 from datus.utils.loggings import get_logger
 
@@ -58,9 +63,16 @@ class ReflectNode(Node):
             return {"success": False, "message": f"Reflection context update failed: {str(e)}"}
 
     def setup_input(self, workflow: Workflow) -> Dict:
-        task_description = ""
+        task_description = None
         if hasattr(workflow, "task") and workflow.task is not None:
-            task_description = getattr(workflow.task, "task", None) or str(workflow.task)
+            if isinstance(workflow.task, SqlTask):
+                task_description = workflow.task
+            elif isinstance(workflow.task, dict):
+                task_description = SqlTask(**workflow.task)
+            else:
+                task_description = SqlTask(task=str(workflow.task))
+        if task_description is None:
+            task_description = SqlTask(task="")
         sql_contexts = []
         if hasattr(workflow, "context") and workflow.context:
             sql_contexts = getattr(workflow.context, "sql_contexts", None) or []
