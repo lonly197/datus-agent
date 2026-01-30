@@ -70,6 +70,8 @@ class DeepResearchEventConverter:
         # Virtual plan management
         self.virtual_plan_id = PlanIdManager.new_plan_id()
         self._virtual_step_manager = VirtualStepManager(self.virtual_plan_id)
+        # Instance-level alias to avoid missing attribute in some reload scenarios
+        self.VIRTUAL_STEPS = VIRTUAL_STEPS
         # Backward-compatible alias (some code paths still reference this name)
         self.virtual_plan_emitted = self._virtual_step_manager.virtual_plan_emitted
 
