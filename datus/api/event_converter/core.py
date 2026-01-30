@@ -12,7 +12,7 @@ orchestrates event conversion from ActionHistory to DeepResearchEvent format.
 import time
 import uuid
 from collections import deque
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
