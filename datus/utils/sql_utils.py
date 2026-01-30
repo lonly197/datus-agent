@@ -32,8 +32,10 @@ __all__ = [
     "extract_enum_values_from_comment",
     # DDL cleaner
     "fix_truncated_ddl",
+    "fix_missing_commas_in_ddl",
     "is_likely_truncated_ddl",
     "sanitize_ddl_for_storage",
+    "ddl_has_missing_commas",
     # Dialect support
     "extract_starrocks_properties",
     "parse_read_dialect",
@@ -45,13 +47,19 @@ __all__ = [
     # Core utilities
     "extract_table_names",
     "metadata_identifier",
+    "normalize_sql",
+    "format_sql_to_pretty",
     "parse_sql_type",
     "parse_context_switch",
+    "parse_table_name_parts",
+    "parse_table_names_parts",
     "validate_and_suggest_sql_fixes",
+    "_first_statement",
     # Constants
     "MAX_SQL_LENGTH",
     "MAX_COLUMN_NAME_LENGTH",
     "MAX_TABLE_NAME_LENGTH",
     "MAX_COMMENT_LENGTH",
     "MAX_TYPE_DEFINITION_LENGTH",
+    "MAX_PAREN_DEPTH",
 ]

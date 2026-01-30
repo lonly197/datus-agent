@@ -29,6 +29,232 @@ logger = get_logger(__name__)
 # ADDITIONAL UTILITY FUNCTIONS
 # =============================================================================
 
+def strip_sql_comments(sql: str) -> str:
+    """Remove /* ... */ and -- ... comments (simple but effective)."""
+    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
+    sql = re.sub(r"--.*?$", " ", sql, flags=re.MULTILINE)
+    return sql
+
+
+def _is_escaped(text: str, index: int) -> bool:
+    """Return True if the character at index is escaped by an odd number of backslashes."""
+    backslash_count = 0
+    position = index - 1
+    while position >= 0 and text[position] == "\\":
+        backslash_count += 1
+        position -= 1
+    return backslash_count % 2 == 1
+
+
+_DOLLAR_QUOTE_RE = re.compile(r"\$[A-Za-z_0-9]*\$")
+
+
+def _match_dollar_tag(text: str, index: int) -> Optional[str]:
+    """Return the dollar-quote tag starting at index, if any."""
+    match = _DOLLAR_QUOTE_RE.match(text, index)
+    if not match:
+        return None
+    return match.group(0)
+
+
+def _first_statement(sql: str) -> str:
+    """Return the first non-empty statement (before the first ';'), with comments removed."""
+    s = strip_sql_comments(sql).strip()
+    if not s:
+        return ""
+
+    in_single_quote = False
+    in_double_quote = False
+    in_backtick = False
+    in_bracket = False
+    dollar_tag: Optional[str] = None
+
+    i = 0
+    length = len(s)
+    while i < length:
+        ch = s[i]
+
+        if dollar_tag:
+            if s.startswith(dollar_tag, i):
+                i += len(dollar_tag)
+                dollar_tag = None
+                continue
+            i += 1
+            continue
+
+        if in_single_quote:
+            if ch == "'":
+                if i + 1 < length and s[i + 1] == "'":
+                    i += 2
+                    continue
+                if not _is_escaped(s, i):
+                    in_single_quote = False
+            i += 1
+            continue
+
+        if in_double_quote:
+            if ch == '"':
+                if i + 1 < length and s[i + 1] == '"':
+                    i += 2
+                    continue
+                if not _is_escaped(s, i):
+                    in_double_quote = False
+            i += 1
+            continue
+
+        if in_backtick:
+            if ch == "`":
+                if i + 1 < length and s[i + 1] == "`":
+                    i += 2
+                    continue
+                in_backtick = False
+            i += 1
+            continue
+
+        if in_bracket:
+            if ch == "]":
+                in_bracket = False
+            i += 1
+            continue
+
+        if ch == "'":
+            in_single_quote = True
+            i += 1
+            continue
+        if ch == '"':
+            in_double_quote = True
+            i += 1
+            continue
+        if ch == "`":
+            in_backtick = True
+            i += 1
+            continue
+        if ch == "[":
+            in_bracket = True
+            i += 1
+            continue
+        if ch == "$":
+            tag = _match_dollar_tag(s, i)
+            if tag:
+                dollar_tag = tag
+                i += len(tag)
+                continue
+
+        if ch == ";":
+            return s[:i].strip()
+
+        i += 1
+
+    return s.strip()
+
+
+def normalize_sql(sql: str) -> str:
+    """Normalize SQL text by removing extra whitespace and line breaks."""
+    if not sql:
+        return sql
+    s = re.sub(r"[\r\n\t]+", " ", sql)
+    s = re.sub(r" +", " ", s)
+    return s.strip()
+
+
+def format_sql_to_pretty(sql: str, dialect: str) -> str:
+    """Pretty print SQL if possible, otherwise return the original text."""
+    if not sql:
+        return sql
+    read_dialect = parse_read_dialect(dialect)
+    try:
+        formatted = sqlglot.transpile(sql, read=read_dialect, pretty=True)
+        if formatted:
+            return formatted[0]
+    except Exception as exc:
+        logger.debug(f"Failed to format SQL for download: {exc}")
+    return sql
+
+
+def parse_table_name_parts(full_table_name: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, str]:
+    """
+    Parse a full table name into its component parts (catalog, database, schema, table).
+    """
+    dialect = parse_dialect(dialect)
+    parts = full_table_name.split(".") if full_table_name else []
+    result = {"catalog_name": "", "database_name": "", "schema_name": "", "table_name": ""}
+
+    if dialect == "duckdb":
+        if len(parts) == 1:
+            result["table_name"] = parts[0]
+        elif len(parts) == 2:
+            result["schema_name"] = parts[0]
+            result["table_name"] = parts[1]
+        elif len(parts) == 3:
+            result["database_name"] = parts[0]
+            result["schema_name"] = parts[1]
+            result["table_name"] = parts[2]
+        else:
+            result["database_name"] = parts[-3] if len(parts) > 2 else ""
+            result["schema_name"] = parts[-2] if len(parts) > 1 else ""
+            result["table_name"] = parts[-1] if parts else ""
+
+    elif dialect == "sqlite":
+        if len(parts) == 1:
+            result["table_name"] = parts[0]
+        elif len(parts) == 2:
+            result["database_name"] = parts[0]
+            result["table_name"] = parts[1]
+        else:
+            result["database_name"] = parts[-2] if len(parts) > 1 else ""
+            result["table_name"] = parts[-1] if parts else ""
+
+    elif dialect == "starrocks":
+        if len(parts) == 1:
+            result["table_name"] = parts[0]
+        elif len(parts) == 2:
+            result["database_name"] = parts[0]
+            result["table_name"] = parts[1]
+        elif len(parts) == 3:
+            result["catalog_name"] = parts[0]
+            result["database_name"] = parts[1]
+            result["table_name"] = parts[2]
+        else:
+            result["catalog_name"] = parts[-3] if len(parts) > 2 else ""
+            result["database_name"] = parts[-2] if len(parts) > 1 else ""
+            result["table_name"] = parts[-1] if parts else ""
+
+    elif dialect == "snowflake":
+        if len(parts) == 1:
+            result["table_name"] = parts[0]
+        elif len(parts) == 2:
+            result["schema_name"] = parts[0]
+            result["table_name"] = parts[1]
+        elif len(parts) == 3:
+            result["database_name"] = parts[0]
+            result["schema_name"] = parts[1]
+            result["table_name"] = parts[2]
+        elif len(parts) == 4:
+            result["catalog_name"] = parts[0]
+            result["database_name"] = parts[1]
+            result["schema_name"] = parts[2]
+            result["table_name"] = parts[3]
+        else:
+            result["catalog_name"] = parts[-4] if len(parts) > 3 else ""
+            result["database_name"] = parts[-3] if len(parts) > 2 else ""
+            result["schema_name"] = parts[-2] if len(parts) > 1 else ""
+            result["table_name"] = parts[-1] if parts else ""
+    else:
+        result["table_name"] = parts[-1] if parts else ""
+        if len(parts) > 1:
+            result["schema_name"] = parts[-2]
+        if len(parts) > 2:
+            result["database_name"] = parts[-3]
+        if len(parts) > 3:
+            result["catalog_name"] = parts[-4]
+
+    return result
+
+
+def parse_table_names_parts(full_table_names: List[str], dialect: str = DBType.SNOWFLAKE) -> List[Dict[str, str]]:
+    """Parse a list of full table names into their component parts."""
+    return [parse_table_name_parts(table_name, dialect) for table_name in full_table_names]
+
 def extract_table_names(sql, dialect=DBType.SNOWFLAKE, ignore_empty=False) -> List[str]:
     """Extract fully qualified table names from SQL."""
     is_valid, error_msg = validate_sql_input(sql)
