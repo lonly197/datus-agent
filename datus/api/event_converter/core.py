@@ -306,7 +306,7 @@ class DeepResearchEventConverter:
                 id=event_id,
                 planId=self._get_unified_plan_id(action, force_associate=True),
                 timestamp=timestamp,
-                message=error_msg
+                error=error_msg
             ))
 
         # Validate event flow

@@ -104,6 +104,7 @@ class NodeErrorResult(BaseResult):
         """
         super().__init__(success=success, error=error_message if error_message else "", **kwargs)
         self.error_code = error_code
+        self.error_message = error_message
         self.error_details = error_details or {}
         self.node_context = node_context or {}
         self.retryable = retryable

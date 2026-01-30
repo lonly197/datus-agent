@@ -27,6 +27,7 @@ from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.schema_discovery_metrics import (
     SchemaDiscoveryMetrics,
+    SearchStage,
     global_metrics_collector,
 )
 
@@ -244,6 +245,14 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                     model=self.model,
                 )
 
+            # Initialize metrics (if not already)
+            if self._metrics is None:
+                self._metrics = SchemaDiscoveryMetrics(
+                    workflow_id=getattr(self.workflow, "id", ""),
+                    query_id=getattr(task, "id", ""),
+                )
+            self._metrics.start_discovery(getattr(task, "task", ""))
+
             # Get candidate tables
             candidate_tables, candidate_details, discovery_stats = await discover_candidate_tables(
                 task=task,
@@ -309,6 +318,8 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 )
 
                 self.result = BaseResult(success=False, error=error_msg)
+                self._metrics.end_discovery([])
+                global_metrics_collector.record(self._metrics)
                 return
 
             # Emit success action
@@ -348,9 +359,20 @@ class SchemaDiscoveryNode(Node, LLMMixin):
             logger.info(
                 f"Schema discovery completed: found {len(candidate_tables)} candidate tables for intent '{intent}'"
             )
+            self._metrics.end_discovery(candidate_tables)
+            global_metrics_collector.record(self._metrics)
 
         except Exception as e:
             logger.error(f"Schema discovery failed: {e}")
+            if self._metrics is None:
+                self._metrics = SchemaDiscoveryMetrics(
+                    workflow_id=getattr(self.workflow, "id", ""),
+                    query_id=getattr(self.workflow.task, "id", "") if self.workflow and self.workflow.task else "",
+                )
+                self._metrics.start_discovery(getattr(self.workflow.task, "task", "") if self.workflow and self.workflow.task else "")
+            self._metrics.record_error(SearchStage.EXPLICIT, e, context={"node_id": self.id})
+            self._metrics.end_discovery([])
+            global_metrics_collector.record(self._metrics)
             error_result = self.create_error_result(
                 ErrorCode.NODE_EXECUTION_FAILED,
                 f"Schema discovery execution failed: {str(e)}",
