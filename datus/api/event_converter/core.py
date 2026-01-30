@@ -880,10 +880,15 @@ class DeepResearchEventConverter:
                 node_desc = action.input.get("description", node_desc)
 
             content = f"🔄 **Executing Step**: {node_desc}"
+            node_plan_id = None
+            if node_type:
+                node_plan_id = self._get_virtual_step_id(node_type)
+            if not node_plan_id:
+                node_plan_id = self._extract_todo_id_from_action(action)
             events.append(
                 ChatEvent(
                     id=event_id,
-                    planId=self._get_unified_plan_id(action, force_associate=True),
+                    planId=node_plan_id,
                     timestamp=timestamp,
                     content=content,
                 )
@@ -892,6 +897,10 @@ class DeepResearchEventConverter:
         # Handle errors
         elif action.status == ActionStatus.FAILED:
             error_plan_id = self._get_unified_plan_id(action, force_associate=False)
+            if not error_plan_id and action.input and isinstance(action.input, dict):
+                node_type = action.input.get("node_type")
+                if node_type:
+                    error_plan_id = self._get_virtual_step_id(node_type)
 
             error_msg = action.messages or "Unknown error"
             if action.output and isinstance(action.output, dict):
