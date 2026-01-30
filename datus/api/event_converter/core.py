@@ -49,12 +49,13 @@ from .sql_processing import (
     generate_sql_summary,
     format_diagnostic_report,
 )
-from .virtual_steps import VirtualStepManager, TodoStateManager
+from .virtual_steps import VirtualStepManager, TodoStateManager, VIRTUAL_STEPS
 from .streaming import convert_stream_to_events as _convert_stream_to_events
 
 
 class DeepResearchEventConverter:
     """Converts ActionHistory events to DeepResearchEvent format."""
+    VIRTUAL_STEPS = VIRTUAL_STEPS
 
     def __init__(self):
         """Initialize the event converter."""
