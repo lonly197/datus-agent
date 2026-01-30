@@ -50,6 +50,7 @@ from .sql_processing import (
     format_diagnostic_report,
 )
 from .virtual_steps import VirtualStepManager, TodoStateManager
+from .streaming import convert_stream_to_events as _convert_stream_to_events
 
 
 class DeepResearchEventConverter:
@@ -110,6 +111,11 @@ class DeepResearchEventConverter:
     def _hash_text(self, s: str) -> str:
         """Generate hash for text deduplication."""
         return hash_text(s)
+
+    async def convert_stream_to_events(self, action_stream):
+        """Backward-compatible wrapper for streaming conversion."""
+        async for event in _convert_stream_to_events(action_stream, self):
+            yield event
 
     # Event validation helpers (delegates to event_validation module)
     def _extract_plan_from_output(self, output: Any) -> Dict[str, Any]:
