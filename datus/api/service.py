@@ -1051,6 +1051,15 @@ class DatusAPIService:
             if self.task_store:
                 self.task_store.update_task(task_id, status="failed")
 
+            # Always emit CompleteEvent after error to finalize stream
+            complete_event = CompleteEvent(
+                id=f"complete_{int(time.time() * 1000)}",
+                timestamp=int(time.time() * 1000),
+                event=DeepResearchEventType.COMPLETE,
+                content="",
+            )
+            yield f"data: {complete_event.model_dump_json()}\n\n"
+
     async def health_check(self) -> HealthResponse:
         """Perform health check on the service."""
         try:

@@ -58,9 +58,15 @@ class ReflectNode(Node):
             return {"success": False, "message": f"Reflection context update failed: {str(e)}"}
 
     def setup_input(self, workflow: Workflow) -> Dict:
+        task_description = ""
+        if hasattr(workflow, "task") and workflow.task is not None:
+            task_description = getattr(workflow.task, "task", None) or str(workflow.task)
+        sql_contexts = []
+        if hasattr(workflow, "context") and workflow.context:
+            sql_contexts = getattr(workflow.context, "sql_contexts", None) or []
         next_input = ReflectionInput(
-            task_description=workflow.task,
-            sql_context=workflow.context.sql_contexts,
+            task_description=task_description,
+            sql_context=sql_contexts,
         )
         self.input = next_input
         return {"success": True, "message": "Node input appears valid", "suggestions": [next_input]}
@@ -82,9 +88,12 @@ class ReflectNode(Node):
 
         # Check if input is None - this can happen if setup_input was not called properly
         if self.input is None:
-            error_msg = "Reflection input is not initialized"
-            logger.error(error_msg)
-            return ReflectionResult(success=False, error=error_msg, strategy="UNKNOWN", details={})
+            if self.workflow is not None:
+                self.setup_input(self.workflow)
+            if self.input is None:
+                error_msg = "Reflection input is not initialized"
+                logger.error(error_msg)
+                return ReflectionResult(success=False, error=error_msg, strategy="UNKNOWN", details={})
 
         task = self.input.task_description
 

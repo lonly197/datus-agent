@@ -287,6 +287,26 @@ class DeepResearchEventConverter:
                         self._recent_assistant_hashes.append(h)
                     events.append(ChatEvent(id=event_id, planId=chat_plan_id, timestamp=timestamp, content=content))
 
+        # Handle workflow completion (always emit CompleteEvent)
+        if action.action_type == "workflow_completion":
+            if self.virtual_plan_emitted:
+                final_todos = []
+                for step in self.VIRTUAL_STEPS:
+                    status = TodoStatus.ERROR if step["id"] in self._virtual_step_manager.failed_virtual_steps else TodoStatus.COMPLETED
+                    final_todos.append(TodoItem(id=str(step["id"]), content=str(step["content"]), status=status))
+                events.append(
+                    PlanUpdateEvent(id=f"{event_id}_plan_final", planId=None, timestamp=timestamp, todos=final_todos)
+                )
+
+            events.append(
+                CompleteEvent(
+                    id=event_id,
+                    planId=None,
+                    timestamp=timestamp,
+                    content=action.messages or "",
+                )
+            )
+
         # Handle completion
         if action.action_type == "complete":
             events.append(CompleteEvent(id=event_id, timestamp=timestamp, content=""))
@@ -300,7 +320,10 @@ class DeepResearchEventConverter:
                 error_msg = action.output
 
             if not error_msg:
-                error_msg = f"Action {action.action_type} failed"
+                if action.messages:
+                    error_msg = action.messages
+                else:
+                    error_msg = f"Action {action.action_type} failed"
 
             events.append(ErrorEvent(
                 id=event_id,
