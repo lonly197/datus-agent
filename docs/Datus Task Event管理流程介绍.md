@@ -198,7 +198,7 @@ class TaskStore:
 | ID 变量 | 类型 | 用途 | 生命周期 | 稳定性 | 前端可见 |
 |---------|------|------|----------|--------|----------|
 | **virtual_plan_id** | UUID | **整体计划关联标识** | 实例级，不变 | ✅ 稳定 | ✅ 是 |
-| **virtual_step_id** | 字符串 | **步骤级事件关联标识** | 会话级，对应特定步骤 | ✅ 稳定 | ✅ 是 |
+| **virtual_step_id** | 字符串 | **步骤级 TodoItem ID** | 会话级，对应特定步骤 | ✅ 稳定 | ✅ 是 |
 | **active_virtual_step_id** | 字符串 | **内部状态跟踪** | 会话级，动态变化 | ❌ 变化 | ❌ 否 |
 | **failed_virtual_steps** | Set[str] | **失败步骤跟踪** | 会话级，动态变化 | ❌ 变化 | ✅ 是 (ERROR状态) |
 | **todo_id** | 字符串 | **特定任务标识** | 单次 action，可能为空 | ⚠️ 不确定 | ✅ 是 |
@@ -229,7 +229,7 @@ class TaskStore:
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │  virtual_step_id (步骤级事件关联标识)                      │  │
+│  │  virtual_step_id (步骤级 TodoItem ID)                      │  │
 │  │  - 用途: ToolCallEvent.planId，绑定到特定 TodoItem          │  │
 │  │  - 来源: _get_virtual_step_id(action.action_type)          │  │
 │  │  - 映射: schema_discovery → "step_schema"                  │  │
@@ -442,7 +442,7 @@ def _get_unified_plan_id(
             - False: 事件不需要关联（一般 ChatEvent）
 
     Returns:
-        planId 优先级: todo_id > virtual_step_id > virtual_plan_id > None
+        planId 优先级: todo_id > virtual_step_id > None
     """
     # 1. 优先从 action 提取 todo_id（Agentic workflows，最精确）
     todo_id = self._extract_todo_id_from_action(action)
@@ -458,11 +458,7 @@ def _get_unified_plan_id(
     if virtual_step_id:
         return virtual_step_id
 
-    # 3. 对于需要强制关联的事件，使用 virtual_plan_id（整体计划关联）
-    if force_associate:
-        return self.virtual_plan_id
-
-    # 4. 其他情况返回 None
+    # 3. 其他情况返回 None
     return None
 ```
 
@@ -657,6 +653,26 @@ ToolCallResultEvent (data={row_count, result, ...}, error=bool)
 ```
 
 ---
+
+
+## 5.6 PlanId 绑定规则（统一规范）
+
+**统一原则**：planId 仅用于绑定 TodoItem.id（Text2SQL 使用 virtual_step_id 作为 TodoItem.id）。
+
+**强制规则**：
+1. `PlanUpdateEvent.planId` 必须为 `None`，`PlanUpdateEvent.id` 必须为 `virtual_plan_id`。
+2. `CompleteEvent.planId` 必须为 `None`。
+3. `ToolCallEvent` / `ToolCallResultEvent` / `ErrorEvent` / `ChatEvent`：
+   - planId 为空 ⇒ 独立事件；
+   - planId 非空 ⇒ 必须等于某个 `TodoItem.id`。
+4. `PlanUpdateEvent` 用于：
+   - 任务开始前发送完整 todos；
+   - 更新 todos 中的 status；
+   - Reflect/ReAct 后追加新的 TodoItem（只允许 append）。
+5. todos 列表一旦生成，**顺序与 ID 不可变**（仅允许状态变更）。
+6. 最终输出通过 `ChatEvent` 输出：默认 planId 为空，只有属于某个 TodoItem 执行子计划时才绑定 planId。
+
+**planId 生成优先级**：`todo_id > virtual_step_id > None`。
 
 ## 6. 任务生命周期管理
 

@@ -435,6 +435,11 @@ class DeepResearchEventConverter:
 
             schema_plan_id = self._get_unified_plan_id(action, force_associate=True)
             if not schema_plan_id:
+                self.logger.warning(
+                    "Skipping ToolCallEvent for schema_discovery due to missing planId "
+                    "(no todo_id/virtual_step_id mapping). action_id=%s",
+                    action.action_id,
+                )
                 return events
 
             events.append(
@@ -481,6 +486,11 @@ class DeepResearchEventConverter:
 
             validation_plan_id = self._get_unified_plan_id(action, force_associate=True)
             if not validation_plan_id:
+                self.logger.warning(
+                    "Skipping ToolCallEvent for schema_validation due to missing planId "
+                    "(no todo_id/virtual_step_id mapping). action_id=%s",
+                    action.action_id,
+                )
                 return events
 
             events.append(
@@ -560,6 +570,11 @@ class DeepResearchEventConverter:
 
             exec_plan_id = self._get_unified_plan_id(action, force_associate=True)
             if not exec_plan_id:
+                self.logger.warning(
+                    "Skipping ToolCallEvent for sql_execution due to missing planId "
+                    "(no todo_id/virtual_step_id mapping). action_id=%s",
+                    action.action_id,
+                )
                 return events
 
             if action.status == ActionStatus.PROCESSING:
@@ -602,6 +617,12 @@ class DeepResearchEventConverter:
 
             preflight_plan_id = self._get_unified_plan_id(action, force_associate=True)
             if not preflight_plan_id:
+                self.logger.warning(
+                    "Skipping ToolCallEvent for preflight tool due to missing planId "
+                    "(no todo_id/virtual_step_id mapping). action_type=%s action_id=%s",
+                    action.action_type,
+                    action.action_id,
+                )
                 return events
 
             if action.status == ActionStatus.PROCESSING:
@@ -692,6 +713,12 @@ class DeepResearchEventConverter:
 
             tool_plan_id = self._get_unified_plan_id(action, force_associate=True)
             if not tool_plan_id:
+                self.logger.warning(
+                    "Skipping ToolCallEvent due to missing planId "
+                    "(no todo_id/virtual_step_id mapping). action_type=%s action_id=%s",
+                    action.action_type,
+                    action.action_id,
+                )
                 return events
 
             if is_plan_tool and action.action_type == "todo_update":
