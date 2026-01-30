@@ -10,7 +10,7 @@ coordinating between different search strategies.
 """
 
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from datus.utils.chinese_query_utils import contains_chinese
 from datus.utils.loggings import get_logger
