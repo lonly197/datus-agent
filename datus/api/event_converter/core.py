@@ -69,6 +69,8 @@ class DeepResearchEventConverter:
         # Virtual plan management
         self.virtual_plan_id = PlanIdManager.new_plan_id()
         self._virtual_step_manager = VirtualStepManager(self.virtual_plan_id)
+        # Backward-compatible alias (some code paths still reference this name)
+        self.virtual_plan_emitted = self._virtual_step_manager.virtual_plan_emitted
 
         # Todo state management
         self._todo_state_manager = TodoStateManager()
@@ -76,6 +78,14 @@ class DeepResearchEventConverter:
         # Active todo tracking
         self.active_todo_item_id: str = None
         self.todo_item_action_map: Dict[str, str] = {}
+
+    @property
+    def virtual_plan_emitted(self) -> bool:
+        return self._virtual_step_manager.virtual_plan_emitted
+
+    @virtual_plan_emitted.setter
+    def virtual_plan_emitted(self, value: bool) -> None:
+        self._virtual_step_manager.virtual_plan_emitted = value
 
     # Virtual step management (delegates to VirtualStepManager)
     def _get_virtual_step_id(self, node_type: str) -> str:

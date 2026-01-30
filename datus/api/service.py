@@ -37,6 +37,7 @@ from .auth import auth_service, get_current_client
 from .event_converter import DeepResearchEventConverter
 from .models import (
     ChatResearchRequest,
+    CompleteEvent,
     DeepResearchEventType,
     ErrorEvent,
     FeedbackRequest,
