@@ -217,7 +217,7 @@ class DeepResearchEventConverter:
     #
     # For the complete implementation, see the original event_converter.py file.
 
-        def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
+    def convert_action_to_event(self, action: ActionHistory, seq_num: int) -> List[DeepResearchEvent]:
         """Convert ActionHistory to DeepResearchEvent list."""
 
         timestamp = int(time.time() * 1000)
@@ -323,9 +323,7 @@ class DeepResearchEventConverter:
             if action.output and isinstance(action.output, dict):
                 sql = action.output.get("sql_query", "")
                 if sql:
-                    sql_content = f"```sql
-{sql}
-```"
+                    sql_content = f"```sql\n{sql}\n```"
 
             if sql_content:
                 sql_plan_id = self._get_unified_plan_id(action, force_associate=True)
@@ -380,15 +378,13 @@ class DeepResearchEventConverter:
                 ]
 
                 if warnings:
-                    content_lines.append(f"
-**警告** ({len(warnings)}):")
+                    content_lines.append(f"\n**警告** ({len(warnings)}):")
                     for warning in warnings[:3]:
                         content_lines.append(f"- {warning}")
                     if len(warnings) > 3:
                         content_lines.append(f"- ...还有 {len(warnings) - 3} 个警告")
 
-                content = "
-".join(content_lines)
+                content = "\n".join(content_lines)
             else:
                 content_lines = [
                     "❌ **SQL验证失败**",
@@ -399,23 +395,20 @@ class DeepResearchEventConverter:
                 ]
 
                 if errors:
-                    content_lines.append(f"
-**错误** ({len(errors)}):")
+                    content_lines.append(f"\n**错误** ({len(errors)}):")
                     for error in errors[:3]:
                         content_lines.append(f"- {error}")
                     if len(errors) > 3:
                         content_lines.append(f"- ...还有 {len(errors) - 3} 个错误")
 
                 if warnings:
-                    content_lines.append(f"
-**警告** ({len(warnings)}):")
+                    content_lines.append(f"\n**警告** ({len(warnings)}):")
                     for warning in warnings[:3]:
                         content_lines.append(f"- {warning}")
                     if len(warnings) > 3:
                         content_lines.append(f"- ...还有 {len(warnings) - 3} 个警告")
 
-                content = "
-".join(content_lines)
+                content = "\n".join(content_lines)
 
             events.append(
                 ChatEvent(
@@ -905,16 +898,11 @@ class DeepResearchEventConverter:
 
                 suggestions = action.output.get("recovery_suggestions")
                 if suggestions and isinstance(suggestions, list):
-                    suggestions_str = "
-".join([f"- {s}" for s in suggestions])
-                    details.append(f"Suggestions:
-{suggestions_str}")
+                    suggestions_str = "\n".join([f"- {s}" for s in suggestions])
+                    details.append(f"Suggestions:\n{suggestions_str}")
 
                 if details:
-                    error_msg += "
-
-" + "
-".join(details)
+                    error_msg += "\n\n" + "\n".join(details)
 
             events.append(ErrorEvent(id=event_id, planId=error_plan_id, timestamp=timestamp, error=error_msg))
 
