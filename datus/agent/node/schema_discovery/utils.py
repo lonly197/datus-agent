@@ -255,11 +255,12 @@ def build_query_context(task) -> Dict[str, Any]:
     from datus.agent.workflow import Workflow
 
     context: Dict[str, Any] = {"task": task.task}
-    if isinstance(task.workflow, Workflow) and hasattr(task.workflow, "metadata") and task.workflow.metadata:
-        clarified_task = task.workflow.metadata.get("clarified_task")
+    workflow = getattr(task, "workflow", None)
+    if isinstance(workflow, Workflow) and hasattr(workflow, "metadata") and workflow.metadata:
+        clarified_task = workflow.metadata.get("clarified_task")
         if clarified_task:
             context["clarified_task"] = clarified_task
-        clarification = task.workflow.metadata.get("intent_clarification", {})
+        clarification = workflow.metadata.get("intent_clarification", {})
         if isinstance(clarification, dict):
             entities = clarification.get("entities", {})
             if entities:

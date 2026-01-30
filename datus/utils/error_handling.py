@@ -74,6 +74,7 @@ class NodeErrorResult(BaseResult):
     """
 
     error_code: str = ""
+    error_message: str = ""
     error_details: Dict[str, Any] = {}
     node_context: Dict[str, Any] = {}
     retryable: bool = False
