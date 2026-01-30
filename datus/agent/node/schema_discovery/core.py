@@ -385,7 +385,7 @@ class SchemaDiscoveryNode(Node, LLMMixin):
         """Execute the node synchronously."""
         return execute_with_async_stream(self._run_async())
 
-    async def execute_stream(self) -> AsyncGenerator[ActionHistory, None]:
+    async def execute_stream(self, action_history_manager=None) -> AsyncGenerator[ActionHistory, None]:
         """Execute the node with streaming output."""
         async for action in self.run():
             yield action

@@ -134,8 +134,9 @@ def extract_todo_id_from_action(action: ActionHistory) -> Optional[str]:
         Todo ID string or None
     """
     # Check metadata first
-    if action.metadata and isinstance(action.metadata, dict):
-        todo_id = action.metadata.get("todo_id")
+    metadata = getattr(action, "metadata", None)
+    if metadata and isinstance(metadata, dict):
+        todo_id = metadata.get("todo_id")
         if todo_id:
             return str(todo_id)
 
@@ -170,8 +171,9 @@ def get_unified_plan_id(
         Plan ID string or None
     """
     # First, try to extract from action metadata
-    if action.metadata and isinstance(action.metadata, dict):
-        plan_id = action.metadata.get("plan_id")
+    metadata = getattr(action, "metadata", None)
+    if metadata and isinstance(metadata, dict):
+        plan_id = metadata.get("plan_id")
         if plan_id:
             return str(plan_id)
 
@@ -209,8 +211,9 @@ def find_tool_call_id(action: ActionHistory, tool_call_map: Dict[str, str]) -> O
         return tool_call_map[action.action_id]
 
     # Try to extract from action metadata
-    if action.metadata and isinstance(action.metadata, dict):
-        call_id = action.metadata.get("tool_call_id")
+    metadata = getattr(action, "metadata", None)
+    if metadata and isinstance(metadata, dict):
+        call_id = metadata.get("tool_call_id")
         if call_id:
             return str(call_id)
 
@@ -237,8 +240,9 @@ def is_internal_todo_update(action: ActionHistory) -> bool:
         return True
 
     # Check metadata
-    if action.metadata and isinstance(action.metadata, dict):
-        if action.metadata.get("internal_todo"):
+    metadata = getattr(action, "metadata", None)
+    if metadata and isinstance(metadata, dict):
+        if metadata.get("internal_todo"):
             return True
 
     return False
@@ -258,8 +262,9 @@ def extract_node_type_from_action(action: ActionHistory) -> Optional[str]:
         return action.action_type
 
     # Check metadata
-    if action.metadata and isinstance(action.metadata, dict):
-        node_type = action.metadata.get("node_type")
+    metadata = getattr(action, "metadata", None)
+    if metadata and isinstance(metadata, dict):
+        node_type = metadata.get("node_type")
         if node_type:
             return str(node_type)
 
