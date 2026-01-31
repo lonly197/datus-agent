@@ -129,6 +129,26 @@ class WorkflowNavigator:
         logger.warning(f"Output node not found after current position in node_order")
         return False
 
+    def jump_to_node_type(self, node_type: str) -> bool:
+        """Jump to the next node with the given type."""
+        if not self.workflow or not self.workflow.nodes:
+            return False
+        current_idx = self.workflow.current_node_index
+        if current_idx is None:
+            return False
+        max_search_range = min(len(self.workflow.node_order), current_idx + 100)
+        for i in range(current_idx + 1, max_search_range):
+            node_id = self.workflow.node_order[i]
+            node = self.workflow.nodes.get(node_id)
+            if not node:
+                continue
+            if node.type == node_type and node.status not in ["completed", "skipped"]:
+                self.workflow.current_node_index = i
+                logger.info(f"Jumping to node '{node_id}' (type={node_type}) at index {i}")
+                return True
+        logger.warning(f"No node of type '{node_type}' found for retry")
+        return False
+
     def find_output_node(self):
         """Find and return the output node."""
         if not self.workflow or not self.workflow.nodes:

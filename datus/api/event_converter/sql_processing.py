@@ -69,6 +69,20 @@ def generate_sql_summary(sql: str, result: str, row_count: int) -> str:
     return "\n".join(lines)
 
 
+def generate_sql_failure_report(metadata: Dict[str, Any]) -> str:
+    """Generate a failure report for SQL generation failures."""
+    reason = metadata.get("termination_reason", "") if metadata else ""
+    stage = metadata.get("failure_stage", "") if metadata else ""
+    lines = ["## ❌ SQL生成失败报告", ""]
+    if stage:
+        lines.append(f"**失败阶段**: {stage}")
+    if reason:
+        lines.append(f"**失败原因**: {reason}")
+    if not reason:
+        lines.append("**失败原因**: SQL生成或校验未通过")
+    return "\n".join(lines)
+
+
 def format_diagnostic_report(report: Dict[str, Any]) -> str:
     """Format schema discovery failure report for user display.
 

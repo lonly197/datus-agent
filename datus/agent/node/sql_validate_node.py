@@ -174,28 +174,30 @@ class SQLValidateNode(Node):
                 if self.workflow:
                     if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
                         self.workflow.metadata = {}
-                    # Check if reflection retries are exhausted before skipping to reflect
-                    # Priority: agent.yml configuration > constants default > environment variable fallback
-                    if hasattr(self.workflow, "_global_config") and hasattr(self.workflow._global_config, "reflection_config"):
-                        max_reflection_rounds = self.workflow._global_config.reflection_config.max_reflection_rounds
+                    # Retry SQL generation/validation before reflection
+                    max_retries = get_env_int("SQL_VALIDATE_MAX_RETRIES", 3)
+                    retry_count = int(self.workflow.metadata.get("sql_retry_count", 0))
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        self.workflow.metadata["sql_retry_count"] = retry_count
+                        self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.RETRY_SQL
+                        self.workflow.metadata["retry_target_node_type"] = "generate_sql"
+                        self.workflow.metadata["termination_reason"] = (
+                            f"SQL validation failed; retrying SQL generation ({retry_count}/{max_retries})"
+                        )
+                        logger.info(
+                            f"SQL validation failed, retrying SQL generation ({retry_count}/{max_retries})"
+                        )
                     else:
-                        max_reflection_rounds = get_env_int("MAX_REFLECTION_ROUNDS", DEFAULT_MAX_REFLECTION_ROUNDS)
-                    current_reflection_round = getattr(self.workflow, "reflection_round", 0)
-                    if current_reflection_round >= max_reflection_rounds:
-                        # Reflection exhausted, proceed to output for final report
+                        # Retries exhausted, proceed to output for final report
                         self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
                         self.workflow.metadata["termination_reason"] = (
-                            f"Max reflection rounds ({max_reflection_rounds}) exceeded after SQL validation failed"
+                            f"SQL validation failed after {max_retries} retries"
                         )
+                        self.workflow.metadata["sql_generation_failed"] = True
+                        self.workflow.metadata["failure_stage"] = "sql_validation"
                         logger.info(
-                            f"SQL validation failed but reflection exhausted (round {current_reflection_round}/{max_reflection_rounds}), "
-                            "proceeding to output"
-                        )
-                    else:
-                        # Still have reflection retries available, skip to reflect
-                        self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
-                        logger.info(
-                            f"SQL validation failed, skipping to reflect (round {current_reflection_round}/{max_reflection_rounds})"
+                            f"SQL validation failed after {max_retries} retries, proceeding to output"
                         )
                 yield ActionHistory(
                     action_id=f"{self.id}_validation",

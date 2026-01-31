@@ -112,6 +112,19 @@ class WorkflowExecutor:
             logger.info("Strategies exhausted, proceeding to output node for report generation")
             # Clear termination status to allow normal continuation
             self.workflow.metadata.pop("termination_status", None)
+        elif termination_status == WorkflowTerminationStatus.RETRY_SQL:
+            # Jump back to SQL generation for retry
+            target = self.workflow.metadata.get("retry_target_node_type", "generate_sql")
+            from datus.agent.runner.workflow_navigator import WorkflowNavigator
+            navigator = WorkflowNavigator(self.workflow)
+            jumped = navigator.jump_to_node_type(target)
+            if not jumped:
+                logger.warning("Retry target not found, proceeding to output")
+                self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+            # mark as soft failure but do not reflect
+            is_soft_failure = True
+            jump_to_reflect = False
+            self.workflow.metadata.pop("termination_status", None)
         elif termination_status == WorkflowTerminationStatus.TERMINATE_WITH_ERROR:
             from datus.agent.runner.workflow_termination import WorkflowTerminationManager
 
@@ -451,11 +464,18 @@ class WorkflowExecutor:
                             self.workflow.advance_to_next_node()
                         elif is_soft_failure:
                             logger.warning(f"Node evaluation failed but continuing due to Soft Failure mode: {evaluation}")
-                            # Jump directly to reflect node for recovery instead of advancing sequentially
-                            jumped = navigator.jump_to_reflect_node()
-                            if not jumped:
-                                # No reflect node found, fall back to normal advancement
-                                self.workflow.advance_to_next_node()
+                            retry_target = self.workflow.metadata.get("retry_target_node_type")
+                            if retry_target:
+                                jumped = navigator.jump_to_node_type(retry_target)
+                                self.workflow.metadata.pop("retry_target_node_type", None)
+                                if not jumped:
+                                    self.workflow.advance_to_next_node()
+                            else:
+                                # Jump directly to reflect node for recovery instead of advancing sequentially
+                                jumped = navigator.jump_to_reflect_node()
+                                if not jumped:
+                                    # No reflect node found, fall back to normal advancement
+                                    self.workflow.advance_to_next_node()
                         else:
                             logger.warning(f"Node evaluation failed: {evaluation}")
                             current_node.status = "failed"

@@ -73,6 +73,8 @@ class VirtualStepManager:
         self.completed_virtual_steps: set[str] = set()
         # Track failed virtual steps for proper ERROR status in PlanUpdateEvent
         self.failed_virtual_steps: set[str] = set()
+        # Track seen steps in stable order (append-only)
+        self._seen_steps: List[str] = []
 
     def get_virtual_step_id(self, node_type: str) -> Optional[str]:
         """Map node type to virtual step ID.
@@ -106,20 +108,24 @@ class VirtualStepManager:
         current_step_id = self.get_virtual_step_id(current_node_type) if current_node_type else None
         if current_step_id:
             self.active_virtual_step_id = current_step_id
+            if current_step_id not in self._seen_steps:
+                self._seen_steps.append(current_step_id)
 
-        # Find active step index
+        # Only emit when we have seen steps
+        if not self._seen_steps:
+            return None
+
+        # Find active step index within seen steps
         active_index = -1
-        if self.active_virtual_step_id:
-            active_index = next(
-                (i for i, step in enumerate(VIRTUAL_STEPS)
-                 if str(step["id"]) == self.active_virtual_step_id),
-                -1
-            )
+        if self.active_virtual_step_id and self.active_virtual_step_id in self._seen_steps:
+            active_index = self._seen_steps.index(self.active_virtual_step_id)
 
         # Build todos with status priority
         todos = []
-        for i, step in enumerate(VIRTUAL_STEPS):
-            step_id = str(step["id"])
+        for i, step_id in enumerate(self._seen_steps):
+            step = next((s for s in VIRTUAL_STEPS if str(s["id"]) == step_id), None)
+            if not step:
+                continue
 
             if step_id in self.failed_virtual_steps:
                 status = TodoStatus.ERROR
@@ -136,10 +142,11 @@ class VirtualStepManager:
 
             todos.append(TodoItem(
                 id=step_id,
-                content=str(step["content"]),
+                content=str(step["content"]) if step else step_id,
                 status=status
             ))
 
+        self.virtual_plan_emitted = True
         return PlanUpdateEvent(
             id=self.virtual_plan_id,
             planId=None,

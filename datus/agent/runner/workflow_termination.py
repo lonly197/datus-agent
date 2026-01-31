@@ -63,6 +63,15 @@ class WorkflowTerminationManager:
                 return WorkflowTerminationStatus.SKIP_TO_REFLECT
 
             elif last_status == ActionStatus.FAILED:
+                if current_node.type in {"schema_discovery", "schema_validation"}:
+                    if self.workflow and self.workflow.metadata is not None:
+                        self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+                        self.workflow.metadata["termination_reason"] = (
+                            f"{current_node.type} failed; proceeding to output with SQL generation failure report"
+                        )
+                        self.workflow.metadata["sql_generation_failed"] = True
+                        self.workflow.metadata["failure_stage"] = current_node.type
+                    return WorkflowTerminationStatus.PROCEED_TO_OUTPUT
                 # Special case: if the reflect node itself failed, proceed to output for report generation
                 if current_node.type == NodeType.TYPE_REFLECT:
                     logger.info(

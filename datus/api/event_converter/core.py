@@ -48,6 +48,7 @@ from .normalization import (
 from .sql_processing import (
     generate_sql_summary,
     format_diagnostic_report,
+    generate_sql_failure_report,
 )
 from .virtual_steps import VirtualStepManager, TodoStateManager, VIRTUAL_STEPS
 from .streaming import convert_stream_to_events as _convert_stream_to_events
@@ -858,11 +859,7 @@ class DeepResearchEventConverter:
                 )
             )
 
-            if not self._virtual_step_manager.virtual_plan_emitted:
-                plan_update = self._generate_virtual_plan_update()
-                if plan_update:
-                    events.append(plan_update)
-                    self._virtual_step_manager.virtual_plan_emitted = True
+            # Do not emit full plan here; plan will be appended dynamically on node_execution.
 
         # Handle node execution
         elif action.action_type == "node_execution":
@@ -921,6 +918,17 @@ class DeepResearchEventConverter:
         # Handle report generation and SQL output
         elif action.action_type == "output_generation" and action.output:
             if isinstance(action.output, dict):
+                if action.output.get("success") is False:
+                    report = generate_sql_failure_report(action.output.get("metadata", {}))
+                    events.append(
+                        ChatEvent(
+                            id=f"{event_id}_failure",
+                            planId=self._get_virtual_step_id("output"),
+                            timestamp=timestamp,
+                            content=report,
+                        )
+                    )
+                    # still emit ReportEvent if available
                 sql_query = action.output.get("sql_query", "")
                 sql_result = action.output.get("sql_result", "")
                 sql_query_final = action.output.get("sql_query_final", "")

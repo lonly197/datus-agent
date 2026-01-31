@@ -88,6 +88,9 @@ class OutputNode(Node):
             "intent_analysis": workflow.metadata.get("intent_analysis"),
             "reflection_count": workflow.metadata.get("reflection_count") or None,  # Use None instead of 0
             "table_schemas": getattr(context, 'table_schemas', None) if context else None,  # Pass table schemas for developer report
+            "sql_generation_failed": workflow.metadata.get("sql_generation_failed"),
+            "termination_reason": workflow.metadata.get("termination_reason"),
+            "failure_stage": workflow.metadata.get("failure_stage"),
         }
 
         # Debug logging for metadata troubleshooting
