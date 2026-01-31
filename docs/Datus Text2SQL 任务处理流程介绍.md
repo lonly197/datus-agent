@@ -1,12 +1,24 @@
 # Datus Text2SQL 任务处理流程介绍
 
-> **文档版本**: v2.13
-> **更新日期**: 2026-01-29
+> **文档版本**: v2.15
+> **更新日期**: 2026-01-31
 > **相关模块**: `datus/agent/workflow.yml`, `datus/agent/node/`
 
 ---
 
 基于最新的系统优化与实战验证（2026-01-26），Text2SQL 任务处理流程已升级为**具备高度自愈能力的智能工作流**。系统采用了证据驱动的生成架构，引入了**Preflight 预检编排**、**意图澄清节点**、**专用 SQL 验证节点**、**数仓开发版 SQL 报告**、**多层级 Schema 发现**、**Schema 充分性验证**与**动态反思纠错**机制，确保在生成 SQL 之前先完成意图分析、Schema 探查和验证，然后进行 SQL 生成和验证，若不合适则通过 Reflect 进行反思，继续尝试，直到找不到满足的表才报错终止。
+
+**v2.15 新增特性**（2026-01-31）：
+
+- ✅ **失败报告统一输出**：Schema Discovery / Schema Validation / SQL Validation 失败时强制进入 Output 生成 SQL 失败报告
+- ✅ **SQL 重试默认值**：SQL Validate 失败默认重试 3 次，间隔 2s（可通过环境变量覆盖）
+- ✅ **失败阶段映射**：失败报告携带明确的失败阶段（Schema/SQL/执行/结果）便于前端展示
+
+**v2.14 新增特性**（2026-01-30）：
+
+- ✅ **文档一致性修复**：统一"四阶段 Schema 发现"描述
+- ✅ **移除冗余内容**：删除重复的流程图和技术细节
+- ✅ **结构优化**：精简总结章节，避免与正文重复
 
 **v2.13 新增特性**（2026-01-29）：
 
@@ -76,8 +88,7 @@ text2sql:
 **设计理念**:
 
 - **两阶段意图处理**：任务类型识别 → 业务意图澄清
-- **三阶段 Schema 发现**：语义/关键词/LLM → Context 深度搜索 → Fallback 全表扫描
-- **Preflight 预检编排**：生成前预执行4个必需工具，确保证据充分
+- **四阶段 Schema 发现**：语义/关键词/LLM → Context 深度搜索 → Fallback 全表扫描 → 外部知识增强
 - **双重验证机制**：Schema 充分性验证 → SQL 语法语义验证
 - **智能反思机制**：软失败状态 + 动态策略注入，支持自愈恢复
 
@@ -128,7 +139,7 @@ time_range = "最近30天"（如有）
 
 **目标**：解决"零召回"与"幻觉"问题，确保下游节点拥有真实的上下文。
 
-**三阶段混合搜索策略**:
+**四阶段混合搜索策略**:
 
 #### **阶段 1: 快速混合召回**
 
@@ -287,7 +298,7 @@ schema_discovery:
 - 使用 `ActionStatus.FAILED`（而非 SOFT_FAILED）
 - 设置 `allow_reflection=False`（不允许反思）
 - 生成详细诊断报告，包含根因分析和修复命令
-- 直接终止工作流，避免无效的 SQL 生成
+- 跳转到 Output 生成 SQL 失败报告并终止流程
 
 **软失败机制**：
 
@@ -329,8 +340,11 @@ schema_discovery:
 
 **验证失败处理**:
 
-- 设置 `termination_status = SKIP_TO_REFLECT`
-- 跳过执行，直接进入 reflect 节点进行修复
+- 默认先进行 SQL 重试（Generate SQL → SQL Validate）
+  - 默认重试 **3 次**，间隔 **2s**
+  - 可通过环境变量覆盖：`SQL_VALIDATE_MAX_RETRIES`、`SQL_VALIDATE_RETRY_INTERVAL`
+- 重试仍失败时，进入 Output 生成 SQL 失败报告
+- 若未触发重试机制，则设置 `termination_status = SKIP_TO_REFLECT`，进入 reflect 自愈
 
 **专用输入类** (`SQLValidateInput`):
 
@@ -663,36 +677,6 @@ flowchart TB
     class C3,C4,C5,C6,C7,C8,C9,C10,C11,C12,C13 recovery
 ```
 
-### 4.4 执行流程实例 (简化版)
-
-> 以下是简化版的执行流程，便于快速理解核心逻辑：
-
-```mermaid
-graph TD
-    A[Start] --> B[Intent Analysis]
-    B --> C[Intent Clarification]
-    C --> D[Schema Discovery Stage 1]
-    D --> E{< 10 tables?}
-    E -- Yes --> F[Context Search Stage 2]
-    E -- No --> G[Schema Validation]
-    F --> G
-    G --> H{Schema Sufficient?}
-    H -- Yes --> I[Generate SQL]
-    H -- No --> J[Reflect SOFT_FAILED]
-    I --> K[SQL Validate]
-    K --> L{SQL Valid?}
-    L -- Yes --> M[Execute SQL]
-    L -- No --> J
-    M --> N[Result Validation]
-    N --> O{Result Valid?}
-    O -- Yes --> P[Output]
-    O -- No --> J
-    J --> Q{Recoverable?}
-    Q -- Yes --> R[Inject Recovery Node]
-    R --> G
-    Q -- No --> S[Terminate]
-```
-
 ## 5. 性能与监控
 
 ### 5.1 多层缓存架构
@@ -725,129 +709,58 @@ graph TD
 
 ## 6. 技术实现细节
 
-### 6.1 EventConverter 新增方法 ⭐ NEW v2.9
+### 6.1 EventConverter 数据流 ⭐ NEW v2.9
 
-**数仓开发版 SQL 报告**相关方法（`datus/api/event_converter.py`）：
-
-**DDL 解析方法**：
-- `_parse_ddl_comments()` - 从 DDL 提取表和列注释
-- `_extract_table_info()` - 提取表和字段信息，从 SQL 识别使用的列
-
-**SQL 结构解析方法**：
-- `_parse_sql_structure()` - 使用 sqlglot 解析 SQL 结构
-- `_analyze_relationships()` - 分析表关联关系（JOIN 键）
-- `_infer_field_usage()` - 推断字段用途（关联键/筛选条件/输出字段）
-
-**SQL 注释生成方法**：
-- `_generate_sql_with_comments()` - 生成带注释的 SQL
-- `_infer_cte_purpose()` - 推断 CTE 的业务目的
-- `_add_field_comment()` - 为字段添加内联注释
-- `_add_condition_comments()` - 为 WHERE/JOIN 条件添加注释
-- `_explain_condition()` - 解释条件的业务含义
-- `_get_field_comment()` - 从 Schema 获取字段注释
-
-**报告生成方法**：
-- `_generate_execution_report()` - 生成执行验证报告（区分 0 行与错误）
-- `_generate_optimization_suggestions()` - 生成性能优化建议
-
-### 6.2 OutputNode 数据流增强 ⭐ NEW v2.9
-
-**传递 table_schemas 到 metadata**（`datus/agent/node/output_node.py`）：
+**OutputNode → EventConverter 数据流**：
 
 ```python
+# OutputNode 传递 table_schemas
 workflow_metadata = {
+    "table_schemas": workflow.context.table_schemas,
     "sql_validation": workflow.metadata.get("sql_validation"),
-    "intent_clarification": workflow.metadata.get("intent_clarification"),
-    "clarified_task": workflow.metadata.get("clarified_task"),
-    "intent_analysis": workflow.metadata.get("intent_analysis"),
-    "reflection_count": workflow.metadata.get("reflection_count", 0),
-    "table_schemas": workflow.context.table_schemas,  # ⭐ NEW
+    # ...
 }
-```
 
-**EventConverter 接收并使用**（`datus/api/event_converter.py`）：
-
-```python
+# EventConverter 接收并生成报告
 table_schemas = metadata.get("table_schemas")
 report = self._generate_sql_generation_report(
     sql_query=final_sql,
-    sql_result=final_result,
-    row_count=row_count,
-    metadata=metadata,
-    table_schemas=table_schemas  # ⭐ NEW
+    table_schemas=table_schemas
 )
 ```
 
-### 6.3 SchemaStorage 新增方法
+### 6.2 SchemaStorage 核心方法
 
-**get_table_schemas()** - 批量获取多个表的结构定义
+### 6.2 SchemaStorage 核心方法
 
-**update_table_schema()** - 更新或插入表的 Schema 定义，用于元数据修复
+| 方法 | 功能 |
+|------|------|
+| `get_table_schemas()` | 批量获取多个表的结构定义 |
+| `update_table_schema()` | 更新或插入表的 Schema 定义 |
+| `safe_context_update()` | 线程安全上下文更新，防止竞态条件 |
 
-### 6.4 线程安全上下文更新
+### 6.3 依赖库
 
-**safe_context_update()** - 防止并发访问导致的竞态条件
-
-### 6.5 依赖库新增 ⭐ NEW v2.9
-
-**sqlglot** - SQL 解析和结构分析库
-
-- 用于解析 SQL 结构（CTE、JOIN、WHERE、GROUP BY 等）
-- 识别表和列引用
-- 分析 SQL 模式（聚合、窗口函数、子查询等）
-
-安装：
-```bash
-pip install sqlglot
-```
+| 库名 | 用途 |
+|------|------|
+| `sqlglot` | SQL 解析和结构分析（CTE、JOIN、聚合等） |
+| `sqlparse` | SQL 格式化和语法高亮 |
 
 ## 7. 总结
 
+### v2.14 核心改进（2026-01-30）
+
+- ✅ 文档与代码一致性修复
+- ✅ 移除冗余内容，优化文档结构
+- ✅ 统一四阶段 Schema 发现描述
+
 ### v2.13 核心改进（2026-01-29）
 
-1. ✅ **节点处理流程图**：新增 3 个 Mermaid 流程图可视化节点处理逻辑
-2. ✅ **完整流程图**：展示 Preflight → Schema → SQL生成 → 执行验证 → 输出的完整链路
-3. ✅ **Schema Discovery 流程图**：四阶段（混合召回 → 深度扫描 → Fallback → 外部知识）可视化
-4. ✅ **Reflect 恢复策略映射**：SCHEMA_LINKING、DOC_SEARCH、REASONING 等策略的流程映射
+- ✅ 节点处理流程图（3 个 Mermaid 流程图）
+- ✅ 完整流程图可视化
+- ✅ Reflect 恢复策略映射
 
-### v2.12 核心改进（2026-01-28）
-
-1. ✅ **外部知识增强**：Schema Discovery 新增第 4 阶段，支持从 `ext_knowledge` 表检索业务指标定义
-2. ✅ **指标检索工具**：新增 `ContextSearchTools.search_external_knowledge()` 方法
-3. ✅ **知识注入机制**：通过 `workflow.task.external_knowledge` 将知识注入 Prompt
-4. ✅ **业务术语覆盖提升**：关键术语覆盖率从 1/5 提升至 5/5
-5. ✅ **Schema 自动修复**：`ext_knowledge` 表 Schema 不匹配时自动检测和重建
-
-### v2.10 核心改进（2026-01-23）
-
-1. ✅ **Preflight Orchestrator**：预检工具编排器，协调4个必需工具执行
-2. ✅ **硬失败机制**：无 Schema 时直接终止，不进入反思环节
-3. ✅ **多数据库支持**：Schema 发现支持扫描多个数据库
-4. ✅ **LLM Schema 匹配**：大规模数据集使用 LLM 进行表匹配
-5. ✅ **渐进式匹配**：根据反思轮次动态调整匹配策略
-
-### v2.9 核心改进（2026-01-17）
-
-1. ✅ **数仓开发版 SQL 报告**：面向数据仓库开发者的 6 部分综合报告
-2. ✅ **带注释的 SQL**：自动添加 CTE 说明、字段注释、条件解释
-3. ✅ **表和字段详情**：从 DDL 提取表/字段注释，展示关联关系和字段用途
-4. ✅ **执行验证报告**：明确区分 0 行数据与 SQL 错误
-5. ✅ **优化建议生成**：基于 SQL 结构分析提供性能优化建议
-6. ✅ **14 个辅助方法**：DDL 解析、SQL 结构分析、字段用途推断等
-7. ✅ **sqlglot 集成**：使用 sqlglot 库进行 SQL 结构解析
-
-### v2.8 核心改进（2026-01-16）
-
-1. ✅ **意图澄清节点**：修复错别字、澄清歧义、提取实体
-2. ✅ **专用 SQL 验证节点**：集中式 SQL 语法和语义验证
-3. ✅ **工作流终止机制**：支持主动终止和跳转
-4. ✅ **相似度阈值过滤**：语义搜索增加 0.5 相似度阈值
-5. ✅ **Context Search 优化**：触发阈值从 3 提升到 10
-6. ✅ **批量 Schema 查询**：新增 `get_table_schemas()` 方法
-7. ✅ **元数据自动修复**：`update_table_schema()` 方法支持 DDL 回填
-8. ✅ **多层缓存机制**：L1、LLM、CLI 三层缓存
-
-### 完整的价值体现
+### 核心价值
 
 - 🎯 **提高精度**：意图澄清 + 相似度阈值过滤
 - 🔄 **增强召回**：Context Search 更频繁触发 + Fallback 全表扫描

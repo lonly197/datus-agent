@@ -83,6 +83,8 @@ class OutputNode(Node):
         # Collect workflow metadata for comprehensive report generation
         workflow_metadata = {
             "sql_validation": workflow.metadata.get("sql_validation"),
+            "schema_validation": workflow.metadata.get("schema_validation"),
+            "schema_discovery_failure_report": workflow.metadata.get("schema_discovery_failure_report"),
             "intent_clarification": workflow.metadata.get("intent_clarification"),
             "clarified_task": workflow.metadata.get("clarified_task"),
             "intent_analysis": workflow.metadata.get("intent_analysis"),
@@ -91,6 +93,9 @@ class OutputNode(Node):
             "sql_generation_failed": workflow.metadata.get("sql_generation_failed"),
             "termination_reason": workflow.metadata.get("termination_reason"),
             "failure_stage": workflow.metadata.get("failure_stage"),
+            "sql_retry_count": workflow.metadata.get("sql_retry_count"),
+            "sql_retry_max": workflow.metadata.get("sql_retry_max"),
+            "sql_retry_interval": workflow.metadata.get("sql_retry_interval"),
         }
 
         # Debug logging for metadata troubleshooting

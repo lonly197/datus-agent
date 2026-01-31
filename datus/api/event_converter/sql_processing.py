@@ -71,15 +71,123 @@ def generate_sql_summary(sql: str, result: str, row_count: int) -> str:
 
 def generate_sql_failure_report(metadata: Dict[str, Any]) -> str:
     """Generate a failure report for SQL generation failures."""
-    reason = metadata.get("termination_reason", "") if metadata else ""
-    stage = metadata.get("failure_stage", "") if metadata else ""
+    meta = metadata or {}
+    stage_key = meta.get("failure_stage", "") if isinstance(meta, dict) else ""
+    stage_labels = {
+        "schema_discovery": "Schema 发现",
+        "schema_validation": "Schema 校验",
+        "generate_sql": "SQL 生成",
+        "sql_validation": "SQL 校验",
+        "execute_sql": "SQL 执行",
+        "result_validation": "结果校验",
+        "reflect": "反思",
+        "output": "输出",
+    }
+    stage_label = stage_labels.get(stage_key, stage_key or "未知")
+    reason = meta.get("termination_reason", "") if isinstance(meta, dict) else ""
+
     lines = ["## ❌ SQL生成失败报告", ""]
-    if stage:
-        lines.append(f"**失败阶段**: {stage}")
+    lines.append(f"**失败阶段**: {stage_label}")
     if reason:
         lines.append(f"**失败原因**: {reason}")
-    if not reason:
+    else:
         lines.append("**失败原因**: SQL生成或校验未通过")
+
+    retry_count = meta.get("sql_retry_count")
+    retry_max = meta.get("sql_retry_max")
+    retry_interval = meta.get("sql_retry_interval")
+    if retry_count is not None or retry_max is not None:
+        retry_display = f"{retry_count or 0}/{retry_max or 0}"
+        interval_display = f"{retry_interval}s" if retry_interval is not None else "未设置"
+        lines.append(f"**SQL重试**: {retry_display}，间隔 {interval_display}")
+
+    sql_validation = meta.get("sql_validation")
+    if isinstance(sql_validation, dict):
+        lines.append("")
+        lines.append("### SQL校验信息")
+        syntax_valid = sql_validation.get("syntax_valid")
+        tables_exist = sql_validation.get("tables_exist")
+        columns_exist = sql_validation.get("columns_exist")
+        dangerous = sql_validation.get("has_dangerous_ops")
+        if syntax_valid is not None:
+            lines.append(f"- 语法校验: {'✅通过' if syntax_valid else '❌失败'}")
+        if tables_exist is not None:
+            lines.append(f"- 表存在性: {'✅通过' if tables_exist else '❌失败'}")
+        if columns_exist is not None:
+            lines.append(f"- 列存在性: {'✅通过' if columns_exist else '❌失败'}")
+        if dangerous is not None:
+            lines.append(f"- 危险操作: {'❌存在' if dangerous else '✅无危险操作'}")
+
+        errors = sql_validation.get("errors") or []
+        if errors:
+            lines.append("")
+            lines.append("**错误明细**:")
+            for item in errors[:5]:
+                lines.append(f"- {item}")
+            if len(errors) > 5:
+                lines.append(f"- ...还有 {len(errors) - 5} 条错误")
+
+        warnings = sql_validation.get("warnings") or []
+        if warnings:
+            lines.append("")
+            lines.append("**警告明细**:")
+            for item in warnings[:5]:
+                lines.append(f"- {item}")
+            if len(warnings) > 5:
+                lines.append(f"- ...还有 {len(warnings) - 5} 条警告")
+
+    schema_validation = meta.get("schema_validation")
+    if isinstance(schema_validation, dict):
+        lines.append("")
+        lines.append("### Schema 校验信息")
+        coverage = schema_validation.get("coverage_score")
+        threshold = schema_validation.get("coverage_threshold")
+        if coverage is not None and threshold is not None:
+            lines.append(f"- 覆盖率: {coverage:.2f}（阈值 {threshold:.2f}）")
+        missing_defs = schema_validation.get("missing_definitions") or []
+        if missing_defs:
+            lines.append(f"- 缺失DDL: {', '.join(missing_defs[:5])}")
+            if len(missing_defs) > 5:
+                lines.append(f"- ...还有 {len(missing_defs) - 5} 个缺失DDL")
+        missing_tables = schema_validation.get("missing_tables") or []
+        if missing_tables:
+            lines.append(f"- 可能缺失表: {', '.join(missing_tables[:5])}")
+            if len(missing_tables) > 5:
+                lines.append(f"- ...还有 {len(missing_tables) - 5} 个缺失表")
+        suggestions = schema_validation.get("suggestions") or []
+        if suggestions:
+            lines.append("")
+            lines.append("**建议**:")
+            for item in suggestions[:5]:
+                lines.append(f"- {item}")
+
+    schema_report = meta.get("schema_discovery_failure_report")
+    if isinstance(schema_report, dict):
+        lines.append("")
+        lines.append("### Schema 发现诊断")
+        report_type = schema_report.get("report_type")
+        if report_type:
+            lines.append(f"- 报告类型: {report_type}")
+        candidate_tables = schema_report.get("candidate_tables_count")
+        if candidate_tables is not None:
+            lines.append(f"- 候选表数量: {candidate_tables}")
+        sections = schema_report.get("sections") or []
+        possible_causes = []
+        for section in sections:
+            if isinstance(section, dict) and section.get("possible_causes"):
+                possible_causes.extend(section.get("possible_causes") or [])
+        if possible_causes:
+            lines.append("**可能原因**:")
+            for item in possible_causes[:5]:
+                lines.append(f"- {item}")
+
+    if len(lines) <= 3:
+        lines.append("")
+        lines.append("### 下一步建议")
+        lines.append("- 检查任务描述是否包含关键业务术语和时间范围")
+        lines.append("- 确认目标表与字段已导入并可被系统检索")
+        lines.append("- 如需精确字段，请补充字段中文名或英文名")
+
     return "\n".join(lines)
 
 

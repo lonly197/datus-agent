@@ -117,6 +117,9 @@ class WorkflowExecutor:
             target = self.workflow.metadata.get("retry_target_node_type", "generate_sql")
             from datus.agent.runner.workflow_navigator import WorkflowNavigator
             navigator = WorkflowNavigator(self.workflow)
+            retry_interval = float(self.workflow.metadata.get("sql_retry_interval", 2.0))
+            if retry_interval > 0:
+                time.sleep(retry_interval)
             jumped = navigator.jump_to_node_type(target)
             if not jumped:
                 logger.warning("Retry target not found, proceeding to output")
@@ -466,6 +469,9 @@ class WorkflowExecutor:
                             logger.warning(f"Node evaluation failed but continuing due to Soft Failure mode: {evaluation}")
                             retry_target = self.workflow.metadata.get("retry_target_node_type")
                             if retry_target:
+                                retry_interval = float(self.workflow.metadata.get("sql_retry_interval", 2.0))
+                                if retry_interval > 0:
+                                    await asyncio.sleep(retry_interval)
                                 jumped = navigator.jump_to_node_type(retry_target)
                                 self.workflow.metadata.pop("retry_target_node_type", None)
                                 if not jumped:

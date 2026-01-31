@@ -13,6 +13,7 @@ This node performs comprehensive SQL validation before execution:
 """
 
 import json
+import os
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 
 from datus.agent.node.node import Node, execute_with_async_stream
@@ -176,10 +177,13 @@ class SQLValidateNode(Node):
                         self.workflow.metadata = {}
                     # Retry SQL generation/validation before reflection
                     max_retries = get_env_int("SQL_VALIDATE_MAX_RETRIES", 3)
+                    retry_interval = float(os.getenv("SQL_VALIDATE_RETRY_INTERVAL", "2.0"))
                     retry_count = int(self.workflow.metadata.get("sql_retry_count", 0))
+                    self.workflow.metadata["sql_retry_max"] = max_retries
                     if retry_count < max_retries:
                         retry_count += 1
                         self.workflow.metadata["sql_retry_count"] = retry_count
+                        self.workflow.metadata["sql_retry_interval"] = retry_interval
                         self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.RETRY_SQL
                         self.workflow.metadata["retry_target_node_type"] = "generate_sql"
                         self.workflow.metadata["termination_reason"] = (
@@ -558,7 +562,17 @@ class SQLValidateNode(Node):
             # If validation failed, signal workflow to skip to reflect
             is_valid = data.get("is_valid", False)
             if not is_valid:
-                workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
+                existing_status = workflow.metadata.get("termination_status")
+                if existing_status in (
+                    WorkflowTerminationStatus.RETRY_SQL,
+                    WorkflowTerminationStatus.PROCEED_TO_OUTPUT,
+                ):
+                    logger.info(
+                        "SQL validation failed with termination_status=%s, skip override to reflect",
+                        existing_status,
+                    )
+                else:
+                    workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
 
                 logger.info(f"SQL validation failed, skipping to reflect: " f"errors={data.get('errors', [])}")
 
