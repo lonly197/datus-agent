@@ -340,23 +340,61 @@ class DeepResearchEventConverter:
                     )
                 )
 
-        # Handle Intent Analysis
-        elif action.action_type == "intent_analysis" and action.status == ActionStatus.SUCCESS:
-            intent = "Unknown"
-            confidence = 0.0
-            if action.output and isinstance(action.output, dict):
-                intent = action.output.get("intent", intent)
-                confidence = action.output.get("confidence", confidence)
+        # Handle Intent Analysis / Clarification
+        elif action.action_type in {"intent_analysis", "intent_clarification"}:
+            tool_call_id = str(uuid.uuid4())
+            tool_input = {}
+            if action.input and isinstance(action.input, dict):
+                tool_input = action.input
 
-            content = f"🧐 **Intent Detected**: `{intent}` (Confidence: {confidence:.2f})"
+            intent_plan_id = self._get_unified_plan_id(action, force_associate=True)
+            if not intent_plan_id:
+                self.logger.warning(
+                    "Skipping ToolCallEvent for %s due to missing planId "
+                    "(no todo_id/virtual_step_id mapping). action_id=%s",
+                    action.action_type,
+                    action.action_id,
+                )
+                return events
+
             events.append(
-                ChatEvent(
-                    id=event_id,
-                    planId=self._get_unified_plan_id(action, force_associate=True),
+                ToolCallEvent(
+                    id=f"{event_id}_call",
+                    planId=intent_plan_id,
                     timestamp=timestamp,
-                    content=content,
+                    toolCallId=tool_call_id,
+                    toolName=action.action_type,
+                    input=tool_input,
                 )
             )
+
+            events.append(
+                ToolCallResultEvent(
+                    id=f"{event_id}_result",
+                    planId=intent_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    data=action.output,
+                    error=action.status == ActionStatus.FAILED,
+                )
+            )
+
+            if action.action_type == "intent_analysis" and action.status == ActionStatus.SUCCESS:
+                intent = "Unknown"
+                confidence = 0.0
+                if action.output and isinstance(action.output, dict):
+                    intent = action.output.get("intent", intent)
+                    confidence = action.output.get("confidence", confidence)
+
+                content = f"🧐 **Intent Detected**: `{intent}` (Confidence: {confidence:.2f})"
+                events.append(
+                    ChatEvent(
+                        id=event_id,
+                        planId=intent_plan_id,
+                        timestamp=timestamp,
+                        content=content,
+                    )
+                )
 
         # Handle SQL Validation
         elif action.action_type == "sql_validation":

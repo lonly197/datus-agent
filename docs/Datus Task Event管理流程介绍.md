@@ -670,7 +670,9 @@ ToolCallResultEvent (data={row_count, result, ...}, error=bool)
    - 更新 todos 中的 status；
    - Reflect/ReAct 后追加新的 TodoItem（只允许 append）。
 5. todos 列表一旦生成，**顺序与 ID 不可变**（仅允许状态变更）。
-6. 最终输出通过 `ChatEvent` 输出：默认 planId 为空，只有属于某个 TodoItem 执行子计划时才绑定 planId。
+6. 最终输出通过 `ChatEvent` 输出：
+   - 作为 Output 节点的输出报告，必须绑定 `TodoItem.id`（Text2SQL 为 `step_output`）。
+   - 其他独立消息可不绑定 planId。
 
 **planId 生成优先级**：`todo_id > virtual_step_id > None`。
 
@@ -899,23 +901,47 @@ async for event in service.run_workflow_stream(req, current_client, task_id):
 ┌─────────────────────────────────────────────────────────────────┐
 │ 1. workflow_init (ActionRole.WORKFLOW)                          │
 ├─────────────────────────────────────────────────────────────────┤
-│ 输出: PlanUpdateEvent                                           │
-│   .id = "550e8400-..." (virtual_plan_id)                        │
+│ 输出: ChatEvent                                                  │
 │   .planId = None                                                │
-│   .todos = [                                                     │
-│     {id: "step_intent", status: IN_PROGRESS, ...},              │
-│     {id: "step_schema", status: PENDING, ...},                  │
-│     {id: "step_sql", status: PENDING, ...},                     │
-│     {id: "step_exec", status: PENDING, ...},                    │
-│     {id: "step_reflect", status: PENDING, ...},                 │
-│     {id: "step_output", status: PENDING, ...},                  │
-│   ]                                                              │
-│                                                                  │
-│ 内部状态: active_virtual_step_id = "step_intent"                 │
+│   .content = "System Initialization..."                         │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 2. intent_analysis → intent_clarification (ActionRole.WORKFLOW)│
+│ 2. intent_analysis (ActionRole.TOOL)                            │
+├─────────────────────────────────────────────────────────────────┤
+│ 输出: PlanUpdateEvent                                           │
+│   .todos = [                                                     │
+│     {id: "step_intent", status: IN_PROGRESS, ...},              │
+│   ]                                                              │
+│                                                                  │
+│ 输出: ToolCallEvent                                              │
+│   .planId = "step_intent"                                       │
+│   .toolName = "intent_analysis"                                 │
+│                                                                  │
+│ 输出: ToolCallResultEvent                                        │
+│   .planId = "step_intent"                                       │
+│   .data = {intent: "text2sql", confidence: 0.92}                │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ 3. intent_clarification (ActionRole.TOOL)                       │
+├─────────────────────────────────────────────────────────────────┤
+│ 输出: PlanUpdateEvent (append-only)                             │
+│   .todos = [                                                     │
+│     {id: "step_intent", status: IN_PROGRESS, ...},              │
+│   ]                                                              │
+│                                                                  │
+│ 输出: ToolCallEvent                                              │
+│   .planId = "step_intent"                                       │
+│   .toolName = "intent_clarification"                            │
+│                                                                  │
+│ 输出: ToolCallResultEvent                                        │
+│   .planId = "step_intent"                                       │
+│   .data = {...}                                                  │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ 4. schema_discovery (ActionRole.TOOL)                           │
 ├─────────────────────────────────────────────────────────────────┤
 │ 输出: PlanUpdateEvent                                           │
 │   .todos = [                                                     │
@@ -923,8 +949,6 @@ async for event in service.run_workflow_stream(req, current_client, task_id):
 │     {id: "step_schema", status: IN_PROGRESS, ...},              │
 │     ...                                                          │
 │   ]                                                              │
-│                                                                  │
-│ 内部状态: active_virtual_step_id = "step_schema"                 │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
@@ -991,7 +1015,7 @@ async for event in service.run_workflow_stream(req, current_client, task_id):
 │ 7. output_generation (ActionRole.WORKFLOW)                      │
 ├─────────────────────────────────────────────────────────────────┤
 │ 输出: ChatEvent (SQL Generation Report v2.8)                    │
-│   .planId = None                                                │
+│   .planId = "step_output"                                       │
 │   .content = "## 📋 SQL生成报告..."                              │
 │                                                                  │
 │ 输出: PlanUpdateEvent                                           │
@@ -1007,7 +1031,7 @@ async for event in service.run_workflow_stream(req, current_client, task_id):
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 8.2 带错误恢复的流程
+### 8.2 带错误恢复的流程（含 SQL 重试）
 
 ```
 执行过程中某步骤失败：
@@ -1035,6 +1059,22 @@ async for event in service.run_workflow_stream(req, current_client, task_id):
 │     {id: "step_reflect", status: IN_PROGRESS, ...},             │
 │     {id: "step_output", status: PENDING, ...},                  │
 │   ]                                                              │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ SQL Validate 失败 → 触发重试 (默认 3 次，间隔 2s)                 │
+├─────────────────────────────────────────────────────────────────┤
+│ 内部状态: termination_status=RETRY_SQL                          │
+│           retry_target_node_type="generate_sql"                  │
+│           sql_retry_count/interval 递增                          │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ 重试仍失败 → Output 节点生成 SQL 失败报告                         │
+├─────────────────────────────────────────────────────────────────┤
+│ 输出: ChatEvent                                                  │
+│   .planId = "step_output"                                       │
+│   .content = "## ❌ SQL生成失败报告..."                           │
 └─────────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
