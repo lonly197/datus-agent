@@ -11,10 +11,11 @@ context switching detection.
 """
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import sqlglot
-from sqlglot.expressions import CTE, Table
+from sqlglot import exp
+from sqlglot.expressions import CTE, Subquery, Table
 
 from datus.utils.constants import DBType, SQLType
 from datus.utils.loggings import get_logger
@@ -300,6 +301,109 @@ def extract_table_names(sql, dialect=DBType.SNOWFLAKE, ignore_empty=False) -> Li
         table_names.append(".".join(full_name))
 
     return list(set(table_names))
+
+
+def extract_sql_symbols(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, Any]:
+    """Extract SQL symbols for validation/reporting.
+
+    Returns:
+        {
+            "alias_to_table": Dict[str, str],
+            "virtual_tables": Dict[str, Set[str]],
+            "virtual_columns": Set[str],
+        }
+    """
+    is_valid, error_msg = validate_sql_input(sql)
+    if not is_valid:
+        logger.warning(f"Invalid SQL input: {error_msg}")
+        return {"alias_to_table": {}, "virtual_tables": {}, "virtual_columns": set()}
+
+    read_dialect = parse_read_dialect(dialect)
+    try:
+        parsed = sqlglot.parse_one(sql, read=read_dialect, error_level=sqlglot.ErrorLevel.IGNORE)
+        if parsed is None:
+            return {"alias_to_table": {}, "virtual_tables": {}, "virtual_columns": set()}
+    except Exception as e:
+        logger.warning(f"Error parsing SQL: {e}")
+        return {"alias_to_table": {}, "virtual_tables": {}, "virtual_columns": set()}
+
+    def _alias_name(node: Any) -> Optional[str]:
+        alias = getattr(node, "alias", None)
+        if alias:
+            name = getattr(alias, "name", None)
+            if name:
+                return str(name)
+            alias_this = getattr(alias, "this", None)
+            if alias_this is not None:
+                return getattr(alias_this, "name", None) or str(alias_this)
+        alias_or_name = getattr(node, "alias_or_name", None)
+        if alias_or_name:
+            return str(alias_or_name)
+        return None
+
+    def _output_columns_from_select(select_expr: Any) -> Set[str]:
+        cols: Set[str] = set()
+        if not select_expr:
+            return cols
+        for projection in getattr(select_expr, "expressions", []) or []:
+            if isinstance(projection, exp.Alias):
+                alias_name = projection.alias
+                if alias_name:
+                    cols.add(str(alias_name).lower())
+                    continue
+            alias_or_name = getattr(projection, "alias_or_name", None)
+            if alias_or_name:
+                cols.add(str(alias_or_name).lower())
+                continue
+            if isinstance(projection, exp.Column) and projection.name:
+                cols.add(str(projection.name).lower())
+        return cols
+
+    alias_to_table: Dict[str, str] = {}
+    virtual_tables: Dict[str, Set[str]] = {}
+
+    for table in parsed.find_all(Table):
+        table_name = table.name
+        if not table_name:
+            continue
+        alias = _alias_name(table)
+        if alias:
+            alias_to_table[alias.lower()] = table_name.lower()
+
+    for cte in parsed.find_all(CTE):
+        cte_name = _alias_name(cte)
+        if not cte_name:
+            continue
+        cte_cols: Set[str] = set()
+        alias = getattr(cte, "alias", None)
+        alias_columns = getattr(alias, "columns", None) if alias else None
+        if alias_columns:
+            for col in alias_columns:
+                col_name = getattr(col, "name", None) or str(col)
+                if col_name:
+                    cte_cols.add(str(col_name).lower())
+        if not cte_cols:
+            cte_cols = _output_columns_from_select(getattr(cte, "this", None))
+        if cte_cols:
+            virtual_tables[cte_name.lower()] = cte_cols
+
+    for subquery in parsed.find_all(Subquery):
+        alias = _alias_name(subquery)
+        if not alias:
+            continue
+        sub_cols = _output_columns_from_select(getattr(subquery, "this", None))
+        if sub_cols:
+            virtual_tables[alias.lower()] = sub_cols
+
+    virtual_columns: Set[str] = set()
+    for cols in virtual_tables.values():
+        virtual_columns.update(cols)
+
+    return {
+        "alias_to_table": alias_to_table,
+        "virtual_tables": virtual_tables,
+        "virtual_columns": virtual_columns,
+    }
 
 
 def metadata_identifier(

@@ -27,7 +27,7 @@ from datus.schemas.node_models import SQLContext, SQLValidateInput, TableSchema
 from datus.utils.constants import DBType
 from datus.utils.exceptions import ErrorCode
 from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import validate_and_suggest_sql_fixes
+from datus.utils.sql_utils import extract_sql_symbols, validate_and_suggest_sql_fixes
 from datus.agent.workflow_status import WorkflowTerminationStatus
 from datus.utils.env import get_env_int
 from datus.utils.sql_utils import extract_enhanced_metadata_from_ddl
@@ -279,6 +279,7 @@ class SQLValidateNode(Node):
             "errors": [],
             "warnings": [],
             "fix_suggestions": [],
+            "error_details": [],
             "syntax_valid": False,
             "tables_exist": True,
             "columns_exist": True,
@@ -401,22 +402,56 @@ class SQLValidateNode(Node):
         # Column validation (basic but real: compare against DDL/column_comments)
         column_lookup = self._build_column_lookup(table_schemas, dialect)
         column_refs = self._extract_column_references(sql_query, dialect)
+        sql_symbols = extract_sql_symbols(sql_query, dialect=dialect)
+        alias_to_table = sql_symbols.get("alias_to_table", {})
+        virtual_tables = sql_symbols.get("virtual_tables", {})
+        virtual_columns = sql_symbols.get("virtual_columns", set())
 
         missing_columns: List[str] = []
+        missing_virtual_columns: List[str] = []
         for table_ref, col in column_refs:
             col_l = col.lower()
             if table_ref:
                 table_l = table_ref.lower()
-                if table_l in column_lookup and col_l not in column_lookup[table_l]:
+                # 1) CTE/subquery virtual table
+                if table_l in virtual_tables:
+                    if col_l not in virtual_tables[table_l]:
+                        missing_virtual_columns.append(f"{table_ref}.{col}")
+                    continue
+
+                # 2) Physical table with alias
+                table_lookup_key = alias_to_table.get(table_l, table_l)
+                if table_lookup_key in column_lookup and col_l not in column_lookup[table_lookup_key]:
                     missing_columns.append(f"{table_ref}.{col}")
             else:
                 # Unqualified column: ensure it exists in any referenced table
-                if not any(col_l in cols for cols in column_lookup.values()):
+                if not any(col_l in cols for cols in column_lookup.values()) and col_l not in virtual_columns:
                     missing_columns.append(col)
 
         if missing_columns:
             result["columns_exist"] = False
-            result["errors"].append(f"Referenced columns not found in schema: {', '.join(sorted(set(missing_columns)))}")
+            result["errors"].append(
+                "Referenced columns not found in schema: "
+                f"{', '.join(sorted(set(missing_columns)))}"
+            )
+            result.setdefault("error_details", []).append(
+                {
+                    "type": "missing_columns_physical",
+                    "columns": sorted(set(missing_columns)),
+                }
+            )
+        if missing_virtual_columns:
+            result["columns_exist"] = False
+            result["errors"].append(
+                "Referenced columns not found in CTE/subquery output: "
+                f"{', '.join(sorted(set(missing_virtual_columns)))}"
+            )
+            result.setdefault("error_details", []).append(
+                {
+                    "type": "missing_columns_virtual",
+                    "columns": sorted(set(missing_virtual_columns)),
+                }
+            )
 
         return result
 
@@ -481,6 +516,7 @@ class SQLValidateNode(Node):
             if name:
                 refs.append((table, name))
         return refs
+
 
     def _check_dangerous_operations(self, sql_query: str) -> Dict[str, Any]:
         """

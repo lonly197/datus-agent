@@ -50,6 +50,7 @@ from .ddl_parser import (
 
 from .core import (
     extract_table_names,
+    extract_sql_symbols,
     metadata_identifier,
     normalize_sql,
     format_sql_to_pretty,
@@ -95,6 +96,7 @@ __all__ = [
     "extract_metadata_from_ddl_regex_only",
     # Core utilities
     "extract_table_names",
+    "extract_sql_symbols",
     "metadata_identifier",
     "normalize_sql",
     "format_sql_to_pretty",

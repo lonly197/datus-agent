@@ -409,6 +409,7 @@ class DeepResearchEventConverter:
             has_dangerous_ops = validation_result.get("has_dangerous_ops", False)
             errors = validation_result.get("errors", [])
             warnings = validation_result.get("warnings", [])
+            error_details = validation_result.get("error_details", [])
 
             if is_valid:
                 content_lines = [
@@ -442,6 +443,25 @@ class DeepResearchEventConverter:
                         content_lines.append(f"- {error}")
                     if len(errors) > 3:
                         content_lines.append(f"- ...还有 {len(errors) - 3} 个错误")
+
+                if error_details:
+                    content_lines.append("\n**错误分类**:")
+                    for detail in error_details[:3]:
+                        detail_type = detail.get("type")
+                        columns = detail.get("columns") or []
+                        if detail_type == "missing_columns_physical":
+                            label = "物理列缺失"
+                        elif detail_type == "missing_columns_virtual":
+                            label = "CTE/子查询输出列缺失"
+                        else:
+                            label = f"未知错误类型({detail_type})"
+                        preview = ", ".join(columns[:3])
+                        if preview:
+                            content_lines.append(f"- {label}: {preview}")
+                        else:
+                            content_lines.append(f"- {label}")
+                    if len(error_details) > 3:
+                        content_lines.append(f"- ...还有 {len(error_details) - 3} 类错误")
 
                 if warnings:
                     content_lines.append(f"\n**警告** ({len(warnings)}):")

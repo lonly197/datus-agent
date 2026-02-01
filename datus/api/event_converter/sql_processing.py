@@ -9,7 +9,7 @@ This module provides functions to generate SQL reports, parse DDL,
 analyze relationships, and create annotated SQL with comments.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import sqlglot
 from sqlglot import exp
@@ -17,6 +17,7 @@ from sqlglot import exp
 from datus.utils.constants import DBType
 from datus.utils.sql_utils import (
     extract_enhanced_metadata_from_ddl,
+    extract_sql_symbols,
     parse_dialect,
     sanitize_ddl_for_storage,
 )
@@ -126,6 +127,27 @@ def generate_sql_failure_report(metadata: Dict[str, Any]) -> str:
                 lines.append(f"- {item}")
             if len(errors) > 5:
                 lines.append(f"- ...还有 {len(errors) - 5} 条错误")
+
+        error_details = sql_validation.get("error_details") or []
+        if error_details:
+            lines.append("")
+            lines.append("**错误分类**:")
+            for detail in error_details:
+                detail_type = detail.get("type")
+                columns = detail.get("columns") or []
+                if detail_type == "missing_columns_physical":
+                    label = "物理列缺失"
+                elif detail_type == "missing_columns_virtual":
+                    label = "CTE/子查询输出列缺失"
+                else:
+                    label = f"未知错误类型({detail_type})"
+                preview = ", ".join(columns[:5])
+                if preview:
+                    lines.append(f"- {label}: {preview}")
+                else:
+                    lines.append(f"- {label}: 未提供列信息")
+                if len(columns) > 5:
+                    lines.append(f"  ...还有 {len(columns) - 5} 列")
 
         warnings = sql_validation.get("warnings") or []
         if warnings:
@@ -363,6 +385,8 @@ def extract_table_info(table_schemas: List[Any], sql_query: str, logger=None) ->
     # Parse SQL to extract used tables and columns
     sql_tables = set()
     sql_columns = set()
+    symbols = extract_sql_symbols(sql_query)
+    virtual_columns = symbols.get("virtual_columns", set())
     try:
         parsed = sqlglot.parse_one(sql_query, error_level=sqlglot.ErrorLevel.IGNORE)
         # Find all table references
@@ -411,7 +435,7 @@ def extract_table_info(table_schemas: List[Any], sql_query: str, logger=None) ->
             if field_key in seen_fields:
                 continue
             seen_fields.add(field_key)
-            is_used = col_name in sql_columns
+            is_used = (col_name in sql_columns) or (col_name.lower() in virtual_columns)
             fields_info.append({
                 "table_name": table_name,
                 "column_name": col_name,
