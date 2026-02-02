@@ -387,7 +387,6 @@ class OutputNodeExecutor:
                 "task_id": getattr(self.workflow, "task_id", None),
                 "has_error": bool(output_node.input.error if hasattr(output_node, "input") and output_node.input else False),
             },
-            role=ActionRole.WORKFLOW,
         )
         yield output_start_action
 
