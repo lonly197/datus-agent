@@ -398,9 +398,45 @@ class DeepResearchEventConverter:
 
         # Handle SQL Validation
         elif action.action_type == "sql_validation":
+            tool_call_id = str(uuid.uuid4())
+            tool_input = {}
+            if action.input and isinstance(action.input, dict):
+                tool_input = action.input
+
+            validation_plan_id = self._get_unified_plan_id(action, force_associate=True)
+            if not validation_plan_id:
+                self.logger.warning(
+                    "Skipping ToolCallEvent for sql_validation due to missing planId "
+                    "(no todo_id/virtual_step_id mapping). action_id=%s",
+                    action.action_id,
+                )
+                return events
+
             validation_result = {}
             if action.output and isinstance(action.output, dict):
                 validation_result = action.output
+
+            events.append(
+                ToolCallEvent(
+                    id=f"{event_id}_call",
+                    planId=validation_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    toolName="sql_validation",
+                    input=tool_input,
+                )
+            )
+
+            events.append(
+                ToolCallResultEvent(
+                    id=f"{event_id}_result",
+                    planId=validation_plan_id,
+                    timestamp=timestamp,
+                    toolCallId=tool_call_id,
+                    data=validation_result,
+                    error=action.status == ActionStatus.FAILED,
+                )
+            )
 
             is_valid = validation_result.get("is_valid", False)
             syntax_valid = validation_result.get("syntax_valid", False)
@@ -475,7 +511,7 @@ class DeepResearchEventConverter:
             events.append(
                 ChatEvent(
                     id=event_id,
-                    planId=self._get_unified_plan_id(action, force_associate=True),
+                    planId=validation_plan_id,
                     timestamp=timestamp,
                     content=content,
                 )

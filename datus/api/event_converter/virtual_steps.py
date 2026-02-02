@@ -44,6 +44,7 @@ VIRTUAL_STEPS = [
         "node_types": [
             "execute_sql",
             "sql_execution",
+            "sql_validation",
             "sql_validate",
             "result_validation",
             # Preflight tools for SQL execution and validation
