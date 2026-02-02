@@ -571,23 +571,25 @@ class OutputNodeExecutor:
 
                     # Record the output_generation action with result
                     if hasattr(output_node.result, "success"):
-                    output_action.output = {
-                        "success": output_node.result.success,
-                        "sql_query": getattr(output_node.result, "sql_query", ""),
-                        "sql_result": getattr(output_node.result, "sql_result", ""),
-                        "sql_query_final": getattr(output_node.result, "sql_query_final", ""),
-                        "sql_result_final": getattr(output_node.result, "sql_result_final", ""),
-                        "row_count": getattr(output_node.input, "row_count", 0)
-                        if hasattr(output_node, "input") and output_node.input
-                        else 0,
-                        "metadata": getattr(output_node.input, "metadata", {}) if hasattr(output_node, "input") and output_node.input else {},
-                    }
-            elif isinstance(output_node.result, dict):
-                    output_action.output = output_node.result
-                    if hasattr(output_node, "input") and output_node.input:
-                        output_action.output.setdefault(
-                            "metadata", getattr(output_node.input, "metadata", {}) or {}
-                        )
+                        output_action.output = {
+                            "success": output_node.result.success,
+                            "sql_query": getattr(output_node.result, "sql_query", ""),
+                            "sql_result": getattr(output_node.result, "sql_result", ""),
+                            "sql_query_final": getattr(output_node.result, "sql_query_final", ""),
+                            "sql_result_final": getattr(output_node.result, "sql_result_final", ""),
+                            "row_count": getattr(output_node.input, "row_count", 0)
+                            if hasattr(output_node, "input") and output_node.input
+                            else 0,
+                            "metadata": getattr(output_node.input, "metadata", {})
+                            if hasattr(output_node, "input") and output_node.input
+                            else {},
+                        }
+                    elif isinstance(output_node.result, dict):
+                        output_action.output = output_node.result
+                        if hasattr(output_node, "input") and output_node.input:
+                            output_action.output.setdefault(
+                                "metadata", getattr(output_node.input, "metadata", {}) or {}
+                            )
 
                     output_action.status = ActionStatus.SUCCESS
                     action_helper.update_action_status(
