@@ -433,7 +433,6 @@ class OutputNodeExecutor:
                 "status": output_status,
                 "has_result": bool(output_node.result),
             },
-            role=ActionRole.WORKFLOW,
         )
 
         # Set result on completion action
