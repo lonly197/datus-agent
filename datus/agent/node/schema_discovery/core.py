@@ -322,6 +322,12 @@ class SchemaDiscoveryNode(Node, LLMMixin):
                 global_metrics_collector.record(self._metrics)
                 return
 
+            # Store discovery results for downstream nodes (e.g., schema_validation)
+            if self.workflow:
+                if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
+                    self.workflow.metadata = {}
+                self.workflow.metadata["discovered_tables"] = candidate_tables
+
             # Emit success action
             yield ActionHistory(
                 action_id=f"{self.id}_schema_discovery",

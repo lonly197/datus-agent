@@ -10,7 +10,7 @@ and ensures output node execution.
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from datus.agent.evaluate import setup_node_input
 from datus.agent.node import Node
@@ -18,7 +18,7 @@ from datus.agent.runner.workflow_lifecycle import ActionHistoryManagerMixin
 from datus.agent.workflow import Workflow
 from datus.agent.workflow_status import WorkflowTerminationStatus
 from datus.configuration.node_type import NodeType
-from datus.schemas.action_history import ActionHistory, ActionStatus
+from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.utils.error_handling import check_reflect_node_reachable
 from datus.utils.loggings import get_logger
 
@@ -78,6 +78,18 @@ class WorkflowTerminationManager:
                         f"Reflect node failed, proceeding to output node for report generation: "
                         f"{current_node.description}"
                     )
+                    # Set metadata for output node to generate proper failure report
+                    if self.workflow and self.workflow.metadata is not None:
+                        self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+                        # Get termination_reason from reflect node result if available
+                        termination_reason = getattr(current_node.result, "error", None) if hasattr(current_node, "result") and current_node.result else None
+                        if not termination_reason and hasattr(current_node, "result") and current_node.result:
+                            termination_reason = current_node.result.details.get("termination_reason") if hasattr(current_node.result, "details") and current_node.result.details else None
+                        if not termination_reason:
+                            termination_reason = f"Reflect node failed after {getattr(self.workflow, 'reflection_round', 0)} reflection rounds"
+                        self.workflow.metadata["termination_reason"] = termination_reason
+                        self.workflow.metadata["sql_generation_failed"] = True
+                        self.workflow.metadata["failure_stage"] = "reflection"
                     return WorkflowTerminationStatus.PROCEED_TO_OUTPUT
 
                 # Check if reflect node is reachable for recovery
@@ -114,6 +126,12 @@ class WorkflowTerminationManager:
                         f"Reflect node failed with unknown status, proceeding to output node for report generation: "
                         f"{current_node.description}"
                     )
+                    # Set metadata for output node to generate proper failure report
+                    if self.workflow and self.workflow.metadata is not None:
+                        self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+                        self.workflow.metadata["termination_reason"] = f"Reflect node failed with unknown status"
+                        self.workflow.metadata["sql_generation_failed"] = True
+                        self.workflow.metadata["failure_stage"] = "reflection"
                     return WorkflowTerminationStatus.PROCEED_TO_OUTPUT
 
                 has_reflect = check_reflect_node_reachable(self.workflow)
@@ -129,6 +147,12 @@ class WorkflowTerminationManager:
                     f"Reflect node failed (no action status), proceeding to output node for report generation: "
                     f"{current_node.description}"
                 )
+                # Set metadata for output node to generate proper failure report
+                if self.workflow and self.workflow.metadata is not None:
+                    self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+                    self.workflow.metadata["termination_reason"] = f"Reflect node failed (no action status)"
+                    self.workflow.metadata["sql_generation_failed"] = True
+                    self.workflow.metadata["failure_stage"] = "reflection"
                 return WorkflowTerminationStatus.PROCEED_TO_OUTPUT
 
             has_reflect = check_reflect_node_reachable(self.workflow)
@@ -304,21 +328,31 @@ class OutputNodeExecutor:
         """Set the workflow reference."""
         self.workflow = workflow
 
-    def ensure_output_node_execution(self, metadata: Dict) -> None:
+    async def run_stream(
+        self,
+        action_history_manager: Optional[ActionHistoryManager] = None,
+    ) -> AsyncGenerator[ActionHistory, None]:
         """
-        Ensure the output node executes even when workflow exits early.
+        Execute the output node with streaming support for SSE scenarios.
 
-        This guarantees that the SQL generation report is always generated
-        and returned to the user, regardless of whether the workflow
-        completed all nodes or exited due to max_steps limit or other reasons.
+        This method is used in /workflows/chat_research streaming mode.
+        It yields ActionHistory events including output_generation.
 
         Args:
-            metadata: The metadata dict that will be passed to _finalize_workflow
+            action_history_manager: Manager for tracking action history (optional)
+
+        Yields:
+            ActionHistory: Streaming action history events
         """
         if not self.workflow or not self.workflow.nodes:
             return
 
-        # Find the output node (can be named 'output' or 'Return the results to the user')
+        # Skip if output was already executed successfully
+        if self.workflow and self.workflow.metadata is not None:
+            if self.workflow.metadata.get("_output_executed"):
+                return
+
+        # Find the output node
         output_node = None
         for node in self.workflow.nodes.values():
             if node.type == "output":
@@ -329,14 +363,172 @@ class OutputNodeExecutor:
             logger.debug("No output node found in workflow")
             return
 
+        # Create action helper for generating ActionHistory
+        action_helper = ActionHistoryManagerMixin()
+
         # Check if output node needs to be executed
         if output_node.status in ["completed", "skipped"]:
             logger.debug(f"Output node already executed (status: {output_node.status})")
+            if self.workflow and self.workflow.metadata is not None:
+                self.workflow.metadata["_output_executed"] = True
             return
 
         if output_node.status == "failed":
             logger.warning(f"Output node previously failed, attempting to re-execute")
-            # Reset status to allow re-execution
+            output_node.status = "pending"
+            output_node.result = None
+
+        # Create output generation start action (only when executing)
+        output_start_action = action_helper.create_action_history(
+            action_id="output_generation_start",
+            messages="Starting output generation for SQL report",
+            action_type="output_generation",
+            input_data={
+                "task_id": getattr(self.workflow, "task_id", None),
+                "has_error": bool(output_node.input.error if hasattr(output_node, "input") and output_node.input else False),
+            },
+            role=ActionRole.WORKFLOW,
+        )
+        yield output_start_action
+
+        # Find output node index in node_order
+        output_idx = None
+        for idx, node_id in enumerate(self.workflow.node_order):
+            if node_id == output_node.id:
+                output_idx = idx
+                break
+
+        if output_idx is None:
+            output_idx = len(self.workflow.node_order)
+            self.workflow.node_order.append(output_node.id)
+            logger.info(f"Added output node to node_order at index {output_idx}")
+
+        # Update current_node_index to output node position
+        old_index = self.workflow.current_node_index
+        self.workflow.current_node_index = output_idx
+        logger.info(
+            f"Forcing output node execution: "
+            f"old_index={old_index}, new_index={output_idx}, "
+            f"node_order_len={len(self.workflow.node_order)}"
+        )
+
+        # Setup input for output node
+        setup_node_input(output_node, self.workflow)
+
+        # Execute output node using run_stream to collect all actions
+        logger.info(f"Executing pending output node (stream): {output_node.description}")
+
+        # Use the node's run_stream method
+        async for action in output_node.run_stream(action_history_manager):
+            yield action
+
+        # Create completion action
+        output_status = "completed" if output_node.status == "completed" else "failed"
+        output_helper = ActionHistoryManagerMixin()
+        output_completion_action = output_helper.create_action_history(
+            action_id="output_generation_completion",
+            messages=f"Output generation {output_status}",
+            action_type="output_generation",
+            input_data={
+                "task_id": getattr(self.workflow, "task_id", None),
+                "status": output_status,
+                "has_result": bool(output_node.result),
+            },
+            role=ActionRole.WORKFLOW,
+        )
+
+        # Set result on completion action
+        if output_node.result:
+            if hasattr(output_node.result, "success"):
+                metadata = {}
+                if hasattr(output_node, "input") and output_node.input:
+                    metadata = getattr(output_node.input, "metadata", {}) or {}
+                output_completion_action.output = {
+                    "success": output_node.result.success,
+                    "sql_query": getattr(output_node.result, "sql_query", ""),
+                    "sql_result": getattr(output_node.result, "sql_result", ""),
+                    "sql_query_final": getattr(output_node.result, "sql_query_final", ""),
+                    "sql_result_final": getattr(output_node.result, "sql_result_final", ""),
+                    "row_count": getattr(output_node.input, "row_count", 0)
+                    if hasattr(output_node, "input") and output_node.input
+                    else 0,
+                    "metadata": metadata,
+                }
+            elif isinstance(output_node.result, dict):
+                output_completion_action.output = output_node.result
+                if hasattr(output_node, "input") and output_node.input:
+                    output_completion_action.output.setdefault(
+                        "metadata", getattr(output_node.input, "metadata", {}) or {}
+                    )
+
+        output_completion_action.status = ActionStatus.SUCCESS if output_status == "completed" else ActionStatus.FAILED
+        yield output_completion_action
+
+        if output_status == "completed" and self.workflow and self.workflow.metadata is not None:
+            self.workflow.metadata["_output_executed"] = True
+
+    def run(self, metadata: Optional[Dict] = None) -> None:
+        """
+        Execute the output node synchronously for non-streaming scenarios.
+
+        This method is used in sync mode and ensures ActionHistory is recorded.
+
+        Args:
+            metadata: The metadata dict that will be passed to _finalize_workflow
+        """
+        if not self.workflow or not self.workflow.nodes:
+            return
+
+        # Create a temporary ActionHistoryManager for recording actions
+        action_history_manager = ActionHistoryManager()
+        action_history_manager.initialize(
+            task_id=getattr(self.workflow, "task_id", "unknown"),
+            task=getattr(self.workflow, "task", None),
+        )
+
+        # Create action helper for generating ActionHistory
+        action_helper = ActionHistoryManagerMixin()
+
+        # Find the output node
+        output_node = None
+        for node in self.workflow.nodes.values():
+            if node.type == "output":
+                output_node = node
+                break
+
+        if not output_node:
+            logger.debug("No output node found in workflow")
+            return
+
+        # Create output generation action
+        output_action = action_helper.create_action_history(
+            action_id="output_generation",
+            messages="Generating final output with results and benchmark data",
+            action_type="output_generation",
+            input_data={
+                "task_id": getattr(self.workflow, "task_id", None),
+                "has_error": bool(
+                    output_node.input.error
+                    if hasattr(output_node, "input") and output_node.input
+                    else False
+                ),
+            },
+            role=ActionRole.WORKFLOW,
+            status=ActionStatus.PROCESSING,
+        )
+
+        # Check if output node needs to be executed
+        if output_node.status in ["completed", "skipped"]:
+            logger.debug(f"Output node already executed (status: {output_node.status})")
+            action_helper.update_action_status(
+                output_action,
+                success=True,
+                output_data={"node_already_executed": True, "status": output_node.status},
+            )
+            return
+
+        if output_node.status == "failed":
+            logger.warning(f"Output node previously failed, attempting to re-execute")
             output_node.status = "pending"
             output_node.result = None
 
@@ -348,7 +540,6 @@ class OutputNodeExecutor:
                 break
 
         if output_idx is None:
-            # Output node not in node_order, try to add it
             output_idx = len(self.workflow.node_order)
             self.workflow.node_order.append(output_node.id)
             logger.info(f"Added output node to node_order at index {output_idx}")
@@ -377,10 +568,76 @@ class OutputNodeExecutor:
                 if hasattr(output_node, "result") and output_node.result:
                     if isinstance(output_node.result, dict):
                         metadata["output_result"] = output_node.result
+
+                    # Record the output_generation action with result
+                    if hasattr(output_node.result, "success"):
+                    output_action.output = {
+                        "success": output_node.result.success,
+                        "sql_query": getattr(output_node.result, "sql_query", ""),
+                        "sql_result": getattr(output_node.result, "sql_result", ""),
+                        "sql_query_final": getattr(output_node.result, "sql_query_final", ""),
+                        "sql_result_final": getattr(output_node.result, "sql_result_final", ""),
+                        "row_count": getattr(output_node.input, "row_count", 0)
+                        if hasattr(output_node, "input") and output_node.input
+                        else 0,
+                        "metadata": getattr(output_node.input, "metadata", {}) if hasattr(output_node, "input") and output_node.input else {},
+                    }
+            elif isinstance(output_node.result, dict):
+                    output_action.output = output_node.result
+                    if hasattr(output_node, "input") and output_node.input:
+                        output_action.output.setdefault(
+                            "metadata", getattr(output_node.input, "metadata", {}) or {}
+                        )
+
+                    output_action.status = ActionStatus.SUCCESS
+                    action_helper.update_action_status(
+                        output_action,
+                        success=True,
+                        output_data={
+                            "output_generated": True,
+                            "has_result": True,
+                            "status": "completed",
+                        },
+                    )
+                    if self.workflow and self.workflow.metadata is not None:
+                        self.workflow.metadata["_output_executed"] = True
+                else:
+                    output_action.status = ActionStatus.SUCCESS
+                    action_helper.update_action_status(
+                        output_action,
+                        success=True,
+                        output_data={"output_generated": True, "has_result": False, "status": "completed"},
+                    )
+                    if self.workflow and self.workflow.metadata is not None:
+                        self.workflow.metadata["_output_executed"] = True
             else:
                 logger.warning(f"Output node execution returned status: {output_node.status}")
+                output_action.status = ActionStatus.FAILED
+                action_helper.update_action_status(
+                    output_action,
+                    success=False,
+                    output_data={"status": output_node.status, "error": "Output node execution failed"},
+                )
         except Exception as e:
             logger.error(f"Failed to execute output node: {e}", exc_info=True)
+            output_action.status = ActionStatus.FAILED
+            action_helper.update_action_status(
+                output_action, success=False, output_data={"error": str(e), "status": "error"}
+            )
+
+    def ensure_output_node_execution(self, metadata: Dict) -> None:
+        """
+        Ensure the output node executes even when workflow exits early.
+
+        This guarantees that the SQL generation report is always generated
+        and returned to the user, regardless of whether the workflow
+        completed all nodes or exited due to max_steps limit or other reasons.
+
+        Args:
+            metadata: The metadata dict that will be passed to _finalize_workflow
+        """
+        # Delegate to run() method which handles everything
+        self.run(metadata)
 
     def check_parallel_node_success(self, node: Node) -> bool:
         """Check if any child of parallel node succeeded."""

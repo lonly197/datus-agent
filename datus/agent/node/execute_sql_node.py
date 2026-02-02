@@ -247,6 +247,13 @@ class ExecuteSQLNode(Node):
                     "error": result.error if result.error else None,
                 }
 
+                if not result.success and self.workflow:
+                    if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
+                        self.workflow.metadata = {}
+                    self.workflow.metadata.setdefault("failure_stage", "execute_sql")
+                    if result.error:
+                        self.workflow.metadata.setdefault("termination_reason", result.error)
+
                 # Store result for later use
                 self.result = result
 

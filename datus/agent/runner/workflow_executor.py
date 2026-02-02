@@ -497,7 +497,12 @@ class WorkflowExecutor:
                     logger.warning(f"Workflow execution stopped after reaching max steps: {max_steps}")
 
                 # CRITICAL: Ensure output node executes even when workflow exits early
-                output_executor.ensure_output_node_execution(metadata)
+                if self.workflow and self.workflow.metadata is not None:
+                    self.workflow.metadata["_output_attempted"] = True
+                # Use run_stream() to yield output_generation ActionHistory for SSE
+                if not (self.workflow and self.workflow.metadata and self.workflow.metadata.get("_output_executed")):
+                    async for output_action in output_executor.run_stream(action_history_manager):
+                        yield output_action
 
                 metadata = self._finalize_workflow(step_count)
                 workflow_succeeded = True
@@ -522,7 +527,12 @@ class WorkflowExecutor:
             # ALWAYS emit a completion action, regardless of how the workflow terminated
             # This ensures the frontend receives a CompleteEvent for all workflows
             try:
-                output_executor.ensure_output_node_execution({})
+                # Use run_stream() to yield output_generation ActionHistory for SSE
+                if not (self.workflow and self.workflow.metadata and self.workflow.metadata.get("_output_executed")):
+                    if self.workflow and self.workflow.metadata is not None:
+                        self.workflow.metadata["_output_attempted"] = True
+                    async for output_action in output_executor.run_stream(action_history_manager):
+                        yield output_action
             except Exception as e:
                 logger.error(f"Failed to execute output node during finalization: {e}", exc_info=True)
 

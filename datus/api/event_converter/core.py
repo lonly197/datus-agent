@@ -82,6 +82,7 @@ class DeepResearchEventConverter:
         # Active todo tracking
         self.active_todo_item_id: str = None
         self.todo_item_action_map: Dict[str, str] = {}
+        self._emitted_tool_calls: set[str] = set()
 
     @property
     def virtual_plan_emitted(self) -> bool:
@@ -90,6 +91,16 @@ class DeepResearchEventConverter:
     @virtual_plan_emitted.setter
     def virtual_plan_emitted(self, value: bool) -> None:
         self._virtual_step_manager.virtual_plan_emitted = value
+
+    @property
+    def active_virtual_step_id(self) -> Optional[str]:
+        """Backward-compatible alias for _virtual_step_manager.active_virtual_step_id."""
+        return self._virtual_step_manager.active_virtual_step_id
+
+    @active_virtual_step_id.setter
+    def active_virtual_step_id(self, value: Optional[str]) -> None:
+        """Backward-compatible alias for _virtual_step_manager.active_virtual_step_id."""
+        self._virtual_step_manager.active_virtual_step_id = value
 
     # Virtual step management (delegates to VirtualStepManager)
     def _get_virtual_step_id(self, node_type: str) -> str:
@@ -171,6 +182,17 @@ class DeepResearchEventConverter:
         """Find tool call ID for action."""
         return find_tool_call_id(action, self.tool_call_map)
 
+    def _mark_tool_call_emitted(self, tool_call_id: Optional[str]) -> None:
+        """Track emitted ToolCallEvent to avoid duplicates."""
+        if tool_call_id:
+            self._emitted_tool_calls.add(str(tool_call_id))
+
+    def _should_emit_tool_call(self, tool_call_id: Optional[str]) -> bool:
+        """Return True if ToolCallEvent has not been emitted for this id."""
+        if not tool_call_id:
+            return True
+        return str(tool_call_id) not in self._emitted_tool_calls
+
     def _is_internal_todo_update(self, action: ActionHistory) -> bool:
         """Check if action is an internal todo update."""
         return is_internal_todo_update(action)
@@ -250,11 +272,13 @@ class DeepResearchEventConverter:
         # Extract todo_id if present
         todo_id = self._extract_todo_id_from_action(action)
 
-        # 0. Handle explicit plan updates early
+        # 0. Handle explicit plan updates
         if action.action_type == "plan_update" and action.output:
             todos = []
+            todo_data_source = None
+            new_todo_ids = []  # Track new todo IDs for append detection
+
             if isinstance(action.output, dict):
-                todo_data_source = None
                 if "todo_list" in action.output and isinstance(action.output["todo_list"], dict):
                     todo_data_source = action.output["todo_list"].get("items", [])
                 elif "todos" in action.output and isinstance(action.output["todos"], list):
@@ -267,6 +291,7 @@ class DeepResearchEventConverter:
                             if not todo_id:
                                 self.logger.warning("Skipping plan_update todo without id: %s", todo_data)
                                 continue
+                            new_todo_ids.append(todo_id)
                             todos.append(
                                 TodoItem(
                                     id=str(todo_id),
@@ -275,11 +300,21 @@ class DeepResearchEventConverter:
                                 )
                             )
 
-            if todos:
-                self._update_todo_state(todos, replace_order=not self._todo_state_manager.get_todo_state_list())
-                todos = self._get_todo_state_list() or todos
+            # If no todo_data_source provided, skip sending empty plan_update
+            if todo_data_source is None:
+                # No todos in output, don't emit empty PlanUpdateEvent
+                return events
 
-            events.append(PlanUpdateEvent(id=self.virtual_plan_id, planId=None, timestamp=timestamp, todos=todos))
+            if todos:
+                # Check if this is an append operation (new todos only, no full replacement)
+                is_append = bool(new_todo_ids) and not self._todo_state_manager.get_todo_state_list()
+                # Update todo state: append mode if no existing state, otherwise merge
+                self._update_todo_state(todos, replace_order=is_append)
+                todos = self._get_todo_state_list()
+
+                # Emit the full todo list with current states
+                events.append(PlanUpdateEvent(id=self.virtual_plan_id, planId=None, timestamp=timestamp, todos=todos))
+            # When todos are empty, do not emit a PlanUpdateEvent to avoid clearing state.
             return events
 
         # 1. Handle chat/assistant messages
@@ -668,7 +703,10 @@ class DeepResearchEventConverter:
                 )
                 return events
 
+            # Generate ToolCallEvent for PROCESSING status or for SUCCESS/FAILED without prior call
             if action.status == ActionStatus.PROCESSING:
+                if not self._should_emit_tool_call(tool_call_id):
+                    return events
                 events.append(
                     ToolCallEvent(
                         id=f"{event_id}_call",
@@ -679,8 +717,22 @@ class DeepResearchEventConverter:
                         input=tool_input,
                     )
                 )
+                self._mark_tool_call_emitted(tool_call_id)
 
             if action.status in (ActionStatus.SUCCESS, ActionStatus.FAILED):
+                # Generate ToolCallEvent if not already generated (for SUCCESS/FAILED without PROCESSING)
+                if self._should_emit_tool_call(tool_call_id):
+                    events.append(
+                        ToolCallEvent(
+                            id=f"{event_id}_call",
+                            planId=exec_plan_id,
+                            timestamp=timestamp,
+                            toolCallId=tool_call_id,
+                            toolName="execute_sql",
+                            input=tool_input,
+                        )
+                    )
+                    self._mark_tool_call_emitted(tool_call_id)
                 events.append(
                     ToolCallResultEvent(
                         id=f"{event_id}_result",
@@ -716,11 +768,14 @@ class DeepResearchEventConverter:
                 )
                 return events
 
+            # Generate ToolCallEvent for PROCESSING status or for SUCCESS/FAILED without prior call
             if action.status == ActionStatus.PROCESSING:
                 tool_input = {}
                 if action.input and isinstance(action.input, dict):
                     tool_input = action.input
 
+                if not self._should_emit_tool_call(tool_call_id):
+                    return events
                 events.append(
                     ToolCallEvent(
                         id=f"{event_id}_call",
@@ -731,8 +786,25 @@ class DeepResearchEventConverter:
                         input=tool_input,
                     )
                 )
+                self._mark_tool_call_emitted(tool_call_id)
 
             if action.status in [ActionStatus.SUCCESS, ActionStatus.FAILED]:
+                # Generate ToolCallEvent if not already generated (for SUCCESS/FAILED without PROCESSING)
+                if self._should_emit_tool_call(tool_call_id):
+                    tool_input = {}
+                    if action.input and isinstance(action.input, dict):
+                        tool_input = action.input
+                    events.append(
+                        ToolCallEvent(
+                            id=f"{event_id}_call",
+                            planId=preflight_plan_id,
+                            timestamp=timestamp,
+                            toolCallId=tool_call_id,
+                            toolName=tool_name,
+                            input=tool_input,
+                        )
+                    )
+                    self._mark_tool_call_emitted(tool_call_id)
                 events.append(
                     ToolCallResultEvent(
                         id=f"{event_id}_result",

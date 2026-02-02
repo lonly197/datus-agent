@@ -167,6 +167,7 @@ class ResultValidationNode(Node):
                         self.workflow.metadata = {}
                     self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
                     self.workflow.metadata["termination_reason"] = validation_result.get("reason", "result_invalid")
+                    self.workflow.metadata["failure_stage"] = "result_validation"
                 yield ActionHistory(
                     action_id=f"{self.id}_validation",
                     role=ActionRole.TOOL,

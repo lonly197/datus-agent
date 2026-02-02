@@ -31,6 +31,8 @@ class ReflectNode(Node):
         result = self.result
         try:
             workflow.reflection_round += 1
+            # Sync reflection_count to metadata for output node
+            workflow.metadata["reflection_count"] = workflow.reflection_round
             if "keywords" in result.details:
                 workflow.context.doc_search_keywords = result.details["keywords"]
 

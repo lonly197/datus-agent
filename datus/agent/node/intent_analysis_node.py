@@ -185,6 +185,12 @@ class IntentAnalysisNode(Node):
                     self.workflow.metadata["detected_intent"] = intent_result.intent
                     self.workflow.metadata["intent_confidence"] = intent_result.confidence
                     self.workflow.metadata["intent_metadata"] = intent_result.metadata
+                    # Backward-compatible summary for output/report consumers
+                    self.workflow.metadata["intent_analysis"] = {
+                        "intent": intent_result.intent,
+                        "confidence": intent_result.confidence,
+                        "metadata": intent_result.metadata,
+                    }
 
                     logger.debug(
                         f"Workflow metadata updated: intent={intent_result.intent}, confidence={intent_result.confidence}"
@@ -196,6 +202,11 @@ class IntentAnalysisNode(Node):
                     self.workflow.metadata["detected_intent"] = "text2sql"
                     self.workflow.metadata["intent_confidence"] = 0.5
                     self.workflow.metadata["intent_metadata"] = {"fallback": True, "error": str(e)}
+                    self.workflow.metadata["intent_analysis"] = {
+                        "intent": "text2sql",
+                        "confidence": 0.5,
+                        "metadata": {"fallback": True, "error": str(e)},
+                    }
 
             # ✅ Set self.result for successful execution
             self.result = BaseResult(

@@ -88,6 +88,7 @@ class OutputNode(Node):
             "intent_clarification": workflow.metadata.get("intent_clarification"),
             "clarified_task": workflow.metadata.get("clarified_task"),
             "intent_analysis": workflow.metadata.get("intent_analysis"),
+            "result_validation": workflow.metadata.get("result_validation"),
             "reflection_count": workflow.metadata.get("reflection_count") or None,  # Use None instead of 0
             "table_schemas": getattr(context, 'table_schemas', None) if context else None,  # Pass table schemas for developer report
             "sql_generation_failed": workflow.metadata.get("sql_generation_failed"),
@@ -210,6 +211,9 @@ class OutputNode(Node):
                 "success": getattr(result, "success", True) if result else True,
                 "sql_query": getattr(input_data, "gen_sql", "") if hasattr(input_data, "gen_sql") else "",
                 "sql_result": getattr(input_data, "sql_result", "") if hasattr(input_data, "sql_result") else "",
+                "sql_query_final": getattr(result, "sql_query_final", "") if result else "",
+                "sql_result_final": getattr(result, "sql_result_final", "") if result else "",
+                "row_count": getattr(input_data, "row_count", 0) if hasattr(input_data, "row_count") else 0,
                 "metadata": getattr(input_data, "metadata", {}) if hasattr(input_data, "metadata") else {},
             }
 
