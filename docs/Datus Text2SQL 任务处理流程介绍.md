@@ -718,21 +718,22 @@ report = self._generate_sql_generation_report(
 | `sqlglot` | SQL 解析和结构分析（CTE、JOIN、聚合等） |
 | `sqlparse` | SQL 格式化和语法高亮 |
 
+## 7. 流程设计原则
+
+- **提高精度**：意图澄清 + 相似度阈值过滤  
+- **增强召回**：Context Search 更频繁触发 + Fallback 全表扫描  
+- **双重验证**：Schema 充分性 + SQL 语法语义  
+- **性能优化**：批量查询 + 多层缓存  
+- **线程安全**：`safe_context_update()` 防止竞态条件  
+- **主动终止**：工作流终止机制 + 硬失败避免无效执行  
+- **开发者友好**：6 部分 SQL 报告 + 带注释的 SQL + 元数据展示  
+- **预检编排**：Preflight Orchestrator 确保证据充分
+
 ## 变更历史
 
 **文档版本**: v2.16  
 **更新日期**: 2026-02-03  
 **相关模块**: `datus/agent/workflow.yml`, `datus/agent/node/`
-
-**核心价值**  
-- 提高精度：意图澄清 + 相似度阈值过滤  
-- 增强召回：Context Search 更频繁触发 + Fallback 全表扫描  
-- 双重验证：Schema 充分性 + SQL 语法语义  
-- 性能优化：批量查询 + 多层缓存  
-- 线程安全：`safe_context_update()` 防止并发问题  
-- 主动终止：工作流终止机制 + 硬失败避免无效执行  
-- 开发者友好：6 部分 SQL 报告 + 带注释的 SQL + 元数据展示  
-- 预检编排：Preflight Orchestrator 确保证据充分
 
 **版本记录**  
 - `v2.16 (2026-02-03)`：执行/验证失败区分；验证失败细分展示；ReAct 重试统计与输出规则完善  
