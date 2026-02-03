@@ -1064,6 +1064,12 @@ class DeepResearchEventConverter:
                 )
             )
 
+        # Handle output completion events separately to avoid duplicate error rendering
+        elif action.action_type == "output_generation_completion":
+            # The output report is emitted by output_generation; avoid "Output generation failed"
+            # for execution-stage failures that are already described in the report.
+            return events
+
         # Handle errors
         elif action.status == ActionStatus.FAILED:
             error_plan_id = self._get_unified_plan_id(action, force_associate=False)
