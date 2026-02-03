@@ -47,6 +47,7 @@ from .normalization import (
 )
 from .sql_processing import (
     generate_sql_summary,
+    generate_sql_generation_report,
     format_diagnostic_report,
     generate_sql_failure_report,
 )
@@ -222,8 +223,14 @@ class DeepResearchEventConverter:
         metadata: Optional[Dict[str, Any]] = None,
         table_schemas: Optional[List[Any]] = None,
     ) -> str:
-        """Generate SQL report (fallback to summary for compatibility)."""
-        return self._generate_sql_summary(sql_query, sql_result, row_count)
+        """Generate SQL report (full 6-part report)."""
+        return generate_sql_generation_report(
+            sql_query=sql_query,
+            sql_result=sql_result,
+            row_count=row_count,
+            metadata=metadata,
+            table_schemas=table_schemas,
+        )
 
     # Note: The full convert_action_to_event method is very large (800+ lines)
     # and has been omitted here for brevity. In the original file, it contains
