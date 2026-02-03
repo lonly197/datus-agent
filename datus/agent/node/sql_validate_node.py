@@ -198,7 +198,6 @@ class SQLValidateNode(Node):
                         self.workflow.metadata["termination_reason"] = (
                             f"SQL validation failed after {max_retries} retries"
                         )
-                        self.workflow.metadata["sql_generation_failed"] = True
                         self.workflow.metadata["failure_stage"] = "sql_validation"
                         logger.info(
                             f"SQL validation failed after {max_retries} retries, proceeding to output"

@@ -8,6 +8,7 @@ from typing import Any, AsyncGenerator, Dict, Optional, cast
 from datus.utils.error_handling import unified_error_handler
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
+from datus.agent.workflow_status import WorkflowTerminationStatus
 from datus.schemas.action_history import (ActionHistory, ActionHistoryManager,
                                           ActionRole, ActionStatus)
 from datus.schemas.node_models import ExecuteSQLInput, ExecuteSQLResult
@@ -102,6 +103,15 @@ class ExecuteSQLNode(Node):
             last_record.sql_return = result.sql_return
             last_record.row_count = result.row_count
             last_record.sql_error = result.error
+
+            if not result.success:
+                if not hasattr(workflow, "metadata") or workflow.metadata is None:
+                    workflow.metadata = {}
+                workflow.metadata.setdefault("failure_stage", "execute_sql")
+                if result.error:
+                    workflow.metadata.setdefault("termination_reason", result.error)
+                workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
+                self.last_action_status = ActionStatus.SOFT_FAILED
 
             return {"success": True, "message": "Updated SQL execution context"}
         except Exception as e:
@@ -253,6 +263,8 @@ class ExecuteSQLNode(Node):
                     self.workflow.metadata.setdefault("failure_stage", "execute_sql")
                     if result.error:
                         self.workflow.metadata.setdefault("termination_reason", result.error)
+                    self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
+                    self.last_action_status = ActionStatus.SOFT_FAILED
 
                 # Store result for later use
                 self.result = result

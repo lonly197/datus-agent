@@ -33,6 +33,13 @@ class ReflectNode(Node):
             workflow.reflection_round += 1
             # Sync reflection_count to metadata for output node
             workflow.metadata["reflection_count"] = workflow.reflection_round
+            # Track ReAct retry count/max for reporting
+            if hasattr(workflow, "_global_config") and hasattr(workflow._global_config, "reflection_config"):
+                max_rounds = workflow._global_config.reflection_config.max_reflection_rounds
+            else:
+                max_rounds = get_env_int("MAX_REFLECTION_ROUNDS", DEFAULT_MAX_REFLECTION_ROUNDS)
+            workflow.metadata["react_retry_count"] = workflow.reflection_round
+            workflow.metadata["react_retry_max"] = max_rounds
             if "keywords" in result.details:
                 workflow.context.doc_search_keywords = result.details["keywords"]
 
