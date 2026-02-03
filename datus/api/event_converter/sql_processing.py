@@ -909,10 +909,55 @@ def generate_sql_with_comments(
 def generate_execution_report(row_count: int, metadata: Optional[Dict[str, Any]] = None) -> str:
     """Generate execution verification report section."""
     lines: List[str] = []
-    syntax_valid = True
-    if metadata and metadata.get("sql_validation"):
-        validation = metadata["sql_validation"]
-        syntax_valid = validation.get("syntax_valid", True)
+    meta = metadata if isinstance(metadata, dict) else {}
+    failure_stage = meta.get("failure_stage")
+    termination_reason = meta.get("termination_reason")
+
+    sql_validation = meta.get("sql_validation") if isinstance(meta.get("sql_validation"), dict) else {}
+    result_validation = meta.get("result_validation") if isinstance(meta.get("result_validation"), dict) else {}
+
+    syntax_valid = sql_validation.get("syntax_valid", True)
+    tables_exist = sql_validation.get("tables_exist", True)
+    columns_exist = sql_validation.get("columns_exist", True)
+    has_dangerous = sql_validation.get("has_dangerous_ops", False)
+    sql_validation_ok = bool(syntax_valid and tables_exist and columns_exist and not has_dangerous)
+
+    result_is_valid = result_validation.get("is_valid", True)
+    result_reason = result_validation.get("reason") or result_validation.get("suggestion") or ""
+
+    execution_failed = failure_stage in ("execute_sql", "sql_execution")
+    validation_failed = (
+        failure_stage in ("result_validation", "sql_validation")
+        or not sql_validation_ok
+        or (result_validation != {} and not result_is_valid)
+    )
+
+    if execution_failed:
+        lines.append("**执行状态**: ❌ SQL执行失败\n")
+        lines.append("**执行详情**:")
+        if termination_reason:
+            lines.append(f"- **失败原因**: {termination_reason}")
+        else:
+            lines.append("- **失败原因**: 数据库执行失败（未返回结果）")
+        lines.append("- **执行返回**: 未返回结果")
+        lines.append("")
+        lines.append("**SQL适合生产使用**: ❌ 否")
+        lines.append("")
+        return "\n".join(lines)
+
+    if validation_failed:
+        lines.append("**执行状态**: ⚠️ SQL执行完成，但验证未通过\n")
+        lines.append("**执行详情**:")
+        lines.append(
+            f"- **语法正确**: {'✅ SQL语法验证通过，数据库成功解析' if syntax_valid else '❌ 语法验证失败'}"
+        )
+        lines.append(f"- **执行返回**: {row_count}行数据")
+        if result_reason:
+            lines.append(f"- **验证原因**: {result_reason}")
+        lines.append("")
+        lines.append("**SQL适合生产使用**: ⚠️ 需修正后再使用")
+        lines.append("")
+        return "\n".join(lines)
 
     lines.append("**执行状态**: ✅ SQL已成功执行验证\n")
     lines.append("**执行详情**:")
