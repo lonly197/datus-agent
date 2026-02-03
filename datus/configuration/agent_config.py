@@ -309,19 +309,25 @@ DEFAULT_REFLECTION_NODES = {
         NodeType.TYPE_SCHEMA_DISCOVERY,  # Maps to unified SchemaDiscoveryNode (contains all SchemaLinking features)
         NodeType.TYPE_SCHEMA_VALIDATION,  # Validate newly discovered schemas
         NodeType.TYPE_GENERATE_SQL,
+        NodeType.TYPE_SQL_VALIDATE,
         NodeType.TYPE_EXECUTE_SQL,
+        NodeType.TYPE_RESULT_VALIDATION,
         NodeType.TYPE_REFLECT,
     ],
     StrategyType.DOC_SEARCH.lower(): [
         NodeType.TYPE_DOC_SEARCH,
         NodeType.TYPE_GENERATE_SQL,
+        NodeType.TYPE_SQL_VALIDATE,
         NodeType.TYPE_EXECUTE_SQL,
+        NodeType.TYPE_RESULT_VALIDATION,
         NodeType.TYPE_REFLECT,
     ],
     StrategyType.SIMPLE_REGENERATE.lower(): [NodeType.TYPE_EXECUTE_SQL, NodeType.TYPE_REFLECT],
     StrategyType.REASONING.lower(): [
         NodeType.TYPE_REASONING,
+        NodeType.TYPE_SQL_VALIDATE,
         NodeType.TYPE_EXECUTE_SQL,
+        NodeType.TYPE_RESULT_VALIDATION,
         NodeType.TYPE_REFLECT,
     ],
 }

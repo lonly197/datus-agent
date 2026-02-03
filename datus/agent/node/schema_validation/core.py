@@ -132,11 +132,13 @@ class SchemaValidationNode(Node, LLMMixin):
                 if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
                     self.workflow.metadata = {}
                 self.workflow.metadata["schema_validation"] = validation_result
+                if not validation_result.get("is_sufficient", False):
+                    self.workflow.metadata.setdefault("failure_stage", "schema_validation")
+                    self.workflow.metadata.setdefault("termination_reason", "schema_insufficient_coverage")
                 if hard_block:
                     from datus.agent.workflow_status import WorkflowTerminationStatus
 
                     self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
-                    self.workflow.metadata["termination_reason"] = "schema_insufficient_coverage"
 
             # Emit validation result
             yield self._create_validation_action(validation_result, task, hard_block)

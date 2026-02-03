@@ -81,6 +81,25 @@ class ExecuteSQLNode(Node):
         self.input = next_input
         return {"success": True, "message": "Node input appears valid", "suggestions": [next_input]}
 
+    @staticmethod
+    def _infer_schema_failure_stage(error_message: Optional[str]) -> Optional[str]:
+        if not error_message:
+            return None
+        message = error_message.lower()
+        if "column" in message and (
+            "cannot be resolved" in message
+            or "unknown column" in message
+            or "does not exist" in message
+        ):
+            return "schema_validation"
+        if "table" in message and (
+            "not found" in message
+            or "does not exist" in message
+            or "unknown table" in message
+        ):
+            return "schema_discovery"
+        return None
+
     def update_context(self, workflow: Workflow) -> Dict[str, Any]:
         """
         Update SQL execution results to workflow context.
@@ -107,7 +126,8 @@ class ExecuteSQLNode(Node):
             if not result.success:
                 if not hasattr(workflow, "metadata") or workflow.metadata is None:
                     workflow.metadata = {}
-                workflow.metadata.setdefault("failure_stage", "execute_sql")
+                inferred_stage = self._infer_schema_failure_stage(result.error)
+                workflow.metadata.setdefault("failure_stage", inferred_stage or "execute_sql")
                 if result.error:
                     workflow.metadata.setdefault("termination_reason", result.error)
                 workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
@@ -260,7 +280,8 @@ class ExecuteSQLNode(Node):
                 if not result.success and self.workflow:
                     if not hasattr(self.workflow, "metadata") or self.workflow.metadata is None:
                         self.workflow.metadata = {}
-                    self.workflow.metadata.setdefault("failure_stage", "execute_sql")
+                    inferred_stage = self._infer_schema_failure_stage(result.error)
+                    self.workflow.metadata.setdefault("failure_stage", inferred_stage or "execute_sql")
                     if result.error:
                         self.workflow.metadata.setdefault("termination_reason", result.error)
                     self.workflow.metadata["termination_status"] = WorkflowTerminationStatus.SKIP_TO_REFLECT
