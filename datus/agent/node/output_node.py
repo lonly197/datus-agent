@@ -99,6 +99,7 @@ class OutputNode(Node):
             "sql_retry_interval": workflow.metadata.get("sql_retry_interval"),
             "react_retry_count": workflow.metadata.get("react_retry_count"),
             "react_retry_max": workflow.metadata.get("react_retry_max"),
+            "react_retry_counts": workflow.metadata.get("react_retry_counts"),
         }
 
         # Debug logging for metadata troubleshooting

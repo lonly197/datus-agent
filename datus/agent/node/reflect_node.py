@@ -40,6 +40,24 @@ class ReflectNode(Node):
                 max_rounds = get_env_int("MAX_REFLECTION_ROUNDS", DEFAULT_MAX_REFLECTION_ROUNDS)
             workflow.metadata["react_retry_count"] = workflow.reflection_round
             workflow.metadata["react_retry_max"] = max_rounds
+            # Track per-stage retry counts
+            failure_stage = workflow.metadata.get("failure_stage") if workflow.metadata else None
+            stage_key = failure_stage or "unknown"
+            stage_counts = workflow.metadata.get("react_retry_counts", {})
+            stage_counts[stage_key] = int(stage_counts.get(stage_key, 0)) + 1
+            workflow.metadata["react_retry_counts"] = stage_counts
+            if stage_counts[stage_key] > max_rounds:
+                from datus.agent.workflow_status import WorkflowTerminationStatus
+
+                workflow.metadata["termination_status"] = WorkflowTerminationStatus.PROCEED_TO_OUTPUT
+                workflow.metadata["termination_reason"] = (
+                    f"Max ReAct retries exceeded for stage={stage_key} (max={max_rounds})"
+                )
+                return {
+                    "success": True,
+                    "message": "Max ReAct retries exceeded, proceeding to output",
+                    "terminated": True,
+                }
             if "keywords" in result.details:
                 workflow.context.doc_search_keywords = result.details["keywords"]
 
