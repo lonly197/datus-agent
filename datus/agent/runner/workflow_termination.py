@@ -427,7 +427,7 @@ class OutputNodeExecutor:
         output_completion_action = output_helper.create_action_history(
             action_id="output_generation_completion",
             messages=f"Output generation {output_status}",
-            action_type="output_generation",
+            action_type="output_generation_completion",
             input_data={
                 "task_id": getattr(self.workflow, "task_id", None),
                 "status": output_status,
