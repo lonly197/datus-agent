@@ -524,6 +524,17 @@ WITH first_test_drive AS (
 **SQL适合生产使用**: ⚠️ 需修正后再使用
 ```
 
+**最终失败输出规则**：
+
+- 若 `failure_stage` 为 `schema_discovery` / `schema_validation`：输出 Schema 诊断报告（不再输出 SQL 报告）
+- 若 `failure_stage` 为 `sql_generation`：输出 SQL 生成失败报告
+- 若 `failure_stage` 为 `execute_sql` / `sql_validation` / `result_validation`：输出 6 部分 SQL 报告，并在第 5 部分标注失败类型
+
+**ReAct 重试统计**：
+
+- 记录 `react_retry_count / react_retry_max`（总轮次）
+- 记录 `react_retry_counts`（按失败阶段累计）
+
 #### 第6部分：优化建议
 
 基于 SQL 结构分析提供可操作的建议：
@@ -534,7 +545,7 @@ WITH first_test_drive AS (
 
 **技术实现**：
 
-- **14 个辅助方法**：在 `datus/api/event_converter.py` 中实现
+- **14 个辅助方法**：在 `datus/api/event_converter/sql_processing.py` 中实现
 - **DDL 解析**：复用 `parse_metadata_from_ddl()` 工具
 - **SQL 结构分析**：使用 `sqlglot` 库解析 SQL
 - **数据流**：`OutputNode` → `workflow.metadata["table_schemas"]` → `EventConverter`
