@@ -269,7 +269,7 @@ def generate_sql_generation_report(
         join_count = len(list(parsed.find_all(exp.Join)))
         if join_count > 0:
             design_logic.append(f"包含{join_count}个表关联")
-        if parsed.find(exp.Agg):
+        if parsed.find(exp.AggFunc):
             design_logic.append("包含聚合计算")
         if parsed.find(exp.Window):
             design_logic.append("使用窗口函数")
