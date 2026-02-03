@@ -926,11 +926,12 @@ def generate_execution_report(row_count: int, metadata: Optional[Dict[str, Any]]
     result_reason = result_validation.get("reason") or result_validation.get("suggestion") or ""
 
     execution_failed = failure_stage in ("execute_sql", "sql_execution")
-    validation_failed = (
-        failure_stage in ("result_validation", "sql_validation")
-        or not sql_validation_ok
+    sql_validation_failed = failure_stage == "sql_validation" or not sql_validation_ok
+    result_validation_failed = (
+        failure_stage == "result_validation"
         or (result_validation != {} and not result_is_valid)
     )
+    validation_failed = sql_validation_failed or result_validation_failed
 
     if execution_failed:
         lines.append("**执行状态**: ❌ SQL执行失败\n")
@@ -952,8 +953,22 @@ def generate_execution_report(row_count: int, metadata: Optional[Dict[str, Any]]
             f"- **语法正确**: {'✅ SQL语法验证通过，数据库成功解析' if syntax_valid else '❌ 语法验证失败'}"
         )
         lines.append(f"- **执行返回**: {row_count}行数据")
-        if result_reason:
-            lines.append(f"- **验证原因**: {result_reason}")
+        lines.append("")
+        lines.append("**验证失败类型**:")
+        if sql_validation_failed:
+            lines.append("- **SQL验证**: ❌ 未通过")
+            if not syntax_valid:
+                lines.append("  - 原因: SQL语法解析失败")
+            if not tables_exist:
+                lines.append("  - 原因: 存在未匹配的表")
+            if not columns_exist:
+                lines.append("  - 原因: 存在未匹配的字段")
+            if has_dangerous:
+                lines.append("  - 原因: 检测到危险操作")
+        if result_validation_failed:
+            lines.append("- **结果验证**: ❌ 未通过")
+            if result_reason:
+                lines.append(f"  - 原因: {result_reason}")
         lines.append("")
         lines.append("**SQL适合生产使用**: ⚠️ 需修正后再使用")
         lines.append("")
