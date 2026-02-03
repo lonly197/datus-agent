@@ -1095,8 +1095,16 @@ class DeepResearchEventConverter:
             if plan_update and plan_update.todos:
                 events.append(plan_update)
             if isinstance(action.output, dict):
-                if action.output.get("success") is False:
-                    report = generate_sql_failure_report(action.output.get("metadata", {}))
+                metadata = action.output.get("metadata", {}) or {}
+                failure_stage = metadata.get("failure_stage") if isinstance(metadata, dict) else None
+                termination_reason = metadata.get("termination_reason") if isinstance(metadata, dict) else None
+                is_sql_gen_failure = bool(
+                    (metadata.get("sql_generation_failed") if isinstance(metadata, dict) else False)
+                    or failure_stage == "sql_generation"
+                    or termination_reason == "sql_generation_failed"
+                )
+                if action.output.get("success") is False and is_sql_gen_failure:
+                    report = generate_sql_failure_report(metadata)
                     events.append(
                         ChatEvent(
                             id=f"{event_id}_failure",
@@ -1111,7 +1119,6 @@ class DeepResearchEventConverter:
                 sql_query_final = action.output.get("sql_query_final", "")
                 sql_result_final = action.output.get("sql_result_final", "")
                 row_count = action.output.get("row_count", 0)
-                metadata = action.output.get("metadata", {})
 
                 final_sql = sql_query_final if sql_query_final else sql_query
 
