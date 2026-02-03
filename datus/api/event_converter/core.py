@@ -1083,6 +1083,10 @@ class DeepResearchEventConverter:
 
         # Handle report generation and SQL output
         elif action.action_type == "output_generation" and action.output:
+            # Ensure step_output exists in todos for proper frontend binding
+            plan_update = self._generate_virtual_plan_update("output")
+            if plan_update and plan_update.todos:
+                events.append(plan_update)
             if isinstance(action.output, dict):
                 if action.output.get("success") is False:
                     report = generate_sql_failure_report(action.output.get("metadata", {}))
