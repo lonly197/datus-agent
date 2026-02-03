@@ -10,6 +10,7 @@
 
 ## 2. 核心工作流架构
 
+
 当前的 Text2SQL 任务默认采用 `text2sql` 工作流配置，这是一个包含**意图澄清**、**SQL 验证**与**反思（Reflection）**环节的闭环流程。
 
 **工作流定义** (`datus/agent/workflow.yml`):
@@ -35,9 +36,20 @@ text2sql:
 - **双重验证机制**：Schema 充分性验证 → SQL 语法语义验证
 - **智能反思机制**：软失败状态 + 动态策略注入，支持自愈恢复
 
-## 3. 关键节点与执行逻辑
+## 3. 流程设计原则
 
-### 3.1 Intent Analysis (意图分析)
+- **提高精度**：意图澄清 + 相似度阈值过滤  
+- **增强召回**：Context Search 更频繁触发 + Fallback 全表扫描  
+- **双重验证**：Schema 充分性 + SQL 语法语义  
+- **性能优化**：批量查询 + 多层缓存  
+- **线程安全**：`safe_context_update()` 防止竞态条件  
+- **主动终止**：工作流终止机制 + 硬失败避免无效执行  
+- **开发者友好**：6 部分 SQL 报告 + 带注释的 SQL + 元数据展示  
+- **预检编排**：Preflight Orchestrator 确保证据充分
+
+## 4. 关键节点与执行逻辑
+
+### 4.1 Intent Analysis (意图分析)
 
 **目标**：识别任务类型（text2sql vs sql_review vs data_analysis）。
 
@@ -47,7 +59,7 @@ text2sql:
 - 可选 LLM 分类：当启发式置信度 < 0.7 时，使用 LLM 分类
 - 跳过逻辑：当 `execution_mode` 已指定时跳过此节点
 
-### 3.2 Intent Clarification (意图澄清) ⭐ NEW v2.8
+### 4.2 Intent Clarification (意图澄清) ⭐ NEW v2.8
 
 **目标**：理清用户的真实分析意图，处理表述不清、错别字等问题。
 
@@ -78,7 +90,7 @@ business_terms = ["华南", "广东"]
 time_range = "最近30天"（如有）
 ```
 
-### 3.3 Schema Discovery (智能模式发现)
+### 4.3 Schema Discovery (智能模式发现)
 
 **目标**：解决"零召回"与"幻觉"问题，确保下游节点拥有真实的上下文。
 
@@ -219,7 +231,7 @@ schema_discovery:
   external_knowledge_top_n: 5
 ```
 
-### 3.4 Schema Validation (Schema 充分性验证)
+### 4.4 Schema Validation (Schema 充分性验证)
 
 **目标**：在 SQL 生成之前验证发现的 Schema 是否充分。
 
@@ -248,7 +260,7 @@ schema_discovery:
 - 覆盖度不足时使用 `ActionStatus.SOFT_FAILED`
 - 设置 `allow_reflection=True` 确保继续到 reflect 节点进行自愈
 
-### 3.5 Generate SQL (SQL 生成)
+### 4.5 Generate SQL (SQL 生成)
 
 **目标**：基于已验证的 Schema 生成准确的 SQL 查询。
 
@@ -262,7 +274,7 @@ schema_discovery:
 
 当 `external_knowledge_enabled: true` 时，从 `ext_knowledge` 表检索到的知识（`knowledge_content`）会被注入到 Prompt 模板中，帮助 LLM 理解业务指标的定义和计算方式，从而生成更准确的 SQL。知识内容通过 `workflow.task.external_knowledge` 传递给 Prompt 渲染上下文。
 
-### 3.6 SQL Validate (SQL 验证) ⭐ NEW v2.8
+### 4.6 SQL Validate (SQL 验证) ⭐ NEW v2.8
 
 **目标**：对生成的 SQL 进行集中式验证，在执行前发现问题。
 
@@ -300,7 +312,7 @@ class SQLValidateInput(BaseInput):
     check_dangerous_operations: bool = True  # 检查危险操作
 ```
 
-### 3.7 Execute SQL (SQL 执行)
+### 4.7 Execute SQL (SQL 执行)
 
 **目标**：在目标数据库中执行生成的 SQL 查询。
 
@@ -310,7 +322,7 @@ class SQLValidateInput(BaseInput):
 - 可配置的超时机制（默认 60 秒）
 - 详细的错误日志记录
 
-### 3.8 Result Validation (结果质量验证)
+### 4.8 Result Validation (结果质量验证)
 
 **目标**：验证 SQL 执行结果是否符合预期。
 
@@ -320,7 +332,7 @@ class SQLValidateInput(BaseInput):
 2. **结果类型**：区分 DDL/DML 查询与 SELECT 查询
 3. **结果质量**：检查结果集的合理性
 
-### 3.9 Reflect (动态反思与纠错)
+### 4.9 Reflect (动态反思与纠错)
 
 **目标**：赋予系统在执行失败后的自我修复能力。
 
@@ -337,7 +349,7 @@ class SQLValidateInput(BaseInput):
 - 支持 `WorkflowTerminationStatus.SKIP_TO_REFLECT` 跳过执行进入反思
 - 确保 `workflow_task.cancel()` 防止后台继续运行
 
-### 3.10 Output (结果输出)
+### 4.10 Output (结果输出)
 
 **目标**：将最终结果返回给用户。
 
@@ -507,9 +519,9 @@ WITH first_test_drive AS (
 | `_generate_optimization_suggestions()` | 生成优化建议 |
 | `_escape_markdown_table_cell()` | 转义 Markdown 表格特殊字符 |
 
-## 4. 节点处理流程图
+## 5. 节点处理流程图
 
-### 4.1 完整节点处理流程
+### 5.1 完整节点处理流程
 
 以下流程图展示了 Text2SQL 工作流中所有节点的执行顺序、状态转换和分支条件：
 
@@ -579,7 +591,7 @@ flowchart TB
     class A3,A18,A21,A24 decision
 ```
 
-### 4.2 Schema Discovery 详细流程
+### 5.2 Schema Discovery 详细流程
 
 ```mermaid
 flowchart LR
@@ -616,7 +628,7 @@ flowchart LR
     class STAGE1,STAGE2,STAGE3,STAGE4 stage
 ```
 
-### 4.3 Reflect 恢复策略映射
+### 5.3 Reflect 恢复策略映射
 
 ```mermaid
 flowchart TB
@@ -649,9 +661,9 @@ flowchart TB
     class C3,C4,C5,C6,C7,C8,C9,C10,C11,C12,C13 recovery
 ```
 
-## 5. 性能与监控
+## 6. 性能与监控
 
-### 5.1 多层缓存架构
+### 6.1 多层缓存架构
 
 **L1 缓存** (`datus/storage/cache.py`):
 
@@ -668,20 +680,20 @@ flowchart TB
 - **对象**：指标和 SQL 详情
 - **容量**：`@lru_cache(maxsize=128)`
 
-### 5.2 向量搜索优化
+### 6.2 向量搜索优化
 
 - **Top N**：20（增加召回范围）
 - **相似度阈值**：0.5（过滤弱匹配）
 - **距离转换**：`similarity = 1.0 / (1.0 + distance)`
 
-### 5.3 实时反馈与日志
+### 6.3 实时反馈与日志
 
 - **SSE 流式推送**：实时返回 `ToolCallEvent` 和执行状态
 - **结构化日志**：记录每个阶段的决策和验证结果
 
-## 6. 技术实现细节
+## 7. 技术实现细节
 
-### 6.1 EventConverter 数据流 ⭐ NEW v2.9
+### 7.1 EventConverter 数据流 ⭐ NEW v2.9
 
 **OutputNode → EventConverter 数据流**：
 
@@ -701,9 +713,7 @@ report = self._generate_sql_generation_report(
 )
 ```
 
-### 6.2 SchemaStorage 核心方法
-
-### 6.2 SchemaStorage 核心方法
+### 7.2 SchemaStorage 核心方法
 
 | 方法 | 功能 |
 |------|------|
@@ -711,23 +721,13 @@ report = self._generate_sql_generation_report(
 | `update_table_schema()` | 更新或插入表的 Schema 定义 |
 | `safe_context_update()` | 线程安全上下文更新，防止竞态条件 |
 
-### 6.3 依赖库
+### 7.3 依赖库
 
 | 库名 | 用途 |
 |------|------|
 | `sqlglot` | SQL 解析和结构分析（CTE、JOIN、聚合等） |
 | `sqlparse` | SQL 格式化和语法高亮 |
 
-## 7. 流程设计原则
-
-- **提高精度**：意图澄清 + 相似度阈值过滤  
-- **增强召回**：Context Search 更频繁触发 + Fallback 全表扫描  
-- **双重验证**：Schema 充分性 + SQL 语法语义  
-- **性能优化**：批量查询 + 多层缓存  
-- **线程安全**：`safe_context_update()` 防止竞态条件  
-- **主动终止**：工作流终止机制 + 硬失败避免无效执行  
-- **开发者友好**：6 部分 SQL 报告 + 带注释的 SQL + 元数据展示  
-- **预检编排**：Preflight Orchestrator 确保证据充分
 
 ## 变更历史
 
