@@ -191,10 +191,15 @@ async def _run_server_async(args: argparse.Namespace, agent_args: argparse.Names
     # Setup signal handlers for graceful shutdown
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
+    shutdown_initiated = False
 
     # Handler for SIGINT (Ctrl+C) and SIGTERM
     def handle_signal(sig, frame):
         """Handle shutdown signals gracefully."""
+        nonlocal shutdown_initiated
+        if shutdown_initiated:
+            return
+        shutdown_initiated = True
         signal_name = signal.Signals(sig).name
         logger.info(f"Received {signal_name}, initiating graceful shutdown (timeout={args.shutdown_timeout}s)...")
         shutdown_event.set()
@@ -219,11 +224,12 @@ async def _run_server_async(args: argparse.Namespace, agent_args: argparse.Names
         await server.serve()
     except KeyboardInterrupt:
         # Fallback: if KeyboardInterrupt still gets through, handle gracefully
-        logger.info("KeyboardInterrupt caught, initiating graceful shutdown...")
-        if server.should_exit:
+        if shutdown_initiated:
             return
-        server.should_exit = True
-        await server.shutdown()
+        shutdown_initiated = True
+        logger.info("KeyboardInterrupt caught, initiating graceful shutdown...")
+        if not server.should_exit:
+            server.should_exit = True
 
 
 def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> None:
