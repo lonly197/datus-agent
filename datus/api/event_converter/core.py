@@ -1109,6 +1109,18 @@ class DeepResearchEventConverter:
                     or failure_stage == "sql_generation"
                     or termination_reason == "sql_generation_failed"
                 )
+                if failure_stage in ("schema_discovery", "schema_validation"):
+                    diagnostic_report = metadata.get("schema_discovery_failure_report")
+                    if diagnostic_report:
+                        report_content = self._format_diagnostic_report(diagnostic_report)
+                        events.append(
+                            ChatEvent(
+                                id=f"{event_id}_schema_failure",
+                                planId=self._get_virtual_step_id("output"),
+                                timestamp=timestamp,
+                                content=report_content,
+                            )
+                        )
                 if action.output.get("success") is False and is_sql_gen_failure:
                     report = generate_sql_failure_report(metadata)
                     events.append(
@@ -1125,6 +1137,11 @@ class DeepResearchEventConverter:
                 sql_query_final = action.output.get("sql_query_final", "")
                 sql_result_final = action.output.get("sql_result_final", "")
                 row_count = action.output.get("row_count", 0)
+
+                if failure_stage in ("schema_discovery", "schema_validation") and not (
+                    sql_query or sql_query_final
+                ):
+                    return events
 
                 final_sql = sql_query_final if sql_query_final else sql_query
 
